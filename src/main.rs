@@ -14,7 +14,9 @@ use {
 };
 
 struct Driver {
-    out: Port<MidiOut>,
+    display: Port<MidiOut>,
+    midi_out: Port<MidiOut>,
+    midi_in: Port<MidiIn>,
     last: Time,
     period: Time,
 }
@@ -28,7 +30,7 @@ impl jack::ProcessHandler for Driver {
         if times.current_usecs - self.last > self.period {
             self.last = times.current_usecs;
             let bytes = &[
-                b'M', b'O', b'V', b'E', b'D', b'I', b'S', b'P', 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
+                b'M', b'O', b'V', b'E', b'D', b'I', b'S', b'P', 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -104,8 +106,15 @@ impl jack::ProcessHandler for Driver {
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             ];
             let m = RawMidi { time: 0, bytes };
-            let mut w = self.out.writer(ps);
+            let mut w = self.display.writer(ps);
             w.write(&m).unwrap();
+        }
+
+        let midi_in = self.midi_in.iter(ps);
+        let mut midi_out = self.midi_out.writer(ps);
+        for i in midi_in {
+            //TODO filter
+            midi_out.write(&i).unwrap();
         }
 
         Control::Continue
@@ -113,7 +122,7 @@ impl jack::ProcessHandler for Driver {
 }
 
 fn main() {
-    let name = "foo";
+    let name = "move-control";
     let (c, _status) = Client::new(name, ClientOptions::empty()).unwrap();
 
     let run = Arc::new(AtomicBool::new(true));
@@ -124,24 +133,32 @@ fn main() {
     })
     .expect("Error setting Ctrl-C handler");
 
-    /*
-    let m = MidiIn {};
-    for p in c.ports(None, None, m.jack_flags()) {
-        println!("port {}", p);
-    }
-    */
+    let display = c.register_port("display", MidiOut).unwrap();
+    let midi_out = c.register_port("midi_out", MidiOut).unwrap();
+    let midi_in = c.register_port("midi_in", MidiIn).unwrap();
 
-    let p = c.register_port("display", MidiOut).unwrap();
     let driver = Driver {
-        out: p,
+        display,
+        midi_out,
+        midi_in,
         last: 0,
         period: 22_928,
     };
 
+    let name = c.name().to_string();
     let c = c.activate_async((), driver).unwrap();
-    c.as_client()
-        .connect_ports_by_name("foo:display", "system:display")
+    {
+        let c = c.as_client();
+        c.connect_ports_by_name(format!("{}:display", name).as_str(), "system:display")
+            .unwrap();
+        c.connect_ports_by_name(
+            format!("{}:midi_out", name).as_str(),
+            "system:midi_playback",
+        )
         .unwrap();
+        c.connect_ports_by_name("system:midi_capture", format!("{}:midi_in", name).as_str())
+            .unwrap();
+    }
 
     println!("Running");
     while run.load(Ordering::Relaxed) {
