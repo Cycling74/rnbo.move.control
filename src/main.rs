@@ -162,7 +162,7 @@ fn main() {
 
     println!("Running");
     while run.load(Ordering::Relaxed) {
-        thread::sleep(Duration::from_secs(2));
+        thread::sleep(Duration::from_millis(100));
     }
     c.deactivate().unwrap();
 }
