@@ -1,3 +1,5 @@
+# rnbo-move-control
+
 ## Setting up dev on osx
 
 ```
@@ -20,5 +22,5 @@ PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.2/sysroo
 release:
 
 ```
-PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.2/sysroot/ cargo build --target=aarch64-unknown-linux-gnu --release && scp -O ./target/aarch64-unknown-linux-gnu/release/move-control move:rnbo/
+PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.2/sysroot/ cargo build --target=aarch64-unknown-linux-gnu --release && scp -O ./config/rnbomovecontrol-init.d ./target/aarch64-unknown-linux-gnu/release/rnbomovecontrol move:rnbo/
 ```

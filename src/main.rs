@@ -48,8 +48,22 @@ impl jack::ProcessHandler for Driver {
         let midi_in = self.midi_in.iter(ps);
         let mut midi_out = self.midi_out.writer(ps);
         for i in midi_in {
-            //TODO filter
-            midi_out.write(&i).unwrap();
+            //only send pad buttons and step buttons thru
+            let thru = if i.bytes.len() == 3 {
+                match i.bytes[0] {
+                    0x90 | 0x80 => match i.bytes[1] {
+                        //pad butttons, step buttons
+                        68..=99 | 16..=31 => true,
+                        _ => false,
+                    },
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            if thru {
+                midi_out.write(&i).unwrap();
+            }
         }
 
         Control::Continue
