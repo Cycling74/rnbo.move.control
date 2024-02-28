@@ -66,4 +66,12 @@ impl DrawTarget for MoveDisplay {
 
         Ok(())
     }
+
+    fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
+        self.framebuffer[HEADER_LEN..].fill(match color {
+            BinaryColor::On => 0xFF,
+            BinaryColor::Off => 0x00,
+        });
+        Ok(())
+    }
 }
