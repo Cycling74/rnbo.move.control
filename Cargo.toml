@@ -7,4 +7,6 @@ edition = "2021"
 
 [dependencies]
 ctrlc = "3.4.2"
+embedded-graphics = "0.8.1"
+embedded-graphics-core = "0.4.0"
 jack = { version = "0.11.4", features = ["metadata"] }
