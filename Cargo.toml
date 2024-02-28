@@ -10,3 +10,5 @@ ctrlc = "3.4.2"
 embedded-graphics = "0.8.1"
 embedded-graphics-core = "0.4.0"
 jack = { version = "0.11.4", features = ["metadata"] }
+reqwest = { version = "0.11.24", default-features = false } #disable default, we don't need TLS
+reqwest-websocket = "0.2.0"
