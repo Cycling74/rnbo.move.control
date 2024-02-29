@@ -12,6 +12,7 @@ use {
         Unowned,
     },
     reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
+    rosc::OscPacket,
     std::{error::Error, ops::DerefMut, sync::mpsc as sync_mpsc, thread, time::Duration},
     tokio::sync::mpsc as async_mpsc,
 };
@@ -231,7 +232,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let web_future = async {
         let mut ws: Option<WebSocket> = None;
         let mut error = false;
-        let mut cnt: usize = 0;
         loop {
             if let Some(ws) = &mut ws {
                 if let Ok(message) = ws.try_next().await {
@@ -240,22 +240,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             Message::Text(text) => {
                                 println!("received: {text}")
                             }
-                            Message::Binary(_binary) => {
-                                let style =
-                                    MonoTextStyle::new(&profont::PROFONT_24_POINT, BinaryColor::On);
-                                let mut display = display.lock().await;
-                                display.clear(BinaryColor::Off).unwrap();
-                                let size = display.size();
-                                Text::with_alignment(
-                                    format!("binary {}", cnt).as_str(),
-                                    Point::new(size.width as i32 / 2, size.height as i32 / 2),
-                                    style,
-                                    Alignment::Center,
-                                )
-                                .draw(display.deref_mut())
-                                .unwrap();
-                                cnt += 1;
-                                println!("received binary")
+                            Message::Binary(vec) => {
+                                let osc = rosc::decoder::decode_udp(vec.as_slice());
+                                if let Ok((_, p)) = osc {
+                                    match p {
+                                        OscPacket::Message(m) => {
+                                            let style = MonoTextStyle::new(
+                                                &profont::PROFONT_7_POINT,
+                                                BinaryColor::On,
+                                            );
+                                            let mut display = display.lock().await;
+                                            display.clear(BinaryColor::Off).unwrap();
+                                            let size = display.size();
+                                            Text::with_alignment(
+                                                m.addr.as_str(),
+                                                Point::new(
+                                                    size.width as i32 / 2,
+                                                    size.height as i32 / 2,
+                                                ),
+                                                style,
+                                                Alignment::Center,
+                                            )
+                                            .draw(display.deref_mut())
+                                            .unwrap();
+                                        }
+                                        _ => (),
+                                    }
+                                }
                             }
                         }
                     }
