@@ -114,10 +114,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let run = Arc::new(AtomicBool::new(true));
 
     let r = run.clone();
-    ctrlc::set_handler(move || {
-        r.store(false, Ordering::Relaxed);
-    })
-    .expect("Error setting Ctrl-C handler");
 
     let display = c
         .register_port("display", MidiOut)
@@ -200,30 +196,43 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .unwrap();
     }
 
-    let mut ws: Option<WebSocket> = None;
-    while run.load(Ordering::Relaxed) {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if let Some(ws) = &mut ws {
-            if let Some(message) = ws.try_next().await? {
-                match message {
-                    Message::Text(text) => println!("received: {text}"),
-                    _ => {}
+    let handle = tokio::spawn(async move {
+        let mut ws: Option<WebSocket> = None;
+        let mut error = false;
+        loop {
+            if let Some(ws) = &mut ws {
+                if let Ok(message) = ws.try_next().await {
+                    if let Some(message) = message {
+                        match message {
+                            Message::Text(text) => println!("received: {text}"),
+                            Message::Binary(_binary) => println!("received binary"),
+                        }
+                    }
+                } else {
+                    error = true;
+                }
+            } else {
+                if let Ok(res) = reqwest::Client::new()
+                    .get("http://127.0.0.1:5678")
+                    .upgrade()
+                    .send()
+                    .await
+                {
+                    if let Ok(websocket) = res.into_websocket().await {
+                        ws = Some(websocket);
+                    }
+                } else {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }
-        } else {
-            if let Ok(res) = reqwest::Client::new()
-                .get("http://127.0.0.1:5678/rnbo")
-                .upgrade()
-                .send()
-                .await
-            {
-                if let Ok(websocket) = res.into_websocket().await {
-                    ws = Some(websocket);
-                }
+            if error {
+                error = false;
+                ws = None;
             }
         }
-    }
-    let _ = c.deactivate();
+    });
 
+    tokio::signal::ctrl_c().await.unwrap();
+    let _ = c.deactivate();
     Ok(())
 }
