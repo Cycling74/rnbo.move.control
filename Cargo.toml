@@ -11,6 +11,7 @@ embedded-graphics = "0.8.1"
 embedded-graphics-core = "0.4.0"
 futures-util = "0.3.30"
 jack = { version = "0.11.4", features = ["metadata"] }
+profont = "0.7.0"
 reqwest = { version = "0.11.24", default-features = false, features = ["json"] } #disable default, we don't need TLS
 reqwest-websocket = "0.2.0"
 serde_json = "1.0.114"

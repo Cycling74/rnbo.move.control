@@ -1,43 +1,63 @@
 use {
     crate::display::MoveDisplay,
     embedded_graphics::{
+        mono_font::MonoTextStyle,
         pixelcolor::BinaryColor,
         prelude::*,
-        primitives::{Circle, PrimitiveStyle},
+        text::{Alignment, Text},
     },
     futures_util::{SinkExt, StreamExt, TryStreamExt},
     jack::{
-        Client, ClientOptions, Control, MidiIn, MidiOut, Port, PortId, ProcessScope, RawMidi, Time,
+        Client, ClientOptions, Control, MidiIn, MidiOut, Port, PortId, ProcessScope, RawMidi,
         Unowned,
     },
     reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
-    std::{error::Error, thread, time::Duration},
+    std::{error::Error, ops::DerefMut, sync::mpsc as sync_mpsc, thread, time::Duration},
+    tokio::sync::mpsc as async_mpsc,
 };
+
+//NOTE channel type should match the reciever: https://users.rust-lang.org/t/communicating-between-sync-and-async-code/41005/3
 
 mod display;
 
+struct DrawCommand {
+    pub data: [u8; display::BUFFER_LEN],
+}
+struct Midi {
+    bytes: [u8; 3],
+}
+
+impl Midi {
+    pub fn new(v: &[u8]) -> Self {
+        let mut bytes = [0; 3];
+        bytes.copy_from_slice(v);
+        Self { bytes }
+    }
+
+    pub fn bytes(&self) -> &[u8; 3] {
+        &self.bytes
+    }
+}
+
 struct Driver {
-    move_display: MoveDisplay,
     display: Port<MidiOut>,
     midi_out: Port<MidiOut>,
     midi_in: Port<MidiIn>,
-    last: Time,
-    period: Time,
+    draw_queue: sync_mpsc::Receiver<DrawCommand>,
+    midi_queue: async_mpsc::Sender<Midi>,
 }
 
 //display rate: 22.928ms
 
 impl jack::ProcessHandler for Driver {
     fn process(&mut self, _: &Client, ps: &ProcessScope) -> Control {
-        let times = ps.cycle_times().unwrap();
-
-        if times.current_usecs - self.last > self.period {
-            self.last = times.current_usecs;
-            self.move_display.draw_if(|bytes| {
-                let m = RawMidi { time: 0, bytes };
-                let mut w = self.display.writer(ps);
-                w.write(&m).unwrap();
-            });
+        if let Ok(cmd) = self.draw_queue.try_recv() {
+            let m = RawMidi {
+                time: 0,
+                bytes: &cmd.data,
+            };
+            let mut w = self.display.writer(ps);
+            w.write(&m).unwrap();
         }
 
         let midi_in = self.midi_in.iter(ps);
@@ -45,14 +65,18 @@ impl jack::ProcessHandler for Driver {
         for i in midi_in {
             //only send pad buttons and step buttons thru
             let thru = if i.bytes.len() == 3 {
-                match i.bytes[0] {
+                let thru = match i.bytes[0] {
                     0x90 | 0x80 => match i.bytes[1] {
                         //pad butttons, step buttons
                         68..=99 | 16..=31 => true,
                         _ => false,
                     },
                     _ => false,
+                };
+                if !thru {
+                    let _ = self.midi_queue.try_send(Midi::new(i.bytes));
                 }
+                thru
             } else {
                 false
             };
@@ -103,7 +127,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let name = "move-control";
     let (c, _status) = Client::new(name, ClientOptions::empty()).expect("error creating client");
 
-    let display = c
+    let display_port = c
         .register_port("display", MidiOut)
         .expect("error creating display port");
     let midi_out = c
@@ -120,25 +144,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .port_by_name("system:midi_capture")
         .expect("error getting system:midi_capture");
 
-    let mut move_display = MoveDisplay::new();
+    let mut display = MoveDisplay::new();
     let control = ConnectionControl {
-        display_port: display.clone_unowned(),
+        display_port: display_port.clone_unowned(),
         system_display_port,
         midi_in_port: midi_in.clone_unowned(),
         system_midi_out_port,
     };
 
-    let circle = Circle::new(Point::new(22, 22), 20)
-        .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1));
-    circle.draw(&mut move_display).unwrap();
+    let style = MonoTextStyle::new(&profont::PROFONT_24_POINT, BinaryColor::On);
+    let size = display.size();
+    Text::with_alignment(
+        "RNBO\non Move",
+        Point::new(size.width as i32 / 2, size.height as i32 / 2),
+        style,
+        Alignment::Center,
+    )
+    .draw(&mut display)?;
+
+    let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
+    let (midi_tx, midi_rx) = async_mpsc::channel(1024);
 
     let driver = Driver {
-        move_display,
-        display,
+        display: display_port,
         midi_out,
         midi_in,
-        last: 0,
-        period: 22_928,
+        draw_queue: draw_rx,
+        midi_queue: midi_tx,
     };
 
     let c = c
@@ -184,16 +216,47 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .unwrap();
     }
 
-    tokio::spawn(async move {
+    let display = tokio::sync::Mutex::new(display);
+    let display_future = async {
+        loop {
+            //frame rate
+            tokio::time::sleep(Duration::from_millis(23)).await;
+            let mut display = display.lock().await;
+            display.draw_if(|data| {
+                draw_tx.send(DrawCommand { data: data.clone() }).unwrap();
+            });
+        }
+    };
+
+    let web_future = async {
         let mut ws: Option<WebSocket> = None;
         let mut error = false;
+        let mut cnt: usize = 0;
         loop {
             if let Some(ws) = &mut ws {
                 if let Ok(message) = ws.try_next().await {
                     if let Some(message) = message {
                         match message {
-                            Message::Text(text) => println!("received: {text}"),
-                            Message::Binary(_binary) => println!("received binary"),
+                            Message::Text(text) => {
+                                println!("received: {text}")
+                            }
+                            Message::Binary(_binary) => {
+                                let style =
+                                    MonoTextStyle::new(&profont::PROFONT_24_POINT, BinaryColor::On);
+                                let mut display = display.lock().await;
+                                display.clear(BinaryColor::Off).unwrap();
+                                let size = display.size();
+                                Text::with_alignment(
+                                    format!("binary {}", cnt).as_str(),
+                                    Point::new(size.width as i32 / 2, size.height as i32 / 2),
+                                    style,
+                                    Alignment::Center,
+                                )
+                                .draw(display.deref_mut())
+                                .unwrap();
+                                cnt += 1;
+                                println!("received binary")
+                            }
                         }
                     }
                 } else {
@@ -230,9 +293,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 ws = None;
             }
         }
-    });
+    };
 
-    tokio::signal::ctrl_c().await.unwrap();
+    let signal_future = async {
+        tokio::signal::ctrl_c().await.unwrap();
+    };
+    tokio::select! {
+        _ = display_future => (), _ = web_future => (), _ = signal_future => ()
+    };
     let _ = c.deactivate();
     Ok(())
 }
