@@ -11,15 +11,7 @@ use {
         Unowned,
     },
     reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
-    std::{
-        error::Error,
-        sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc,
-        },
-        thread,
-        time::Duration,
-    },
+    std::{error::Error, thread, time::Duration},
 };
 
 mod display;
@@ -111,10 +103,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let name = "move-control";
     let (c, _status) = Client::new(name, ClientOptions::empty()).expect("error creating client");
 
-    let run = Arc::new(AtomicBool::new(true));
-
-    let r = run.clone();
-
     let display = c
         .register_port("display", MidiOut)
         .expect("error creating display port");
@@ -196,7 +184,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .unwrap();
     }
 
-    let handle = tokio::spawn(async move {
+    tokio::spawn(async move {
         let mut ws: Option<WebSocket> = None;
         let mut error = false;
         loop {
@@ -212,6 +200,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     error = true;
                 }
             } else {
+                if let Ok(res) = reqwest::Client::new()
+                    .get("http://127.0.0.1:5678")
+                    .send()
+                    .await
+                {
+                    let res: serde_json::Value = res.json().await.unwrap();
+                    println!("got json {}", res);
+                } else {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+
                 if let Ok(res) = reqwest::Client::new()
                     .get("http://127.0.0.1:5678")
                     .upgrade()
