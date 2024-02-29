@@ -11,6 +11,7 @@ use {
         Client, ClientOptions, Control, MidiIn, MidiOut, Port, PortId, ProcessScope, RawMidi,
         Unowned,
     },
+    param::Param,
     reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
     rosc::OscPacket,
     std::{error::Error, ops::DerefMut, sync::mpsc as sync_mpsc, thread, time::Duration},
@@ -20,6 +21,7 @@ use {
 //NOTE channel type should match the reciever: https://users.rust-lang.org/t/communicating-between-sync-and-async-code/41005/3
 
 mod display;
+mod param;
 
 struct DrawCommand {
     pub data: [u8; display::BUFFER_LEN],
@@ -275,12 +277,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             } else {
                 if let Ok(res) = reqwest::Client::new()
-                    .get("http://127.0.0.1:5678")
+                    .get("http://127.0.0.1:5678/rnbo/inst/0/params")
                     .send()
                     .await
                 {
                     let res: serde_json::Value = res.json().await.unwrap();
-                    println!("got json {}", res);
+                    let params = Param::parse_all(&res);
+                    println!("got params {:?}", params);
                 } else {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
