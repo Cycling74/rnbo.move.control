@@ -5,11 +5,14 @@ use {
         prelude::*,
         primitives::{Circle, PrimitiveStyle},
     },
+    futures_util::{SinkExt, StreamExt, TryStreamExt},
     jack::{
         Client, ClientOptions, Control, MidiIn, MidiOut, Port, PortId, ProcessScope, RawMidi, Time,
         Unowned,
     },
+    reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
     std::{
+        error::Error,
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -103,7 +106,8 @@ impl jack::NotificationHandler for ConnectionControl {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     let name = "move-control";
     let (c, _status) = Client::new(name, ClientOptions::empty()).expect("error creating client");
 
@@ -196,8 +200,30 @@ fn main() {
             .unwrap();
     }
 
+    let mut ws: Option<WebSocket> = None;
     while run.load(Ordering::Relaxed) {
-        thread::sleep(Duration::from_millis(100));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Some(ws) = &mut ws {
+            if let Some(message) = ws.try_next().await? {
+                match message {
+                    Message::Text(text) => println!("received: {text}"),
+                    _ => {}
+                }
+            }
+        } else {
+            if let Ok(res) = reqwest::Client::new()
+                .get("http://127.0.0.1:5678/rnbo")
+                .upgrade()
+                .send()
+                .await
+            {
+                if let Ok(websocket) = res.into_websocket().await {
+                    ws = Some(websocket);
+                }
+            }
+        }
     }
     let _ = c.deactivate();
+
+    Ok(())
 }
