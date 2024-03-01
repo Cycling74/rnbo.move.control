@@ -409,56 +409,53 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .send()
                 .await
             {
-                let res: serde_json::Value = res.json().await.unwrap();
-                let p = PatcherInst::parse_all(&res);
-                println!("got patchers {:?}", p);
-                if let Some(p) = p {
-                    let mut g = state.lock().await;
-                    g.set_state(p);
-                }
-            } else {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                continue;
-            }
-
-            if let Ok(res) = reqwest::Client::new()
-                .get("http://127.0.0.1:5678")
-                .upgrade()
-                .send()
-                .await
-            {
-                if let Ok(websocket) = res.into_websocket().await {
-                    println!("got websocket");
-                    let (tx, mut rx) = websocket.split();
-
-                    {
-                        //set up sender
-                        let mut g = ws_tx.lock().await;
-                        *g = Some(tx);
+                if let Ok(res) = res.json().await {
+                    let p = PatcherInst::parse_all(&res);
+                    println!("got patchers {:?}", p);
+                    if let Some(p) = p {
+                        let mut g = state.lock().await;
+                        g.set_state(p);
                     }
 
-                    while let Ok(message) = rx.try_next().await {
-                        if let Some(message) = message {
-                            match message {
-                                Message::Text(text) => {
-                                    println!("received: {text}")
-                                }
-                                Message::Binary(vec) => {
-                                    match rosc::decoder::decode_udp(vec.as_slice()) {
-                                        Ok((_, OscPacket::Message(m))) => {
-                                            let mut g = state.lock().await;
-                                            g.handle_osc(&m, &display).await;
+                    if let Ok(res) = reqwest::Client::new()
+                        .get("http://127.0.0.1:5678")
+                        .upgrade()
+                        .send()
+                        .await
+                    {
+                        if let Ok(websocket) = res.into_websocket().await {
+                            println!("got websocket");
+                            let (tx, mut rx) = websocket.split();
+
+                            {
+                                //set up sender
+                                let mut g = ws_tx.lock().await;
+                                *g = Some(tx);
+                            }
+
+                            while let Ok(message) = rx.try_next().await {
+                                if let Some(message) = message {
+                                    match message {
+                                        Message::Text(text) => {
+                                            println!("received: {text}")
                                         }
-                                        _ => (),
+                                        Message::Binary(vec) => {
+                                            match rosc::decoder::decode_udp(vec.as_slice()) {
+                                                Ok((_, OscPacket::Message(m))) => {
+                                                    let mut g = state.lock().await;
+                                                    g.handle_osc(&m, &display).await;
+                                                }
+                                                _ => (),
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
-            } else {
-                tokio::time::sleep(Duration::from_millis(100)).await;
             }
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     };
 
