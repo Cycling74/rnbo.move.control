@@ -56,7 +56,8 @@ struct Driver {
     midi_out: Port<MidiOut>,
     midi_in: Port<MidiIn>,
     draw_queue: sync_mpsc::Receiver<DrawCommand>,
-    midi_queue: async_mpsc::Sender<Midi>,
+    midi_in_queue: async_mpsc::Sender<Midi>,
+    midi_out_queue: sync_mpsc::Receiver<Midi>,
 }
 
 //display rate: 22.928ms
@@ -86,7 +87,7 @@ impl jack::ProcessHandler for Driver {
                     _ => false,
                 };
                 if !thru {
-                    let _ = self.midi_queue.try_send(Midi::new(i.bytes));
+                    let _ = self.midi_in_queue.try_send(Midi::new(i.bytes));
                 }
                 thru
             } else {
@@ -135,46 +136,81 @@ impl jack::NotificationHandler for ConnectionControl {
     }
 }
 
-struct State {
+struct StateController {
     pub instances: HashMap<usize, PatcherInst>,
     pub params: HashMap<String, usize>,
     pub selected_param: Option<(usize, usize)>,
 }
 
-impl State {
-    pub fn new(instances: HashMap<usize, PatcherInst>) -> Self {
+impl StateController {
+    pub fn set_state(&mut self, instances: HashMap<usize, PatcherInst>) {
         let mut params: HashMap<String, usize> = HashMap::new();
         for (index, v) in instances.iter() {
             for p in v.params().iter() {
                 params.insert(p.addr().to_string(), *index);
             }
         }
-        Self {
-            instances,
-            params,
-            selected_param: Some((0, 0)),
+        self.instances = instances;
+        self.params = params;
+    }
+
+    pub async fn select_param(
+        &mut self,
+        v: Option<(usize, usize)>,
+        display: &tokio::sync::Mutex<MoveDisplay>,
+    ) {
+        self.selected_param = v;
+        self.render_param(display).await;
+    }
+
+    pub async fn render_param(&self, display: &tokio::sync::Mutex<MoveDisplay>) {
+        let mut display = display.lock().await;
+        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+        display.clear(BinaryColor::Off).unwrap();
+        let size = display.size();
+
+        if let Some((inst, param)) = self.selected_param {
+            if let Some(inst) = self.instances.get(&inst) {
+                if let Some(param) = inst.params().get(param) {
+                    let s = format!("{}\n{}", param.name(), param.render_value());
+                    Text::with_alignment(
+                        s.as_str(),
+                        Point::new(size.width as i32 / 2, size.height as i32 / 2),
+                        style,
+                        Alignment::Center,
+                    )
+                    .draw(display.deref_mut())
+                    .unwrap();
+                }
+            }
         }
     }
 
-    fn handle_osc(&mut self, msg: &OscMessage) -> Option<(usize, usize)> {
+    pub async fn handle_osc(
+        &mut self,
+        msg: &OscMessage,
+        display: &tokio::sync::Mutex<MoveDisplay>,
+    ) {
         if msg.args.len() == 1 {
             if let Some(index) = self.params.get(&msg.addr) {
                 if let Some(inst) = self.instances.get_mut(&index) {
-                    let pindex = match &msg.args[0] {
+                    if let Some(pindex) = match &msg.args[0] {
                         OscType::Double(v) => inst.update_param_f64(&msg.addr, *v),
                         OscType::Float(v) => inst.update_param_f64(&msg.addr, *v as f64),
                         OscType::Int(v) => inst.update_param_f64(&msg.addr, *v as f64),
                         OscType::String(v) => inst.update_param_s(&msg.addr, v),
-                        _ => return None,
-                    }?;
-                    return Some((*index, pindex));
+                        _ => None,
+                    } {
+                        if Some((*index, pindex)) == self.selected_param {
+                            self.render_param(display).await;
+                        }
+                    }
                 }
             }
         }
-        None
     }
 
-    fn render_osc(&mut self, inst: usize, param: usize, v: isize) -> Option<OscMessage> {
+    pub fn render_osc(&mut self, inst: usize, param: usize, v: isize) -> Option<OscMessage> {
         if let Some(inst) = self.instances.get_mut(&inst) {
             if let Some(param) = inst.params_mut().get_mut(param) {
                 let mut args = Vec::new();
@@ -193,7 +229,7 @@ impl State {
     }
 }
 
-impl Default for State {
+impl Default for StateController {
     fn default() -> Self {
         Self {
             instances: HashMap::new(),
@@ -209,7 +245,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (c, _status) = Client::new(name, ClientOptions::empty()).expect("error creating client");
 
     let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
-    let (midi_tx, mut midi_rx) = async_mpsc::channel(1024);
+    let (mut midi_out_tx, midi_out_rx) = sync_mpsc::sync_channel(1024);
+    let (midi_in_tx, mut midi_in_rx) = async_mpsc::channel(1024);
     let (disconnect_tx, mut disconnect_rx) = async_mpsc::channel(128);
 
     let display_port = c
@@ -253,7 +290,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         midi_out,
         midi_in,
         draw_queue: draw_rx,
-        midi_queue: midi_tx,
+        midi_in_queue: midi_in_tx,
+        midi_out_queue: midi_out_rx,
     };
 
     let c = c
@@ -311,7 +349,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let render_selected = |state: &State, display: &mut MoveDisplay| {
+    let render_selected = |state: &StateController, display: &mut MoveDisplay| {
         let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
         display.clear(BinaryColor::Off).unwrap();
         let size = display.size();
@@ -333,22 +371,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let state: tokio::sync::Mutex<State> = tokio::sync::Mutex::new(State::default());
+    let state: tokio::sync::Mutex<StateController> =
+        tokio::sync::Mutex::new(StateController::default());
     let ws_tx: tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>> =
         tokio::sync::Mutex::new(None);
 
     let process_midi = async {
         loop {
-            if let Some(midi) = midi_rx.recv().await {
+            if let Some(midi) = midi_in_rx.recv().await {
                 match midi.bytes[0] {
                     0x90 => {
                         //param select
                         if midi.bytes[1] <= 8 {
                             //select!
                             let mut g = state.lock().await;
-                            let mut d = display.lock().await;
-                            g.selected_param = Some((0, midi.bytes[1] as usize));
-                            render_selected(g.deref(), d.deref_mut());
+                            g.select_param(Some((0, midi.bytes[1] as usize)), &display)
+                                .await;
                         }
                     }
                     0xB0 => {
@@ -392,8 +430,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("got patchers {:?}", p);
                 if let Some(p) = p {
                     let mut g = state.lock().await;
-                    let mut new_state = State::new(p);
-                    std::mem::swap(g.deref_mut(), &mut new_state);
+                    g.set_state(p);
                 }
             } else {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -429,17 +466,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                             match p {
                                                 OscPacket::Message(m) => {
                                                     let mut g = state.lock().await;
-                                                    let mut d = display.lock().await;
-                                                    if let Some(cur) = g.handle_osc(&m) {
-                                                        if let Some(sel) = g.selected_param {
-                                                            if cur == sel {
-                                                                render_selected(
-                                                                    g.deref(),
-                                                                    d.deref_mut(),
-                                                                );
-                                                            }
-                                                        }
-                                                    }
+                                                    g.handle_osc(&m, &display).await;
                                                 }
                                                 _ => (),
                                             }
