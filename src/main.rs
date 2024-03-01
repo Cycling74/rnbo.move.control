@@ -349,28 +349,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let render_selected = |state: &StateController, display: &mut MoveDisplay| {
-        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-        display.clear(BinaryColor::Off).unwrap();
-        let size = display.size();
-
-        if let Some((inst, param)) = state.selected_param {
-            if let Some(inst) = state.instances.get(&inst) {
-                if let Some(param) = inst.params().get(param) {
-                    let s = format!("{}\n{}", param.name(), param.render_value());
-                    Text::with_alignment(
-                        s.as_str(),
-                        Point::new(size.width as i32 / 2, size.height as i32 / 2),
-                        style,
-                        Alignment::Center,
-                    )
-                    .draw(display)
-                    .unwrap();
-                }
-            }
-        }
-    };
-
     let state: tokio::sync::Mutex<StateController> =
         tokio::sync::Mutex::new(StateController::default());
     let ws_tx: tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>> =
@@ -382,7 +360,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 match midi.bytes[0] {
                     0x90 => {
                         //param select
-                        if midi.bytes[1] <= 8 {
+                        if midi.bytes[1] < 8 {
                             //select!
                             let mut g = state.lock().await;
                             g.select_param(Some((0, midi.bytes[1] as usize)), &display)
