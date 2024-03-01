@@ -309,7 +309,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let render_selected = |state: &State, display: &mut MoveDisplay| {
-        let style = MonoTextStyle::new(&profont::PROFONT_7_POINT, BinaryColor::On);
+        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
         display.clear(BinaryColor::Off).unwrap();
         let size = display.size();
 

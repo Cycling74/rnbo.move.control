@@ -104,7 +104,7 @@ impl Param {
             ParamDetail::Enum(index, vals) => vals[*index].clone(),
             ParamDetail::Bool(v) => if *v { "on" } else { "off" }.to_string(),
             ParamDetail::Float { val, .. } => {
-                format!("{}", val)
+                format!("{:.3}", val)
             }
         }
     }
