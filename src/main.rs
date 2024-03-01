@@ -210,6 +210,47 @@ impl StateController {
         }
     }
 
+    pub async fn handle_midi(
+        &mut self,
+        bytes: &[u8; 3],
+        display: &tokio::sync::Mutex<MoveDisplay>,
+        ws_tx: &tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>>,
+    ) {
+        match bytes[0] {
+            0x90 => {
+                //param select
+                if bytes[1] < 8 {
+                    //select!
+                    self.select_param(Some((0, bytes[1] as usize)), &display)
+                        .await;
+                }
+            }
+            0xB0 => {
+                match bytes[1] {
+                    //param encoders
+                    index @ 71..=78 => {
+                        let inst = 0;
+                        let index = (index - 71) as usize;
+                        let v = bytes[2];
+                        //left == 127
+                        //right == 1
+                        if let Some(msg) = self.render_osc(inst, index, v as isize) {
+                            let packet = OscPacket::Message(msg);
+                            if let Ok(msg) = rosc::encoder::encode(&packet) {
+                                let mut tx = ws_tx.lock().await;
+                                if let Some(tx) = tx.deref_mut() {
+                                    let _ = tx.send(Message::Binary(msg)).await;
+                                }
+                            }
+                        }
+                    }
+                    _ => (),
+                }
+            }
+            _ => (),
+        }
+    }
+
     pub fn render_osc(&mut self, inst: usize, param: usize, v: isize) -> Option<OscMessage> {
         if let Some(inst) = self.instances.get_mut(&inst) {
             if let Some(param) = inst.params_mut().get_mut(param) {
@@ -355,44 +396,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tokio::sync::Mutex::new(None);
 
     let process_midi = async {
-        loop {
-            if let Some(midi) = midi_in_rx.recv().await {
-                match midi.bytes[0] {
-                    0x90 => {
-                        //param select
-                        if midi.bytes[1] < 8 {
-                            //select!
-                            let mut g = state.lock().await;
-                            g.select_param(Some((0, midi.bytes[1] as usize)), &display)
-                                .await;
-                        }
-                    }
-                    0xB0 => {
-                        match midi.bytes[1] {
-                            //param encoders
-                            index @ 71..=78 => {
-                                let inst = 0;
-                                let index = (index - 71) as usize;
-                                let v = midi.bytes[2];
-                                //left == 127
-                                //right == 1
-                                let mut s = state.lock().await;
-                                if let Some(msg) = s.render_osc(inst, index, v as isize) {
-                                    let packet = OscPacket::Message(msg);
-                                    if let Ok(msg) = rosc::encoder::encode(&packet) {
-                                        let mut tx = ws_tx.lock().await;
-                                        if let Some(tx) = tx.deref_mut() {
-                                            let _ = tx.send(Message::Binary(msg)).await;
-                                        }
-                                    }
-                                }
-                            }
-                            _ => (),
-                        }
-                    }
-                    _ => (),
-                }
-            }
+        while let Some(midi) = midi_in_rx.recv().await {
+            let mut c = state.lock().await;
+            c.handle_midi(&midi.bytes, &display, &ws_tx).await;
         }
     };
 
@@ -431,29 +437,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         *g = Some(tx);
                     }
 
-                    loop {
-                        if let Ok(message) = rx.try_next().await {
-                            if let Some(message) = message {
-                                match message {
-                                    Message::Text(text) => {
-                                        println!("received: {text}")
-                                    }
-                                    Message::Binary(vec) => {
-                                        let osc = rosc::decoder::decode_udp(vec.as_slice());
-                                        if let Ok((_, p)) = osc {
-                                            match p {
-                                                OscPacket::Message(m) => {
-                                                    let mut g = state.lock().await;
-                                                    g.handle_osc(&m, &display).await;
-                                                }
-                                                _ => (),
-                                            }
+                    while let Ok(message) = rx.try_next().await {
+                        if let Some(message) = message {
+                            match message {
+                                Message::Text(text) => {
+                                    println!("received: {text}")
+                                }
+                                Message::Binary(vec) => {
+                                    match rosc::decoder::decode_udp(vec.as_slice()) {
+                                        Ok((_, OscPacket::Message(m))) => {
+                                            let mut g = state.lock().await;
+                                            g.handle_osc(&m, &display).await;
                                         }
+                                        _ => (),
                                     }
                                 }
                             }
-                        } else {
-                            break;
                         }
                     }
                 }
