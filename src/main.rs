@@ -107,6 +107,8 @@ struct ConnectionControl {
 
     midi_in_port: Port<Unowned>,
     system_midi_out_port: Port<Unowned>,
+
+    disconnect_queue: async_mpsc::Sender<(PortId, PortId)>,
 }
 
 impl jack::NotificationHandler for ConnectionControl {
@@ -126,7 +128,7 @@ impl jack::NotificationHandler for ConnectionControl {
                         || (a == self.system_midi_out_port && b != self.midi_in_port)
                         || (a != self.system_midi_out_port && b == self.midi_in_port)
                     {
-                        let _ = client.disconnect_ports(&a, &b);
+                        let _ = self.disconnect_queue.try_send((port_id_a, port_id_b));
                     }
                 }
             }
@@ -207,6 +209,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let name = "move-control";
     let (c, _status) = Client::new(name, ClientOptions::empty()).expect("error creating client");
 
+    let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
+    let (midi_tx, mut midi_rx) = async_mpsc::channel(1024);
+    let (disconnect_tx, mut disconnect_rx) = async_mpsc::channel(128);
+
     let display_port = c
         .register_port("display", MidiOut)
         .expect("error creating display port");
@@ -230,6 +236,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         system_display_port,
         midi_in_port: midi_in.clone_unowned(),
         system_midi_out_port,
+        disconnect_queue: disconnect_tx,
     };
 
     let style = MonoTextStyle::new(&profont::PROFONT_24_POINT, BinaryColor::On);
@@ -241,9 +248,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Alignment::Center,
     )
     .draw(&mut display)?;
-
-    let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
-    let (midi_tx, mut midi_rx) = async_mpsc::channel(1024);
 
     let driver = Driver {
         display: display_port,
@@ -455,11 +459,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
+    let disconnect_future = async {
+        while let Some((a, b)) = disconnect_rx.recv().await {
+            let client = c.as_client();
+            if let Some(a) = client.port_by_id(a) {
+                if let Some(b) = client.port_by_id(b) {
+                    let _ = client.disconnect_ports(&a, &b);
+                }
+            }
+        }
+    };
+
     let signal_future = async {
         tokio::signal::ctrl_c().await.unwrap();
     };
     tokio::select! {
-        _ = display_future => (), _ = web_future => (), _ = signal_future => (), _ = process_midi => ()
+        _ = display_future => (), _ = web_future => (), _ = signal_future => (), _ = process_midi => (), _ = disconnect_future => (),
     };
     let _ = c.deactivate();
     Ok(())
