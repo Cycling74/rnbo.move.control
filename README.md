@@ -5,9 +5,9 @@
 ```
 brew tap messense/macos-cross-toolchains
 brew install aarch64-unknown-linux-gnu
-mkdir -p ./target/debug/deps ./target/release/deps
-scp -O move:"jack2/lib/libjack.so*" ./target/debug/deps/
-cp ./target/debug/deps/libjack.so* ./target/release/deps/
+mkdir -p ./target/aarch64-unknown-linux-gnu/debug/deps ./target/aarch64-unknown-linux-gnu/release/deps
+scp -O move:"jack2/lib/libjack.so*" ./target/aarch64-unknown-linux-gnu/debug/deps/
+cp ./target/aarch64-unknown-linux-gnu/debug/deps/libjack.so* ./target/aarch64-unknown-linux-gnu/release/deps/
 ```
 
 Mount the AOS SDK, in this case: `SDK-toolchain-abletonos-aarch64-rpi4-v3.2`
