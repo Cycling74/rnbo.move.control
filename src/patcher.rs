@@ -8,6 +8,48 @@ pub struct PatcherInst {
 }
 
 impl PatcherInst {
+    pub fn index(&self) -> usize {
+        self.index
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn params(&self) -> &Vec<Param> {
+        &self.params
+    }
+
+    pub fn params_mut(&mut self) -> &mut Vec<Param> {
+        &mut self.params
+    }
+
+    pub fn update_param_f64(&mut self, addr: &str, val: f64) -> Option<usize> {
+        if let Some((index, p)) = self
+            .params
+            .iter_mut()
+            .enumerate()
+            .find(|(_, p)| p.addr() == addr)
+        {
+            p.update_f64(val);
+            Some(index)
+        } else {
+            None
+        }
+    }
+
+    pub fn update_param_s(&mut self, addr: &str, val: &str) -> Option<usize> {
+        if let Some((index, p)) = self
+            .params
+            .iter_mut()
+            .enumerate()
+            .find(|(_, p)| p.addr() == addr)
+        {
+            p.update_s(val);
+            Some(index)
+        } else {
+            None
+        }
+    }
+
     pub fn parse(index: usize, json: &serde_json::Value) -> Option<Self> {
         let contents = json.get("CONTENTS")?.as_object()?;
         let name = contents

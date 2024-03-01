@@ -91,8 +91,22 @@ impl Param {
         self.norm
     }
 
+    pub fn set_norm(&mut self, v: f64) {
+        self.norm = v;
+    }
+
     pub fn detail(&self) -> &ParamDetail {
         &self.detail
+    }
+
+    pub fn render_value(&self) -> String {
+        match &self.detail {
+            ParamDetail::Enum(index, vals) => vals[*index].clone(),
+            ParamDetail::Bool(v) => if *v { "on" } else { "off" }.to_string(),
+            ParamDetail::Float { val, .. } => {
+                format!("{}", val)
+            }
+        }
     }
 
     pub fn update_f64(&mut self, val: f64) {

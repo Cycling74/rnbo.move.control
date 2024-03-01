@@ -6,7 +6,7 @@ use {
         prelude::*,
         text::{Alignment, Text},
     },
-    futures_util::{SinkExt, StreamExt, TryStreamExt},
+    futures_util::{stream::SplitSink, SinkExt, StreamExt, TryStreamExt},
     jack::{
         Client, ClientOptions, Control, MidiIn, MidiOut, Port, PortId, ProcessScope, RawMidi,
         Unowned,
@@ -14,8 +14,15 @@ use {
     param::Param,
     patcher::PatcherInst,
     reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
-    rosc::OscPacket,
-    std::{error::Error, ops::DerefMut, sync::mpsc as sync_mpsc, thread, time::Duration},
+    rosc::{OscMessage, OscPacket, OscType},
+    std::{
+        collections::HashMap,
+        error::Error,
+        ops::{Deref, DerefMut},
+        sync::mpsc as sync_mpsc,
+        thread,
+        time::Duration,
+    },
     tokio::sync::mpsc as async_mpsc,
 };
 
@@ -127,6 +134,74 @@ impl jack::NotificationHandler for ConnectionControl {
     }
 }
 
+struct State {
+    pub instances: HashMap<usize, PatcherInst>,
+    pub params: HashMap<String, usize>,
+    pub selected_param: Option<(usize, usize)>,
+}
+
+impl State {
+    pub fn new(instances: HashMap<usize, PatcherInst>) -> Self {
+        let mut params: HashMap<String, usize> = HashMap::new();
+        for (index, v) in instances.iter() {
+            for p in v.params().iter() {
+                params.insert(p.addr().to_string(), *index);
+            }
+        }
+        Self {
+            instances,
+            params,
+            selected_param: Some((0, 0)),
+        }
+    }
+
+    fn handle_osc(&mut self, msg: &OscMessage) -> Option<(usize, usize)> {
+        if msg.args.len() == 1 {
+            if let Some(index) = self.params.get(&msg.addr) {
+                if let Some(inst) = self.instances.get_mut(&index) {
+                    let pindex = match &msg.args[0] {
+                        OscType::Double(v) => inst.update_param_f64(&msg.addr, *v),
+                        OscType::Float(v) => inst.update_param_f64(&msg.addr, *v as f64),
+                        OscType::Int(v) => inst.update_param_f64(&msg.addr, *v as f64),
+                        OscType::String(v) => inst.update_param_s(&msg.addr, v),
+                        _ => return None,
+                    }?;
+                    return Some((*index, pindex));
+                }
+            }
+        }
+        None
+    }
+
+    fn render_osc(&mut self, inst: usize, param: usize, v: isize) -> Option<OscMessage> {
+        if let Some(inst) = self.instances.get_mut(&inst) {
+            if let Some(param) = inst.params_mut().get_mut(param) {
+                let mut args = Vec::new();
+                let step = 0.01;
+                //operate on the normalized value.. TODO, change step
+                let v = (param.norm() + if v < 64 { step } else { -step }).clamp(0.0, 1.0);
+                param.set_norm(v); //TODO get norm from OSC
+                args.push(OscType::Double(v));
+                return Some(OscMessage {
+                    addr: format!("{}/normalized", param.addr()),
+                    args,
+                });
+            }
+        }
+        None
+    }
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            instances: HashMap::new(),
+            params: HashMap::new(),
+            selected_param: None,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let name = "move-control";
@@ -168,7 +243,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .draw(&mut display)?;
 
     let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
-    let (midi_tx, midi_rx) = async_mpsc::channel(1024);
+    let (midi_tx, mut midi_rx) = async_mpsc::channel(1024);
 
     let driver = Driver {
         display: display_port,
@@ -233,80 +308,149 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let web_future = async {
-        let mut ws: Option<WebSocket> = None;
-        let mut error = false;
+    let render_selected = |state: &State, display: &mut MoveDisplay| {
+        let style = MonoTextStyle::new(&profont::PROFONT_7_POINT, BinaryColor::On);
+        display.clear(BinaryColor::Off).unwrap();
+        let size = display.size();
+
+        if let Some((inst, param)) = state.selected_param {
+            if let Some(inst) = state.instances.get(&inst) {
+                if let Some(param) = inst.params().get(param) {
+                    let s = format!("{}\n{}", param.name(), param.render_value());
+                    Text::with_alignment(
+                        s.as_str(),
+                        Point::new(size.width as i32 / 2, size.height as i32 / 2),
+                        style,
+                        Alignment::Center,
+                    )
+                    .draw(display)
+                    .unwrap();
+                }
+            }
+        }
+    };
+
+    let state: tokio::sync::Mutex<State> = tokio::sync::Mutex::new(State::default());
+    let mut ws_tx: tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>> =
+        tokio::sync::Mutex::new(None);
+
+    let process_midi = async {
         loop {
-            if let Some(ws) = &mut ws {
-                if let Ok(message) = ws.try_next().await {
-                    if let Some(message) = message {
-                        match message {
-                            Message::Text(text) => {
-                                println!("received: {text}")
-                            }
-                            Message::Binary(vec) => {
-                                let osc = rosc::decoder::decode_udp(vec.as_slice());
-                                if let Ok((_, p)) = osc {
-                                    match p {
-                                        OscPacket::Message(m) => {
-                                            let style = MonoTextStyle::new(
-                                                &profont::PROFONT_7_POINT,
-                                                BinaryColor::On,
-                                            );
-                                            let mut display = display.lock().await;
-                                            display.clear(BinaryColor::Off).unwrap();
-                                            let size = display.size();
-                                            Text::with_alignment(
-                                                m.addr.as_str(),
-                                                Point::new(
-                                                    size.width as i32 / 2,
-                                                    size.height as i32 / 2,
-                                                ),
-                                                style,
-                                                Alignment::Center,
-                                            )
-                                            .draw(display.deref_mut())
-                                            .unwrap();
+            if let Some(midi) = midi_rx.recv().await {
+                match midi.bytes[0] {
+                    0x90 => {
+                        //param select
+                        if midi.bytes[1] <= 8 {
+                            //select!
+                            let mut g = state.lock().await;
+                            let mut d = display.lock().await;
+                            g.selected_param = Some((0, midi.bytes[1] as usize));
+                            render_selected(g.deref(), d.deref_mut());
+                        }
+                    }
+                    0xB0 => {
+                        match midi.bytes[1] {
+                            //param encoders
+                            index @ 71..=78 => {
+                                let inst = 0;
+                                let index = (index - 71) as usize;
+                                let v = midi.bytes[2];
+                                //left == 127
+                                //right == 1
+                                let mut s = state.lock().await;
+                                if let Some(msg) = s.render_osc(inst, index, v as isize) {
+                                    let packet = OscPacket::Message(msg);
+                                    if let Ok(msg) = rosc::encoder::encode(&packet) {
+                                        let mut tx = ws_tx.lock().await;
+                                        if let Some(tx) = tx.deref_mut() {
+                                            let _ = tx.send(Message::Binary(msg)).await;
                                         }
-                                        _ => (),
                                     }
                                 }
                             }
+                            _ => (),
                         }
                     }
-                } else {
-                    error = true;
-                }
-            } else {
-                if let Ok(res) = reqwest::Client::new()
-                    .get("http://127.0.0.1:5678/rnbo/inst")
-                    .send()
-                    .await
-                {
-                    let res: serde_json::Value = res.json().await.unwrap();
-                    let p = PatcherInst::parse_all(&res);
-                    println!("got patchers {:?}", p);
-                } else {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    continue;
-                }
-
-                if let Ok(res) = reqwest::Client::new()
-                    .get("http://127.0.0.1:5678")
-                    .upgrade()
-                    .send()
-                    .await
-                {
-                    if let Ok(websocket) = res.into_websocket().await {
-                        ws = Some(websocket);
-                    }
-                } else {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    _ => (),
                 }
             }
-            if error {
-                error = false;
-                ws = None;
+        }
+    };
+
+    let web_future = async {
+        loop {
+            if let Ok(res) = reqwest::Client::new()
+                .get("http://127.0.0.1:5678/rnbo/inst")
+                .send()
+                .await
+            {
+                let res: serde_json::Value = res.json().await.unwrap();
+                let p = PatcherInst::parse_all(&res);
+                println!("got patchers {:?}", p);
+                if let Some(p) = p {
+                    let mut g = state.lock().await;
+                    let mut new_state = State::new(p);
+                    std::mem::swap(g.deref_mut(), &mut new_state);
+                }
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+
+            if let Ok(res) = reqwest::Client::new()
+                .get("http://127.0.0.1:5678")
+                .upgrade()
+                .send()
+                .await
+            {
+                if let Ok(websocket) = res.into_websocket().await {
+                    println!("got websocket");
+                    let (tx, mut rx) = websocket.split();
+
+                    {
+                        //set up sender
+                        let mut g = ws_tx.lock().await;
+                        *g = Some(tx);
+                    }
+
+                    loop {
+                        if let Ok(message) = rx.try_next().await {
+                            if let Some(message) = message {
+                                match message {
+                                    Message::Text(text) => {
+                                        println!("received: {text}")
+                                    }
+                                    Message::Binary(vec) => {
+                                        let osc = rosc::decoder::decode_udp(vec.as_slice());
+                                        if let Ok((_, p)) = osc {
+                                            match p {
+                                                OscPacket::Message(m) => {
+                                                    let mut g = state.lock().await;
+                                                    let mut d = display.lock().await;
+                                                    if let Some(cur) = g.handle_osc(&m) {
+                                                        if let Some(sel) = g.selected_param {
+                                                            if cur == sel {
+                                                                render_selected(
+                                                                    g.deref(),
+                                                                    d.deref_mut(),
+                                                                );
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                _ => (),
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
     };
@@ -315,7 +459,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tokio::signal::ctrl_c().await.unwrap();
     };
     tokio::select! {
-        _ = display_future => (), _ = web_future => (), _ = signal_future => ()
+        _ = display_future => (), _ = web_future => (), _ = signal_future => (), _ = process_midi => ()
     };
     let _ = c.deactivate();
     Ok(())
