@@ -121,15 +121,14 @@ impl jack::NotificationHandler for ConnectionControl {
     ) {
         //don't allow anything to connect to system display, system midi port, our midi in port or our display port except us
         if are_connected {
-            if let Some(a) = client.port_by_id(port_id_a) {
-                if let Some(b) = client.port_by_id(port_id_b) {
-                    if (a != self.display_port && b == self.system_display_port)
-                        || (a == self.display_port && b != self.system_display_port)
-                        || (a == self.system_midi_out_port && b != self.midi_in_port)
-                        || (a != self.system_midi_out_port && b == self.midi_in_port)
-                    {
-                        let _ = self.disconnect_queue.try_send((port_id_a, port_id_b));
-                    }
+            if let (Some(a), Some(b)) = (client.port_by_id(port_id_a), client.port_by_id(port_id_b))
+            {
+                if (a != self.display_port && b == self.system_display_port)
+                    || (a == self.display_port && b != self.system_display_port)
+                    || (a == self.system_midi_out_port && b != self.midi_in_port)
+                    || (a != self.system_midi_out_port && b == self.midi_in_port)
+                {
+                    let _ = self.disconnect_queue.try_send((port_id_a, port_id_b));
                 }
             }
         }
@@ -462,10 +461,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let disconnect_future = async {
         while let Some((a, b)) = disconnect_rx.recv().await {
             let client = c.as_client();
-            if let Some(a) = client.port_by_id(a) {
-                if let Some(b) = client.port_by_id(b) {
-                    let _ = client.disconnect_ports(&a, &b);
-                }
+            if let (Some(a), Some(b)) = (client.port_by_id(a), client.port_by_id(b)) {
+                let _ = client.disconnect_ports(&a, &b);
             }
         }
     };
