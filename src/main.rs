@@ -331,7 +331,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let state: tokio::sync::Mutex<State> = tokio::sync::Mutex::new(State::default());
-    let mut ws_tx: tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>> =
+    let ws_tx: tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>> =
         tokio::sync::Mutex::new(None);
 
     let process_midi = async {
