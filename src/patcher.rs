@@ -5,6 +5,7 @@ pub struct PatcherInst {
     index: usize,
     name: String,
     params: Vec<Param>,
+    presets: Vec<String>,
 }
 
 impl PatcherInst {
@@ -59,10 +60,25 @@ impl PatcherInst {
             .as_str()?
             .to_string();
         let params = Param::parse_all(contents.get("params")?)?;
+        let mut presets = Vec::new();
+        for e in contents
+            .get("presets")?
+            .as_object()?
+            .get("CONTENTS")?
+            .as_object()?
+            .get("entries")?
+            .as_object()?
+            .get("VALUE")?
+            .as_array()?
+            .iter()
+        {
+            presets.push(e.as_str()?.to_string());
+        }
         Some(PatcherInst {
             index,
             name,
             params,
+            presets,
         })
     }
 
