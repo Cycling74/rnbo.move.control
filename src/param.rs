@@ -72,6 +72,7 @@ pub enum ParamDetail {
 
 #[derive(Debug)]
 pub struct Param {
+    index: usize,
     addr: String,
     name: String,
     detail: ParamDetail,
@@ -79,6 +80,9 @@ pub struct Param {
 }
 
 impl Param {
+    pub fn index(&self) -> usize {
+        self.index
+    }
     pub fn addr(&self) -> &str {
         self.addr.as_str()
     }
@@ -140,12 +144,15 @@ impl Param {
             let range = obj.get("RANGE")?.as_array()?.get(0)?.as_object()?;
             let addr = obj.get("FULL_PATH")?.as_str()?.to_string();
             let name = addr.split("/params/").nth(1)?.to_string();
-            let norm = obj
-                .get("CONTENTS")?
+            let contents = obj.get("CONTENTS")?;
+
+            let norm = contents
                 .get("normalized")?
                 .get("VALUE")?
                 .as_number()?
                 .as_f64()?;
+
+            let index = contents.get("index")?.get("VALUE")?.as_number()?.as_u64()? as usize;
 
             match obj.get("TYPE")?.as_str()? {
                 "s" => {
@@ -165,6 +172,7 @@ impl Param {
                         ParamDetail::Enum(index, vals)
                     };
                     Some(Param {
+                        index,
                         addr,
                         name,
                         detail,
@@ -179,6 +187,7 @@ impl Param {
                     );
                     let detail = ParamDetail::Float { val, min, max };
                     Some(Param {
+                        index,
                         addr,
                         name,
                         detail,
@@ -210,6 +219,7 @@ impl Param {
         if json.get("FULL_PATH")?.as_str()?.ends_with("params") {
             let mut values: Vec<Param> = Vec::new();
             Self::get_all(json, &mut values)?;
+            values.sort_by(|a, b| a.index.partial_cmp(&b.index).unwrap());
             Some(values)
         } else {
             None
