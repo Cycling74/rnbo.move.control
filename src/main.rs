@@ -13,6 +13,7 @@ use {
     },
     param::Param,
     patcher::PatcherInst,
+    regex::Regex,
     reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
     std::{
@@ -21,7 +22,7 @@ use {
         ops::{Deref, DerefMut},
         sync::mpsc as sync_mpsc,
         thread,
-        time::Duration,
+        time::{Duration, Instant},
     },
     tokio::sync::mpsc as async_mpsc,
 };
@@ -31,6 +32,8 @@ use {
 mod display;
 mod param;
 mod patcher;
+
+const INST_QUERY_DELAY: Duration = Duration::from_millis(20);
 
 struct DrawCommand {
     pub data: [u8; display::BUFFER_LEN],
@@ -393,8 +396,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let state: tokio::sync::Mutex<StateController> =
-        tokio::sync::Mutex::new(StateController::default());
+    let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(StateController::default()));
     let ws_tx: tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>> =
         tokio::sync::Mutex::new(None);
 
@@ -405,51 +408,105 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
+    let inst_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
+    let inst_path_regex = Regex::new(r"^/rnbo/inst/\d+$").expect("to create instance regex");
+
+    async fn get_instances() -> Option<HashMap<usize, PatcherInst>> {
+        if let Ok(res) = reqwest::Client::new()
+            .get("http://127.0.0.1:5678/rnbo/inst")
+            .send()
+            .await
+        {
+            if let Ok(res) = res.json().await {
+                return PatcherInst::parse_all(&res);
+            }
+        }
+        None
+    };
+
+    let inst_query_future = async {
+        loop {
+            tokio::time::sleep(INST_QUERY_DELAY).await;
+            {
+                let mut g = inst_query.lock().await;
+                if let Some(v) = g.deref() {
+                    if Instant::now() - *v > INST_QUERY_DELAY {
+                        println!("got instance update");
+                        *g = None;
+                        if let Some(inst) = get_instances().await {
+                            {
+                                let mut g = state.lock().await;
+                                g.set_state(inst);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
     let web_future = async {
         loop {
-            if let Ok(res) = reqwest::Client::new()
-                .get("http://127.0.0.1:5678/rnbo/inst")
-                .send()
-                .await
-            {
-                if let Ok(res) = res.json().await {
-                    let p = PatcherInst::parse_all(&res);
-                    println!("got patchers {:?}", p);
-                    if let Some(p) = p {
-                        let mut g = state.lock().await;
-                        g.set_state(p);
-                    }
+            if let Some(inst) = get_instances().await {
+                {
+                    let mut g = state.lock().await;
+                    g.set_state(inst);
+                }
 
-                    if let Ok(res) = reqwest::Client::new()
-                        .get("http://127.0.0.1:5678")
-                        .upgrade()
-                        .send()
-                        .await
-                    {
-                        if let Ok(websocket) = res.into_websocket().await {
-                            println!("got websocket");
-                            let (tx, mut rx) = websocket.split();
+                if let Ok(res) = reqwest::Client::new()
+                    .get("http://127.0.0.1:5678")
+                    .upgrade()
+                    .send()
+                    .await
+                {
+                    if let Ok(websocket) = res.into_websocket().await {
+                        println!("got websocket");
+                        let (tx, mut rx) = websocket.split();
 
-                            {
-                                //set up sender
-                                let mut g = ws_tx.lock().await;
-                                *g = Some(tx);
-                            }
+                        {
+                            //set up sender
+                            let mut g = ws_tx.lock().await;
+                            *g = Some(tx);
+                        }
 
-                            while let Ok(message) = rx.try_next().await {
-                                if let Some(message) = message {
-                                    match message {
-                                        Message::Text(text) => {
-                                            println!("received: {text}")
-                                        }
-                                        Message::Binary(vec) => {
-                                            match rosc::decoder::decode_udp(vec.as_slice()) {
-                                                Ok((_, OscPacket::Message(m))) => {
-                                                    let mut g = state.lock().await;
-                                                    g.handle_osc(&m, &display).await;
+                        while let Ok(message) = rx.try_next().await {
+                            if let Some(message) = message {
+                                match message {
+                                    Message::Text(text) => {
+                                        let cmd: serde_json::Result<serde_json::Value> =
+                                            serde_json::from_str(text.as_str());
+                                        if let Ok(cmd) = cmd {
+                                            if let (Some(name), Some(data)) = (
+                                                cmd.get("COMMAND").unwrap().as_str(),
+                                                cmd.get("DATA"),
+                                            ) {
+                                                if let Some(path) = match name {
+                                                    /*
+                                                    "ATTRIBUTES_CHANGED" => data
+                                                        .get("FULL_PATH")
+                                                        .map(|p| p.as_str())
+                                                        .flatten(),
+                                                        */
+                                                    "PATH_ADDED" | "PATH_REMOVED" => data.as_str(),
+                                                    _ => None,
+                                                } {
+                                                    println!("queue instance update");
+                                                    //added or removed
+                                                    if inst_path_regex.is_match(path) {
+                                                        let mut g = inst_query.lock().await;
+                                                        *g = Some(Instant::now());
+                                                    }
                                                 }
-                                                _ => (),
                                             }
+                                        }
+                                    }
+                                    Message::Binary(vec) => {
+                                        match rosc::decoder::decode_udp(vec.as_slice()) {
+                                            Ok((_, OscPacket::Message(m))) => {
+                                                let mut g = state.lock().await;
+                                                g.handle_osc(&m, &display).await;
+                                            }
+                                            _ => (),
                                         }
                                     }
                                 }
@@ -475,7 +532,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         tokio::signal::ctrl_c().await.unwrap();
     };
     tokio::select! {
-        _ = display_future => (), _ = web_future => (), _ = signal_future => (), _ = process_midi => (), _ = disconnect_future => (),
+        _ = display_future => (), _ = web_future => (),  _ = inst_query_future => (),
+        _ = signal_future => (), _ = process_midi => (), _ = disconnect_future => (),
     };
     let _ = c.deactivate();
     Ok(())
