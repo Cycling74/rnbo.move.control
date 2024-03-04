@@ -243,6 +243,9 @@ impl StateController {
                                 }
                             }
                         }
+                        if self.selected_param != Some((0, index)) {
+                            self.select_param(Some((0, index)), &display).await;
+                        }
                     }
                     _ => (),
                 }
