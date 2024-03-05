@@ -422,7 +422,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         None
-    };
+    }
 
     let inst_query_future = async {
         loop {
@@ -432,8 +432,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 if let Some(v) = g.deref() {
                     if Instant::now() - *v > INST_QUERY_DELAY {
                         println!("got instance update");
-                        *g = None;
                         if let Some(inst) = get_instances().await {
+                            *g = None;
                             {
                                 let mut g = state.lock().await;
                                 g.set_state(inst);
@@ -447,12 +447,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let web_future = async {
         loop {
-            if let Some(inst) = get_instances().await {
-                {
-                    let mut g = state.lock().await;
-                    g.set_state(inst);
-                }
-
+            if let Ok(_res) = reqwest::Client::new()
+                .get("http://127.0.0.1:5678/rnbo")
+                .send()
+                .await
+            {
                 if let Ok(res) = reqwest::Client::new()
                     .get("http://127.0.0.1:5678")
                     .upgrade()
@@ -467,6 +466,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             //set up sender
                             let mut g = ws_tx.lock().await;
                             *g = Some(tx);
+                        }
+
+                        //do inst query
+                        {
+                            let mut g = inst_query.lock().await;
+                            *g = Some(Instant::now());
                         }
 
                         while let Ok(message) = rx.try_next().await {
@@ -490,7 +495,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                                     "PATH_ADDED" | "PATH_REMOVED" => data.as_str(),
                                                     _ => None,
                                                 } {
-                                                    println!("queue instance update");
                                                     //added or removed
                                                     if inst_path_regex.is_match(path) {
                                                         let mut g = inst_query.lock().await;
