@@ -28,11 +28,12 @@ PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.12/sysro
 ## Install
 
 ssh to your move as root
+
 ```
 ssh root@move
 cp /data/UserData/rnbo/rnbomovecontrol-init.d /etc/init.d/rnbomovecontrol
 pushd /etc/rc5.d/
-ln -s ../init.d/rnbomovecontrol S95rnbomovecontrol
+ln -s ../init.d/rnbomovecontrol S80rnbomovecontrol
 ```
 
 ## Notes
