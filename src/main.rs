@@ -48,6 +48,11 @@ impl Midi {
     pub fn new(v: &[u8]) -> Self {
         let mut bytes = [0; 3];
         bytes.copy_from_slice(v);
+
+        if v.len() != 3 {
+            println!("got midi that isn't 3 bytes: {:?}", v);
+        }
+
         Self {
             bytes,
             len: v.len(),
@@ -130,6 +135,7 @@ impl jack::ProcessHandler for Driver {
             if thru {
                 midi_out.write(&i).unwrap();
             } else {
+                //println!("not thru {:02x?}", i.bytes);
                 let _ = self.midi_in_queue.try_send(Midi::new(i.bytes));
             }
         }
@@ -286,7 +292,6 @@ impl StateController {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
 
-        //XXX some sort of delay needed?
         for m in Midi::power_sysex(cmd).into_iter() {
             let _ = self.midi_out_queue.send(m);
         }
@@ -317,24 +322,27 @@ impl StateController {
     }
 
     pub async fn handle_sysex(&mut self, display: &tokio::sync::Mutex<MoveDisplay>) {
-        //power button pressed
-        //f0 00 21 1d 01 01 3a 2a 64 00 f7
-
-        //power button held long
-        //f0 00 21 1d 01 01 3a 3a 64 00 f7
-
-        match self.sysex[..] {
-            [0x00, 0x21, 0x1d, 0x01, 0x01, 0x3a, 0x2a, 0x64, 0x00] => {
-                //println!("got short press");
-                self.handle_power_command(PowerCommand::ClearShortPress, display)
-                    .await;
+        match self.sysex[0..6] {
+            [0x00, 0x21, 0x1d, 0x01, 0x01, 0x3a] => {
+                //println!("power sysex {:02x?}", self.sysex);
+                if let Some(status) = self.sysex.get(6) {
+                    if status & 0b1000 != 0 {
+                        println!("got short");
+                        self.handle_power_command(PowerCommand::ClearShortPress, display)
+                            .await;
+                    }
+                    if status & 0b1_0000 != 0 {
+                        println!("got long");
+                        self.handle_power_command(PowerCommand::ClearLongPress, display)
+                            .await;
+                        self.handle_power_command(PowerCommand::PowerOff, display)
+                            .await;
+                    }
+                }
             }
-            [0x00, 0x21, 0x1d, 0x01, 0x01, 0x3a, 0x3a, 0x64, 0x00] => {
-                //println!("got long press");
-                self.handle_power_command(PowerCommand::PowerOff, display)
-                    .await;
+            _ => {
+                println!("unhandled sysex {:02x?}", self.sysex);
             }
-            _ => (),
         }
 
         self.sysex.clear();
