@@ -17,6 +17,7 @@ use {
     reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
     std::{
+        cmp::{Ordering, PartialEq, PartialOrd},
         collections::HashMap,
         error::Error,
         ops::{Deref, DerefMut},
@@ -40,18 +41,50 @@ struct DrawCommand {
 }
 struct Midi {
     bytes: [u8; 3],
+    len: usize,
 }
 
 impl Midi {
     pub fn new(v: &[u8]) -> Self {
         let mut bytes = [0; 3];
         bytes.copy_from_slice(v);
-        Self { bytes }
+        Self {
+            bytes,
+            len: v.len(),
+        }
     }
 
     pub fn bytes(&self) -> &[u8; 3] {
         &self.bytes
     }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    fn power_sysex(cmd: PowerCommand) -> [Self; 3] {
+        [
+            Self::new(&[0xF0, 0x00, 0x21]),
+            Self::new(&[0x1D, 0x01, 0x01]),
+            Self::new(&[0x39, cmd as u8, 0xF7]),
+        ]
+    }
+}
+
+#[repr(u8)]
+enum PowerCommand {
+    ///Power off the device immediately; `shutdown` should be sent before. if shutdown has not been sent, powering off is delayed for 5 seconds.
+    PowerOff = 1,
+    /// Reset the power button state of a short press
+    ClearShortPress = 2,
+    /// Request a power state update via system MIDI event
+    RequestStateUpdate = 3,
+    /// Power off the device and auto power on after 1s
+    Reboot = 4,
+    /// Reset the power button state of a long press
+    ClearLongPress = 5,
+    /// Initiate XMOS shutdown and animation; `powerOff` required after this. If `powerOff` is not sent, the device is powered off after 30 seconds. `powerOff` will be called by MoveXmosPower as part of the operating systems shutdown sequence.
+    Shutdown = 6,
 }
 
 struct Driver {
@@ -81,24 +114,31 @@ impl jack::ProcessHandler for Driver {
         for i in midi_in {
             //only send pad buttons and step buttons thru
             let thru = if i.bytes.len() == 3 {
-                let thru = match i.bytes[0] {
+                match i.bytes[0] {
                     0x90 | 0x80 => match i.bytes[1] {
                         //pad butttons, step buttons
                         68..=99 | 16..=31 => true,
                         _ => false,
                     },
+                    0xD0 => true,
                     _ => false,
-                };
-                if !thru {
-                    let _ = self.midi_in_queue.try_send(Midi::new(i.bytes));
                 }
-                thru
             } else {
                 false
             };
             if thru {
                 midi_out.write(&i).unwrap();
+            } else {
+                let _ = self.midi_in_queue.try_send(Midi::new(i.bytes));
             }
+        }
+
+        for i in self.midi_out_queue.try_iter() {
+            let m = RawMidi {
+                time: 0,
+                bytes: &i.bytes,
+            };
+            midi_out.write(&m).unwrap();
         }
 
         Control::Continue
@@ -139,13 +179,44 @@ impl jack::NotificationHandler for ConnectionControl {
     }
 }
 
+#[derive(PartialEq, Debug)]
+struct ParamNormUpdate {
+    time: std::time::Instant,
+    inst: usize,
+    index: usize,
+    val: f64,
+}
+
+impl PartialOrd for ParamNormUpdate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        (self.time, self.inst, self.index, self.val).partial_cmp(&(
+            other.time,
+            other.inst,
+            other.index,
+            other.val,
+        ))
+    }
+}
+
 struct StateController {
     pub instances: HashMap<usize, PatcherInst>,
     pub params: HashMap<String, usize>,
     pub selected_param: Option<(usize, usize)>,
+    sysex: Vec<u8>,
+    midi_out_queue: sync_mpsc::SyncSender<Midi>,
 }
 
 impl StateController {
+    pub fn new(midi_out_queue: sync_mpsc::SyncSender<Midi>) -> Self {
+        Self {
+            midi_out_queue,
+            instances: HashMap::new(),
+            params: HashMap::new(),
+            selected_param: None,
+            sysex: Vec::new(),
+        }
+    }
+
     pub fn set_state(&mut self, instances: HashMap<usize, PatcherInst>) {
         let mut params: HashMap<String, usize> = HashMap::new();
         for (index, v) in instances.iter() {
@@ -213,6 +284,36 @@ impl StateController {
         }
     }
 
+    pub fn handle_sysex(&mut self) {
+        //power button pressed
+        //f0 00 21 1d 01 01 3a 2a 64 00 f7
+
+        //power button held long
+        //f0 00 21 1d 01 01 3a 3a 64 00 f7
+
+        let mut cmd = None;
+
+        match self.sysex[..] {
+            [0x00, 0x21, 0x1d, 0x01, 0x01, 0x3a, 0x2a, 0x64, 0x00] => {
+                //println!("got short press");
+                cmd = Some(PowerCommand::ClearShortPress);
+            }
+            [0x00, 0x21, 0x1d, 0x01, 0x01, 0x3a, 0x3a, 0x64, 0x00] => {
+                //println!("got long press");
+                cmd = Some(PowerCommand::PowerOff);
+            }
+            _ => (),
+        }
+
+        if let Some(cmd) = cmd {
+            for m in Midi::power_sysex(cmd).into_iter() {
+                let _ = self.midi_out_queue.send(m);
+            }
+        }
+
+        self.sysex.clear();
+    }
+
     pub async fn handle_midi(
         &mut self,
         bytes: &[u8; 3],
@@ -221,6 +322,7 @@ impl StateController {
     ) {
         match bytes[0] {
             0x90 => {
+                self.sysex.clear();
                 //param select
                 if bytes[1] < 8 {
                     //select!
@@ -229,6 +331,7 @@ impl StateController {
                 }
             }
             0xB0 => {
+                self.sysex.clear();
                 match bytes[1] {
                     //param encoders
                     index @ 71..=78 => {
@@ -253,7 +356,30 @@ impl StateController {
                     _ => (),
                 }
             }
-            _ => (),
+            0xF0 => {
+                self.sysex.push(bytes[1]);
+                self.sysex.push(bytes[2]);
+            }
+            0xF7 => {
+                self.handle_sysex();
+            }
+            _ => {
+                if bytes[0] & 0x80 != 0 {
+                    self.sysex.clear();
+                } else if self.sysex.len() > 0 {
+                    //active sysex
+                    if bytes[1] == 0xF7 {
+                        self.sysex.push(bytes[0]);
+                        self.handle_sysex();
+                    } else if bytes[2] == 0xF7 {
+                        self.sysex.push(bytes[0]);
+                        self.sysex.push(bytes[1]);
+                        self.handle_sysex();
+                    } else {
+                        self.sysex.extend_from_slice(bytes.as_slice());
+                    }
+                }
+            }
         }
     }
 
@@ -276,23 +402,9 @@ impl StateController {
     }
 }
 
-impl Default for StateController {
-    fn default() -> Self {
-        Self {
-            instances: HashMap::new(),
-            params: HashMap::new(),
-            selected_param: None,
-        }
-    }
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let name = "move-control";
-    let (c, _status) = Client::new(name, ClientOptions::empty()).expect("error creating client");
-
+async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
     let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
-    let (mut midi_out_tx, midi_out_rx) = sync_mpsc::sync_channel(1024);
+    let (midi_out_tx, midi_out_rx) = sync_mpsc::sync_channel(1024);
     let (midi_in_tx, mut midi_in_rx) = async_mpsc::channel(1024);
     let (disconnect_tx, mut disconnect_rx) = async_mpsc::channel(128);
 
@@ -397,7 +509,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
-        std::sync::Arc::new(tokio::sync::Mutex::new(StateController::default()));
+        std::sync::Arc::new(tokio::sync::Mutex::new(StateController::new(midi_out_tx)));
     let ws_tx: tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>> =
         tokio::sync::Mutex::new(None);
 
@@ -540,5 +652,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
         _ = signal_future => (), _ = process_midi => (), _ = disconnect_future => (),
     };
     let _ = c.deactivate();
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let name = "move-control";
+    let pollms = 500;
+
+    //wait until jack exists
+    loop {
+        if let Ok((c, _status)) = Client::new(name, ClientOptions::empty()) {
+            let res = with_client(c).await;
+            match res {
+                Ok(()) => break,
+                Err(e) => {
+                    println!("error {:?}", e);
+                    //add a little extra time if there is an error
+                    tokio::time::sleep(Duration::from_millis(pollms)).await;
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(pollms)).await;
+    }
     Ok(())
 }
