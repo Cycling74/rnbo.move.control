@@ -71,6 +71,7 @@ impl Midi {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum PowerCommand {
     ///Power off the device immediately; `shutdown` should be sent before. if shutdown has not been sent, powering off is delayed for 5 seconds.
@@ -260,6 +261,37 @@ impl StateController {
         }
     }
 
+    pub async fn handle_power_command(
+        &self,
+        cmd: PowerCommand,
+        display: &tokio::sync::Mutex<MoveDisplay>,
+    ) {
+        if cmd == PowerCommand::PowerOff {
+            {
+                let mut display = display.lock().await;
+                let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+                display.clear(BinaryColor::Off).unwrap();
+                let size = display.size();
+
+                Text::with_alignment(
+                    "Powering Down",
+                    Point::new(size.width as i32 / 2, size.height as i32 / 2),
+                    style,
+                    Alignment::Center,
+                )
+                .draw(display.deref_mut())
+                .unwrap();
+            }
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+
+        //XXX some sort of delay needed?
+        for m in Midi::power_sysex(cmd).into_iter() {
+            let _ = self.midi_out_queue.send(m);
+        }
+    }
+
     pub async fn handle_osc(
         &mut self,
         msg: &OscMessage,
@@ -284,31 +316,25 @@ impl StateController {
         }
     }
 
-    pub fn handle_sysex(&mut self) {
+    pub async fn handle_sysex(&mut self, display: &tokio::sync::Mutex<MoveDisplay>) {
         //power button pressed
         //f0 00 21 1d 01 01 3a 2a 64 00 f7
 
         //power button held long
         //f0 00 21 1d 01 01 3a 3a 64 00 f7
 
-        let mut cmd = None;
-
         match self.sysex[..] {
             [0x00, 0x21, 0x1d, 0x01, 0x01, 0x3a, 0x2a, 0x64, 0x00] => {
                 //println!("got short press");
-                cmd = Some(PowerCommand::ClearShortPress);
+                self.handle_power_command(PowerCommand::ClearShortPress, display)
+                    .await;
             }
             [0x00, 0x21, 0x1d, 0x01, 0x01, 0x3a, 0x3a, 0x64, 0x00] => {
                 //println!("got long press");
-                cmd = Some(PowerCommand::PowerOff);
+                self.handle_power_command(PowerCommand::PowerOff, display)
+                    .await;
             }
             _ => (),
-        }
-
-        if let Some(cmd) = cmd {
-            for m in Midi::power_sysex(cmd).into_iter() {
-                let _ = self.midi_out_queue.send(m);
-            }
         }
 
         self.sysex.clear();
@@ -361,7 +387,7 @@ impl StateController {
                 self.sysex.push(bytes[2]);
             }
             0xF7 => {
-                self.handle_sysex();
+                self.handle_sysex(display).await;
             }
             _ => {
                 if bytes[0] & 0x80 != 0 {
@@ -370,11 +396,11 @@ impl StateController {
                     //active sysex
                     if bytes[1] == 0xF7 {
                         self.sysex.push(bytes[0]);
-                        self.handle_sysex();
+                        self.handle_sysex(display).await;
                     } else if bytes[2] == 0xF7 {
                         self.sysex.push(bytes[0]);
                         self.sysex.push(bytes[1]);
-                        self.handle_sysex();
+                        self.handle_sysex(display).await;
                     } else {
                         self.sysex.extend_from_slice(bytes.as_slice());
                     }
