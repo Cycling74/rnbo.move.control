@@ -63,6 +63,8 @@
 }
 */
 
+use std::cmp::{Ordering, PartialEq, PartialOrd};
+
 #[derive(Debug)]
 pub enum ParamDetail {
     Float { val: f64, min: f64, max: f64 },
@@ -77,6 +79,25 @@ pub struct Param {
     name: String,
     detail: ParamDetail,
     norm: f64,
+}
+
+#[derive(PartialEq, Debug)]
+pub struct ParamNormUpdate {
+    time: std::time::Instant,
+    inst: usize,
+    index: usize,
+    val: f64,
+}
+
+impl PartialOrd for ParamNormUpdate {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        (self.time, self.inst, self.index, self.val).partial_cmp(&(
+            other.time,
+            other.inst,
+            other.index,
+            other.val,
+        ))
+    }
 }
 
 impl Param {

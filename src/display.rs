@@ -10,6 +10,10 @@ const DISPLAY_HEIGHT_M1: u32 = 64 - 1;
 
 pub const BUFFER_LEN: usize = HEADER_LEN + DISPLAY_BYTES;
 
+pub struct DrawCommand {
+    pub data: [u8; BUFFER_LEN],
+}
+
 pub struct MoveDisplay {
     framebuffer: [u8; BUFFER_LEN],
     dirty: bool,
