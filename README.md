@@ -32,6 +32,7 @@ ssh to your move as root
 ```
 ssh root@move
 cp /data/UserData/rnbo/rnbomovecontrol-init.d /etc/init.d/rnbomovecontrol
+update-rc.d rnbomovecontrol enable
 pushd /etc/rc5.d/
 ln -s ../init.d/rnbomovecontrol S80rnbomovecontrol
 ```
