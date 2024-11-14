@@ -47,10 +47,6 @@ fn power_sysex(cmd: PowerCommand) -> [Midi; 3] {
     ]
 }
 
-struct Context {
-    display: Rc<Mutex<MoveDisplay>>,
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Button {
     JogWheel,
@@ -75,8 +71,8 @@ smlang::statemachine! {
         *Init + Btn(Btn(Button::Back, true)) = Init, //dummy state
         PromptPower + Btn(Btn(Button::JogWheel, true)) = PowerOff,
         PromptPower + Btn(Btn(Button::Back, true)) = Init,
-        _ + Btn(Btn(Button::PowerShort, _)) = PromptPower,
-        _ + Btn(Btn(Button::PowerLong, _)) = PowerOff,
+        _ + Btn(Btn(Button::PowerShort, _)) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
+        _ + Btn(Btn(Button::PowerLong, _)) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
     }
 }
 
@@ -85,8 +81,20 @@ pub struct StateController {
     pub params: HashMap<String, usize>,
     pub selected_param: Option<(usize, usize)>,
     sysex: Vec<u8>,
-    midi_out_queue: sync_mpsc::SyncSender<Midi>,
     statemachine: StateMachine,
+}
+
+struct Context {
+    display: Rc<Mutex<MoveDisplay>>,
+    midi_out_queue: sync_mpsc::SyncSender<Midi>,
+}
+
+impl Context {
+    fn send_power_cmd(&mut self, cmd: PowerCommand) {
+        for m in power_sysex(cmd).into_iter() {
+            let _ = self.midi_out_queue.send(m);
+        }
+    }
 }
 
 impl StateController {
@@ -96,9 +104,9 @@ impl StateController {
     ) -> Self {
         let context = Context {
             display: display.clone(),
+            midi_out_queue,
         };
         Self {
-            midi_out_queue,
             instances: HashMap::new(),
             params: HashMap::new(),
             selected_param: None,
@@ -143,32 +151,6 @@ impl StateController {
                     .unwrap();
                 }
             }
-        }
-    }
-
-    async fn handle_power_command(&self, cmd: PowerCommand) {
-        if cmd == PowerCommand::PowerOff {
-            {
-                let mut display = self.locked_display().await;
-                let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-                display.clear(BinaryColor::Off).unwrap();
-                let size = display.size();
-
-                Text::with_alignment(
-                    "Powering Down",
-                    Point::new(size.width as i32 / 2, size.height as i32 / 2),
-                    style,
-                    Alignment::Center,
-                )
-                .draw(display.deref_mut())
-                .unwrap();
-            }
-
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-
-        for m in power_sysex(cmd).into_iter() {
-            let _ = self.midi_out_queue.send(m);
         }
     }
 
@@ -299,35 +281,34 @@ impl StateController {
         None
     }
 
+    async fn display_centered(&mut self, text: &str) {
+        let mut display = self.locked_display().await;
+        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+        display.clear(BinaryColor::Off).unwrap();
+        let size = display.size();
+
+        Text::with_alignment(
+            text,
+            Point::new(size.width as i32 / 2, size.height as i32 / 2),
+            style,
+            Alignment::Center,
+        )
+        .draw(display.deref_mut())
+        .unwrap();
+    }
+
     async fn handle_event(&mut self, e: Events) {
         if let Some(ns) = self.statemachine.process_event(e) {
             //got new state
             match ns {
                 States::PowerOff => {
-                    for m in power_sysex(PowerCommand::ClearLongPress).into_iter() {
-                        let _ = self.midi_out_queue.send(m);
-                    }
-                    {
-                        let mut display = self.locked_display().await;
-                        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-                        display.clear(BinaryColor::Off).unwrap();
-                        let size = display.size();
-
-                        Text::with_alignment(
-                            "Powering Down",
-                            Point::new(size.width as i32 / 2, size.height as i32 / 2),
-                            style,
-                            Alignment::Center,
-                        )
-                        .draw(display.deref_mut())
-                        .unwrap();
-
-                        //leave some time for it do draw
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                    }
-                    for m in power_sysex(PowerCommand::PowerOff).into_iter() {
-                        let _ = self.midi_out_queue.send(m);
-                    }
+                    self.display_centered("Powering Down").await;
+                    //leave some time for it do draw
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    self.context_mut().send_power_cmd(PowerCommand::PowerOff);
+                }
+                States::PromptPower => {
+                    self.display_centered("Power Down?").await;
                 }
                 _ => (),
             }
@@ -335,6 +316,18 @@ impl StateController {
     }
 
     async fn locked_display(&self) -> MutexGuard<MoveDisplay> {
-        self.statemachine.context().display.lock().await
+        self.context().display.lock().await
+    }
+
+    fn send_midi(&mut self, midi: Midi) {
+        let _ = self.context_mut().midi_out_queue.send(midi);
+    }
+
+    fn context(&self) -> &Context {
+        self.statemachine.context()
+    }
+
+    fn context_mut(&mut self) -> &mut Context {
+        self.statemachine.context_mut()
     }
 }
