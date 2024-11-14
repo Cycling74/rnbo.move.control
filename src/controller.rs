@@ -14,10 +14,12 @@ use {
         collections::HashMap,
         error::Error,
         ops::{Deref, DerefMut},
+        rc::Rc,
         sync::mpsc as sync_mpsc,
         thread,
         time::{Duration, Instant},
     },
+    tokio::sync::{Mutex, MutexGuard},
 };
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -45,22 +47,63 @@ fn power_sysex(cmd: PowerCommand) -> [Midi; 3] {
     ]
 }
 
+struct Context {
+    display: Rc<Mutex<MoveDisplay>>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Button {
+    JogWheel,
+    Back,
+    Shift,
+    PowerLong,
+    PowerShort,
+    Menu,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct Btn(Button, bool);
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum Events {
+    Btn(Btn),
+}
+
+smlang::statemachine! {
+    states_attr: #[derive(Clone)],
+    transitions: {
+        *Init + Btn(Btn(Button::Back, true)) = Init, //dummy state
+        PromptPower + Btn(Btn(Button::JogWheel, true)) = PowerOff,
+        PromptPower + Btn(Btn(Button::Back, true)) = Init,
+        _ + Btn(Btn(Button::PowerShort, _)) = PromptPower,
+        _ + Btn(Btn(Button::PowerLong, _)) = PowerOff,
+    }
+}
+
 pub struct StateController {
     pub instances: HashMap<usize, PatcherInst>,
     pub params: HashMap<String, usize>,
     pub selected_param: Option<(usize, usize)>,
     sysex: Vec<u8>,
     midi_out_queue: sync_mpsc::SyncSender<Midi>,
+    statemachine: StateMachine,
 }
 
 impl StateController {
-    pub fn new(midi_out_queue: sync_mpsc::SyncSender<Midi>) -> Self {
+    pub fn new(
+        midi_out_queue: sync_mpsc::SyncSender<Midi>,
+        display: &mut Rc<Mutex<MoveDisplay>>,
+    ) -> Self {
+        let context = Context {
+            display: display.clone(),
+        };
         Self {
             midi_out_queue,
             instances: HashMap::new(),
             params: HashMap::new(),
             selected_param: None,
             sysex: Vec::new(),
+            statemachine: StateMachine::new(context),
         }
     }
 
@@ -75,17 +118,13 @@ impl StateController {
         self.params = params;
     }
 
-    pub async fn select_param(
-        &mut self,
-        v: Option<(usize, usize)>,
-        display: &tokio::sync::Mutex<MoveDisplay>,
-    ) {
+    pub async fn select_param(&mut self, v: Option<(usize, usize)>) {
         self.selected_param = v;
-        self.render_param(display).await;
+        self.render_param().await;
     }
 
-    pub async fn render_param(&self, display: &tokio::sync::Mutex<MoveDisplay>) {
-        let mut display = display.lock().await;
+    pub async fn render_param(&mut self) {
+        let mut display = self.locked_display().await;
         let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
         display.clear(BinaryColor::Off).unwrap();
         let size = display.size();
@@ -107,14 +146,10 @@ impl StateController {
         }
     }
 
-    pub async fn handle_power_command(
-        &self,
-        cmd: PowerCommand,
-        display: &tokio::sync::Mutex<MoveDisplay>,
-    ) {
+    async fn handle_power_command(&self, cmd: PowerCommand) {
         if cmd == PowerCommand::PowerOff {
             {
-                let mut display = display.lock().await;
+                let mut display = self.locked_display().await;
                 let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
                 display.clear(BinaryColor::Off).unwrap();
                 let size = display.size();
@@ -137,11 +172,7 @@ impl StateController {
         }
     }
 
-    pub async fn handle_osc(
-        &mut self,
-        msg: &OscMessage,
-        display: &tokio::sync::Mutex<MoveDisplay>,
-    ) {
+    pub async fn handle_osc(&mut self, msg: &OscMessage) {
         if msg.args.len() == 1 {
             if let Some(index) = self.params.get(&msg.addr) {
                 if let Some(inst) = self.instances.get_mut(&index) {
@@ -153,7 +184,7 @@ impl StateController {
                         _ => None,
                     } {
                         if Some((*index, pindex)) == self.selected_param {
-                            self.render_param(display).await;
+                            self.render_param().await;
                         }
                     }
                 }
@@ -161,37 +192,31 @@ impl StateController {
         }
     }
 
-    pub async fn handle_sysex(&mut self, display: &tokio::sync::Mutex<MoveDisplay>) {
-        match self.sysex[0..6] {
+    pub async fn handle_sysex(&mut self) {
+        let sysex: Vec<u8> = std::mem::take(&mut self.sysex);
+        match sysex[0..6] {
             [0x00, 0x21, 0x1d, 0x01, 0x01, 0x3a] => {
-                //println!("power sysex {:02x?}", self.sysex);
-                if let Some(status) = self.sysex.get(6) {
+                //println!("power sysex {:02x?}", sysex);
+                if let Some(status) = sysex.get(6) {
                     if status & 0b1000 != 0 {
-                        println!("got short");
-                        self.handle_power_command(PowerCommand::ClearShortPress, display)
+                        self.handle_event(Events::Btn(Btn(Button::PowerShort, true)))
                             .await;
                     }
                     if status & 0b1_0000 != 0 {
-                        println!("got long");
-                        self.handle_power_command(PowerCommand::ClearLongPress, display)
-                            .await;
-                        self.handle_power_command(PowerCommand::PowerOff, display)
+                        self.handle_event(Events::Btn(Btn(Button::PowerLong, true)))
                             .await;
                     }
                 }
             }
             _ => {
-                println!("unhandled sysex {:02x?}", self.sysex);
+                println!("unhandled sysex {:02x?}", sysex);
             }
         }
-
-        self.sysex.clear();
     }
 
     pub async fn handle_midi(
         &mut self,
         bytes: &[u8; 3],
-        display: &tokio::sync::Mutex<MoveDisplay>,
         ws_tx: &tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>>,
     ) {
         match bytes[0] {
@@ -200,8 +225,7 @@ impl StateController {
                 //param select
                 if bytes[1] < 8 {
                     //select!
-                    self.select_param(Some((0, bytes[1] as usize)), &display)
-                        .await;
+                    self.select_param(Some((0, bytes[1] as usize))).await;
                 }
             }
             0xB0 => {
@@ -224,7 +248,7 @@ impl StateController {
                             }
                         }
                         if self.selected_param != Some((0, index)) {
-                            self.select_param(Some((0, index)), &display).await;
+                            self.select_param(Some((0, index))).await;
                         }
                     }
                     _ => (),
@@ -235,7 +259,7 @@ impl StateController {
                 self.sysex.push(bytes[2]);
             }
             0xF7 => {
-                self.handle_sysex(display).await;
+                self.handle_sysex().await;
             }
             _ => {
                 if bytes[0] & 0x80 != 0 {
@@ -244,11 +268,11 @@ impl StateController {
                     //active sysex
                     if bytes[1] == 0xF7 {
                         self.sysex.push(bytes[0]);
-                        self.handle_sysex(display).await;
+                        self.handle_sysex().await;
                     } else if bytes[2] == 0xF7 {
                         self.sysex.push(bytes[0]);
                         self.sysex.push(bytes[1]);
-                        self.handle_sysex(display).await;
+                        self.handle_sysex().await;
                     } else {
                         self.sysex.extend_from_slice(bytes.as_slice());
                     }
@@ -273,5 +297,44 @@ impl StateController {
             }
         }
         None
+    }
+
+    async fn handle_event(&mut self, e: Events) {
+        if let Some(ns) = self.statemachine.process_event(e) {
+            //got new state
+            match ns {
+                States::PowerOff => {
+                    for m in power_sysex(PowerCommand::ClearLongPress).into_iter() {
+                        let _ = self.midi_out_queue.send(m);
+                    }
+                    {
+                        let mut display = self.locked_display().await;
+                        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+                        display.clear(BinaryColor::Off).unwrap();
+                        let size = display.size();
+
+                        Text::with_alignment(
+                            "Powering Down",
+                            Point::new(size.width as i32 / 2, size.height as i32 / 2),
+                            style,
+                            Alignment::Center,
+                        )
+                        .draw(display.deref_mut())
+                        .unwrap();
+
+                        //leave some time for it do draw
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    for m in power_sysex(PowerCommand::PowerOff).into_iter() {
+                        let _ = self.midi_out_queue.send(m);
+                    }
+                }
+                _ => (),
+            }
+        }
+    }
+
+    async fn locked_display(&self) -> MutexGuard<MoveDisplay> {
+        self.statemachine.context().display.lock().await
     }
 }

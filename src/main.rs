@@ -25,6 +25,7 @@ use {
         collections::HashMap,
         error::Error,
         ops::{Deref, DerefMut},
+        rc::Rc,
         sync::mpsc as sync_mpsc,
         thread,
         time::{Duration, Instant},
@@ -229,7 +230,14 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
             .unwrap();
     }
 
-    let display = tokio::sync::Mutex::new(display);
+    let mut display = Rc::new(tokio::sync::Mutex::new(display));
+
+    let state: std::sync::Arc<tokio::sync::Mutex<StateController>> = std::sync::Arc::new(
+        tokio::sync::Mutex::new(StateController::new(midi_out_tx, &mut display)),
+    );
+    let ws_tx: tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>> =
+        tokio::sync::Mutex::new(None);
+
     let display_future = async {
         loop {
             //frame rate
@@ -241,15 +249,10 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
-        std::sync::Arc::new(tokio::sync::Mutex::new(StateController::new(midi_out_tx)));
-    let ws_tx: tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>> =
-        tokio::sync::Mutex::new(None);
-
     let process_midi = async {
         while let Some(midi) = midi_in_rx.recv().await {
             let mut c = state.lock().await;
-            c.handle_midi(midi.bytes(), &display, &ws_tx).await;
+            c.handle_midi(midi.bytes(), &ws_tx).await;
         }
     };
 
@@ -353,7 +356,7 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
                                         match rosc::decoder::decode_udp(vec.as_slice()) {
                                             Ok((_, OscPacket::Message(m))) => {
                                                 let mut g = state.lock().await;
-                                                g.handle_osc(&m, &display).await;
+                                                g.handle_osc(&m).await;
                                             }
                                             _ => (),
                                         }
