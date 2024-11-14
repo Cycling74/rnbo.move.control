@@ -59,6 +59,7 @@ enum Button {
     PowerLong,
     PowerShort,
     Menu,
+    Play,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -74,8 +75,8 @@ smlang::statemachine! {
     transitions: {
         *Init + Btn(Btn(Button::Menu, true)) = Menu,
         PromptPower + Btn(Btn(Button::JogWheel, true)) = PowerOff,
-        PromptPower + Btn(Btn(Button::Back, true)) / ctx.light_button(BACK_MIDI, 0); = Menu,
-        _ + Btn(Btn(Button::PowerShort, _)) / { ctx.light_button(BACK_MIDI, 127); ctx.send_power_cmd(PowerCommand::ClearShortPress); } = PromptPower,
+        PromptPower + Btn(Btn(Button::Back, true))  = Menu,
+        _ + Btn(Btn(Button::PowerShort, _)) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
         _ + Btn(Btn(Button::PowerLong, _)) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
     }
 }
@@ -110,10 +111,12 @@ impl StateController {
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
         display: &mut Rc<Mutex<MoveDisplay>>,
     ) -> Self {
-        let context = Context {
+        let mut context = Context {
             display: display.clone(),
             midi_out_queue,
         };
+        context.light_button(MENU_MIDI, 127);
+
         Self {
             instances: HashMap::new(),
             params: HashMap::new(),
@@ -235,7 +238,8 @@ impl StateController {
                     }
                     //hamburger
                     MENU_MIDI => {
-                        //todo
+                        self.handle_event(Events::Btn(Btn(Button::Menu, bytes[2] != 0)))
+                            .await;
                     }
                     //menu back button
                     BACK_MIDI => {
@@ -244,7 +248,8 @@ impl StateController {
                     }
                     //play button
                     PLAY_MIDI => {
-                        //todo
+                        self.handle_event(Events::Btn(Btn(Button::Play, bytes[2] != 0)))
+                            .await;
                     }
                     0xf4 => {
                         //volume jog
@@ -340,14 +345,20 @@ impl StateController {
             match ns {
                 States::PowerOff => {
                     self.display_centered("Powering Down").await;
+                    self.context_mut().light_button(MENU_MIDI, 0);
+                    self.context_mut().light_button(BACK_MIDI, 0);
                     //leave some time for it do draw
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     self.context_mut().send_power_cmd(PowerCommand::PowerOff);
                 }
                 States::PromptPower => {
+                    self.context_mut().light_button(MENU_MIDI, 0);
+                    self.context_mut().light_button(BACK_MIDI, 127);
                     self.display_centered("Press wheel to\nshut down").await;
                 }
                 States::Menu => {
+                    self.context_mut().light_button(MENU_MIDI, 0);
+                    self.context_mut().light_button(BACK_MIDI, 0);
                     self.display_centered("Menu TODO").await;
                 }
                 _ => (),
