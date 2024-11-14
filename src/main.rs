@@ -31,6 +31,7 @@ use {
         time::{Duration, Instant},
     },
     tokio::sync::mpsc as async_mpsc,
+    serde::{Deserialize, Serialize}
 };
 
 //NOTE channel type should match the reciever: https://users.rust-lang.org/t/communicating-between-sync-and-async-code/41005/3
@@ -41,7 +42,7 @@ mod midi;
 mod param;
 mod patcher;
 
-const INST_QUERY_DELAY: Duration = Duration::from_millis(20);
+const HTTP_QUERY_DELAY: Duration = Duration::from_millis(20);
 
 struct Driver {
     display: Port<MidiOut>,
@@ -235,8 +236,6 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
     let state: std::sync::Arc<tokio::sync::Mutex<StateController>> = std::sync::Arc::new(
         tokio::sync::Mutex::new(StateController::new(midi_out_tx, &mut display)),
     );
-    let ws_tx: tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>> =
-        tokio::sync::Mutex::new(None);
 
     let display_future = async {
         loop {
@@ -252,12 +251,16 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
     let process_midi = async {
         while let Some(midi) = midi_in_rx.recv().await {
             let mut c = state.lock().await;
-            c.handle_midi(midi.bytes(), &ws_tx).await;
+            c.handle_midi(midi.bytes()).await;
         }
     };
 
     let inst_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
+    let sets_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
+
     let inst_path_regex = Regex::new(r"^/rnbo/inst/\d+$").expect("to create instance regex");
+
+    //http://c74rpi.local:5678
 
     async fn get_instances() -> Option<HashMap<usize, PatcherInst>> {
         if let Ok(res) = reqwest::Client::new()
@@ -272,26 +275,63 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
         None
     }
 
+    async fn get_sets() -> Option<Vec<String>> {
+        if let Ok(res) = reqwest::Client::new()
+            .get("http://127.0.0.1:5678/rnbo/inst/control/sets/load?RANGE")
+            .send()
+            .await
+        {
+            let res: Result<SetRange, _> = res.json().await;
+            if let Ok(res) = res {
+                return Some(res.range[0].vals.clone())
+            }
+        }
+        None
+    }
+
     let inst_query_future = async {
         loop {
-            tokio::time::sleep(INST_QUERY_DELAY).await;
+            tokio::time::sleep(HTTP_QUERY_DELAY).await;
+            {
+                let mut g = sets_query.lock().await;
+                if let Some(v) = g.deref() {
+                    if Instant::now() - *v > HTTP_QUERY_DELAY {
+                        if let Some(sets) = get_sets().await {
+                            *g = None;
+                            let mut g = state.lock().await;
+                            g.set_set_names(&sets);
+                        }
+                    }
+                }
+            }
+
             {
                 let mut g = inst_query.lock().await;
                 if let Some(v) = g.deref() {
-                    if Instant::now() - *v > INST_QUERY_DELAY {
-                        println!("got instance update");
+                    if Instant::now() - *v > HTTP_QUERY_DELAY {
+                        //println!("got instance update");
                         if let Some(inst) = get_instances().await {
                             *g = None;
-                            {
-                                let mut g = state.lock().await;
-                                g.set_state(inst);
-                            }
+                            let mut g = state.lock().await;
+                            g.set_state(inst);
                         }
                     }
                 }
             }
         }
     };
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct SetRangeItem {
+        #[serde(rename = "VALS")]
+        vals: Vec<String>
+    }
+
+    #[derive(Serialize, Deserialize, Debug)]
+    struct SetRange {
+        #[serde(rename = "RANGE")]
+        range: [SetRangeItem; 1]
+    }
 
     let web_future = async {
         loop {
@@ -312,13 +352,19 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
 
                         {
                             //set up sender
-                            let mut g = ws_tx.lock().await;
-                            *g = Some(tx);
+                            let mut g = state.lock().await;
+                            g.set_ws(tx);
                         }
 
                         //do inst query
                         {
                             let mut g = inst_query.lock().await;
+                            *g = Some(Instant::now());
+                        }
+
+                        //do sets query
+                        {
+                            let mut g = sets_query.lock().await;
                             *g = Some(Instant::now());
                         }
 
@@ -334,12 +380,32 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
                                                 cmd.get("DATA"),
                                             ) {
                                                 if let Some(path) = match name {
-                                                    /*
-                                                    "ATTRIBUTES_CHANGED" => data
+                                                    "ATTRIBUTES_CHANGED" => {
+                                                        match data
+                                                            .get("FULL_PATH")
+                                                            .map(|p| p.as_str())
+                                                            .flatten()
+                                                        {
+                                                            Some(
+                                                                "/rnbo/inst/control/sets/load",
+                                                            ) => {
+                                                                let range: Result<SetRange, _> = serde_json::from_value(data.clone());
+                                                                if let Ok(range) = range {
+                                                                    let mut g = state.lock().await;
+                                                                    g.set_set_names(&range.range[0].vals);
+                                                                }
+                                                            }
+                                                            _ => (),
+                                                        }
+                                                        //println!("data {:?}", cmd);
+                                                        None
+                                                        /*
+                                                        data
                                                         .get("FULL_PATH")
                                                         .map(|p| p.as_str())
                                                         .flatten(),
                                                         */
+                                                    }
                                                     "PATH_ADDED" | "PATH_REMOVED" => data.as_str(),
                                                     _ => None,
                                                 } {

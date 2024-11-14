@@ -60,14 +60,22 @@ enum Button {
     PowerShort,
     Menu,
     Play,
+    Encoder(usize),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct Btn(Button, bool);
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct ParamUpdate {
+    instance: usize,
+    index: usize,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Events {
     Btn(Btn),
+    ParamUpdate(ParamUpdate),
 }
 
 smlang::statemachine! {
@@ -85,8 +93,10 @@ pub struct StateController {
     pub instances: HashMap<usize, PatcherInst>,
     pub params: HashMap<String, usize>,
     pub selected_param: Option<(usize, usize)>,
+    ws_tx: Option<SplitSink<WebSocket, Message>>,
     sysex: Vec<u8>,
     statemachine: StateMachine,
+    set_names: Vec<String>,
 }
 
 struct Context {
@@ -121,9 +131,15 @@ impl StateController {
             instances: HashMap::new(),
             params: HashMap::new(),
             selected_param: None,
+            ws_tx: None,
             sysex: Vec::new(),
             statemachine: StateMachine::new(context),
+            set_names: Vec::new(),
         }
+    }
+
+    pub fn set_ws(&mut self, ws: SplitSink<WebSocket, Message>) {
+        self.ws_tx = Some(ws);
     }
 
     pub fn set_state(&mut self, instances: HashMap<usize, PatcherInst>) {
@@ -135,6 +151,10 @@ impl StateController {
         }
         self.instances = instances;
         self.params = params;
+    }
+
+    pub fn set_set_names(&mut self, names: &Vec<String>) {
+        self.set_names = names.clone();
     }
 
     pub async fn select_param(&mut self, v: Option<(usize, usize)>) {
@@ -167,20 +187,24 @@ impl StateController {
 
     pub async fn handle_osc(&mut self, msg: &OscMessage) {
         if msg.args.len() == 1 {
-            if let Some(index) = self.params.get(&msg.addr) {
-                if let Some(inst) = self.instances.get_mut(&index) {
-                    if let Some(pindex) = match &msg.args[0] {
+            let mut update = None;
+            if let Some(instance) = self.params.get(&msg.addr) {
+                if let Some(inst) = self.instances.get_mut(&instance) {
+                    if let Some(index) = match &msg.args[0] {
                         OscType::Double(v) => inst.update_param_f64(&msg.addr, *v),
                         OscType::Float(v) => inst.update_param_f64(&msg.addr, *v as f64),
                         OscType::Int(v) => inst.update_param_f64(&msg.addr, *v as f64),
                         OscType::String(v) => inst.update_param_s(&msg.addr, v),
                         _ => None,
                     } {
-                        if Some((*index, pindex)) == self.selected_param {
-                            self.render_param().await;
-                        }
+                        update = Some((*instance, index));
                     }
                 }
+            }
+
+            if let Some((instance, index)) = update {
+                self.handle_event(Events::ParamUpdate(ParamUpdate { instance, index }))
+                    .await;
             }
         }
     }
@@ -207,11 +231,7 @@ impl StateController {
         }
     }
 
-    pub async fn handle_midi(
-        &mut self,
-        bytes: &[u8; 3],
-        ws_tx: &tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>>,
-    ) {
+    pub async fn handle_midi(&mut self, bytes: &[u8; 3]) {
         println!("got midi {:02x?}", bytes);
 
         match bytes[0] {
@@ -257,6 +277,13 @@ impl StateController {
 
                     //param encoders
                     index @ 71..=78 => {
+                        self.handle_event(Events::Btn(Btn(
+                            Button::Encoder((index - 71) as usize),
+                            bytes[2] != 0,
+                        )))
+                        .await;
+
+                        /*
                         let inst = 0;
                         let index = (index - 71) as usize;
                         let v = bytes[2];
@@ -274,6 +301,7 @@ impl StateController {
                         if self.selected_param != Some((0, index)) {
                             self.select_param(Some((0, index))).await;
                         }
+                        */
                     }
                     _ => (),
                 }
