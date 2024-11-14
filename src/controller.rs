@@ -22,6 +22,10 @@ use {
     tokio::sync::{Mutex, MutexGuard},
 };
 
+const MENU_MIDI: u8 = 0x32;
+const BACK_MIDI: u8 = 0x33;
+const PLAY_MIDI: u8 = 0x55;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum PowerCommand {
@@ -68,10 +72,10 @@ enum Events {
 smlang::statemachine! {
     states_attr: #[derive(Clone)],
     transitions: {
-        *Init + Btn(Btn(Button::Back, true)) = Init, //dummy state
+        *Init + Btn(Btn(Button::Menu, true)) = Menu,
         PromptPower + Btn(Btn(Button::JogWheel, true)) = PowerOff,
-        PromptPower + Btn(Btn(Button::Back, true)) = Init,
-        _ + Btn(Btn(Button::PowerShort, _)) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
+        PromptPower + Btn(Btn(Button::Back, true)) / ctx.light_button(BACK_MIDI, 0); = Menu,
+        _ + Btn(Btn(Button::PowerShort, _)) / { ctx.light_button(BACK_MIDI, 127); ctx.send_power_cmd(PowerCommand::ClearShortPress); } = PromptPower,
         _ + Btn(Btn(Button::PowerLong, _)) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
     }
 }
@@ -94,6 +98,10 @@ impl Context {
         for m in power_sysex(cmd).into_iter() {
             let _ = self.midi_out_queue.send(m);
         }
+    }
+
+    fn light_button(&mut self, btn: u8, val: u8) {
+        let _ = self.midi_out_queue.send(Midi::cc(btn, val, 0));
     }
 }
 
@@ -201,6 +209,8 @@ impl StateController {
         bytes: &[u8; 3],
         ws_tx: &tokio::sync::Mutex<Option<SplitSink<WebSocket, Message>>>,
     ) {
+        println!("got midi {:02x?}", bytes);
+
         match bytes[0] {
             0x90 => {
                 self.sysex.clear();
@@ -209,10 +219,37 @@ impl StateController {
                     //select!
                     self.select_param(Some((0, bytes[1] as usize))).await;
                 }
+                //volume 0x08
+                //jog 0x09
             }
             0xB0 => {
                 self.sysex.clear();
                 match bytes[1] {
+                    //jog wheel btn
+                    0x03 => {
+                        self.handle_event(Events::Btn(Btn(Button::JogWheel, bytes[2] != 0)))
+                            .await;
+                    }
+                    0x0e => {
+                        //jog wheel action
+                    }
+                    //hamburger
+                    MENU_MIDI => {
+                        //todo
+                    }
+                    //menu back button
+                    BACK_MIDI => {
+                        self.handle_event(Events::Btn(Btn(Button::Back, bytes[2] != 0)))
+                            .await;
+                    }
+                    //play button
+                    PLAY_MIDI => {
+                        //todo
+                    }
+                    0xf4 => {
+                        //volume jog
+                    }
+
                     //param encoders
                     index @ 71..=78 => {
                         let inst = 0;
@@ -308,7 +345,10 @@ impl StateController {
                     self.context_mut().send_power_cmd(PowerCommand::PowerOff);
                 }
                 States::PromptPower => {
-                    self.display_centered("Power Down?").await;
+                    self.display_centered("Press wheel to\nshut down").await;
+                }
+                States::Menu => {
+                    self.display_centered("Menu TODO").await;
                 }
                 _ => (),
             }
