@@ -19,3 +19,4 @@ rosc = "0.10.1"
 serde_json = "1.0.114"
 tokio = { version = "1.36.0", features = ["full"] }
 smlang = { git = "https://github.com/x37v/smlang-rs", branch = "main" }
+serde = { version = "1.0.215", features = ["std", "derive"] }
