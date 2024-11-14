@@ -18,6 +18,18 @@ impl Midi {
         }
     }
 
+    pub fn cc(num: u8, val: u8, chan: u8) -> Self {
+        Midi::new(&[0xb0u8 | chan, num, val])
+    }
+
+    pub fn note_on(num: u8, vel: u8, chan: u8) -> Self {
+        Midi::new(&[0x90u8 | chan, num, vel])
+    }
+
+    pub fn note_off(num: u8, vel: u8, chan: u8) -> Self {
+        Midi::new(&[0x80u8 | chan, num, vel])
+    }
+
     pub fn bytes(&self) -> &[u8; 3] {
         &self.bytes
     }
