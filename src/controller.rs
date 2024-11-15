@@ -105,10 +105,12 @@ enum Events {
     SetNamesChanged,
 }
 
+const MENU_ITEMS: [&'static str; 2] = ["Set Presets", "Sets"];
+
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum MenuItems {
-    SetPresets,
-    Sets,
+    SetPresets = 0,
+    Sets = 1,
     //TODO, Instance select?
 }
 
@@ -558,13 +560,10 @@ impl StateController {
                     self.display_centered("Press wheel to\nshut down").await;
                 }
                 States::Menu(selected) => {
-                    match selected {
-                        MenuItems::Sets => {
-                            self.display_centered("Sets").await;
-                        }
-                        MenuItems::SetPresets => {
-                            self.display_centered("Set Presets").await;
-                        }
+                    let selected: usize = *selected as _;
+                    {
+                        let display = self.locked_display().await;
+                        draw_menu(display, &MENU_ITEMS, selected);
                     }
                     self.context_mut().light_button(MENU_MIDI, 0);
                     self.context_mut().light_button(BACK_MIDI, 0);
@@ -603,9 +602,9 @@ impl StateController {
     }
 }
 
-fn draw_menu<D: DerefMut<Target = MoveDisplay>>(
+fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     mut display: D,
-    items: &Vec<String>,
+    items: &[S],
     selected: usize,
 ) {
     use embedded_layout::{layout::linear::LinearLayout, prelude::*};
@@ -628,9 +627,9 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>>(
         .enumerate()
     {
         *l = if index + start == selected {
-            format!(">  {}", item)
+            format!(">  {}", item.as_ref())
         } else {
-            format!("   {}", item)
+            format!("   {}", item.as_ref())
         }
         .to_string();
     }
