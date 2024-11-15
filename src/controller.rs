@@ -563,7 +563,7 @@ impl StateController {
                     let selected: usize = *selected as _;
                     {
                         let display = self.locked_display().await;
-                        draw_menu(display, &MENU_ITEMS, selected);
+                        draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected);
                     }
                     self.context_mut().light_button(MENU_MIDI, 0);
                     self.context_mut().light_button(BACK_MIDI, 0);
@@ -572,7 +572,7 @@ impl StateController {
                     let selected = *selected;
                     {
                         let display = self.locked_display().await;
-                        draw_menu(display, self.context().set_names(), selected);
+                        draw_menu(display, &"Load Set", self.context().set_names(), selected);
                     }
 
                     self.context_mut()
@@ -604,6 +604,7 @@ impl StateController {
 
 fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     mut display: D,
+    title: &str,
     items: &[S],
     selected: usize,
 ) {
@@ -630,21 +631,41 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
         .enumerate()
     {
         *l = if index + start == selected {
-            format!(">  {}", item.as_ref())
+            format!("> {}", item.as_ref())
         } else {
-            format!("   {}", item.as_ref())
+            format!("  {}", item.as_ref())
         }
         .to_string();
+
+        //make strings all length 16
+        if l.len() > 16 {
+            //add ellipsis
+            l.truncate(14);
+            l.push_str("..");
+        } else if l.len() < 16 {
+            //add whitespace
+            l.reserve(16 - l.len());
+            while l.len() < 16 {
+                l.push(' ');
+            }
+        }
     }
 
     LinearLayout::vertical(
-        Chain::new(Text::new(list[0].as_str(), Point::zero(), text_style))
-            .append(Text::new(list[1].as_str(), Point::zero(), text_style))
-            .append(Text::new(list[2].as_str(), Point::zero(), text_style)),
+        Chain::new(Text::new(title, Point::zero(), text_style)).append(
+            LinearLayout::vertical(
+                Chain::new(Text::new(list[0].as_str(), Point::zero(), text_style))
+                    .append(Text::new(list[1].as_str(), Point::zero(), text_style))
+                    .append(Text::new(list[2].as_str(), Point::zero(), text_style)),
+            )
+            .with_alignment(horizontal::Left)
+            .align_to(&display_area, horizontal::Left, vertical::Center)
+            .arrange(),
+        ),
     )
-    .with_alignment(horizontal::Left)
+    .with_alignment(horizontal::Center)
     .arrange()
-    .align_to(&display_area, horizontal::Left, vertical::Center)
+    .align_to(&display_area, horizontal::Left, vertical::Top)
     .draw(display.deref_mut())
     .unwrap();
 }
