@@ -967,7 +967,7 @@ checksum = "e6ecd384b10a64542d77071bd64bd7b231f4ed5940fba55e98c3de13824cf3d7"
 [[package]]
 name = "smlang"
 version = "0.5.0"
-source = "git+https://github.com/x37v/smlang-rs?branch=main#d731868dcba38335abf12cc7041ef2ca486fcb38"
+source = "git+https://github.com/x37v/smlang-rs?branch=main#ea8e0e291b280be69b344428b8f68f357fe801c2"
 dependencies = [
  "smlang-macros",
 ]
@@ -975,7 +975,7 @@ dependencies = [
 [[package]]
 name = "smlang-macros"
 version = "0.2.1"
-source = "git+https://github.com/x37v/smlang-rs?branch=main#d731868dcba38335abf12cc7041ef2ca486fcb38"
+source = "git+https://github.com/x37v/smlang-rs?branch=main#ea8e0e291b280be69b344428b8f68f357fe801c2"
 dependencies = [
  "proc-macro2",
  "quote",
