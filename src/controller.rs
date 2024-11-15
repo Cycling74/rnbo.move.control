@@ -28,13 +28,14 @@ const PLAY_MIDI: u8 = 0x55;
 
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
+const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
 
 const VOLUME_WHEEL_ENCODER: usize = 9;
 const JOG_WHEEL_ENCODER: usize = 10;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
-enum RGBColor {
+enum MoveColor {
     Black = 0,
 
     FullWhite = 120, // Full brightness white (FFF, "white" below is CCC)
@@ -128,7 +129,7 @@ smlang::statemachine! {
         SetsList(usize) + BtnDown(Button::Back) = Menu(MenuItems::Sets),
         SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() > *state + 1] = SetsList(*state + 1),
         SetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetsList(*state - 1),
-        SetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_select(*state); = Menu(MenuItems::SetPresets),
+        SetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_select(*state).await; = Menu(MenuItems::SetPresets),
         //SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() == 0] = Menu(MenuItems::Sets), //abort
 
         _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
@@ -154,9 +155,25 @@ struct Context {
     rolling: bool,
     ws_tx: Option<SplitSink<WebSocket, Message>>,
     set_names: Vec<String>,
+    set_selected: Option<String>,
 }
 
 impl Context {
+    fn new(
+        midi_out_queue: sync_mpsc::SyncSender<Midi>,
+        display: &mut Rc<Mutex<MoveDisplay>>,
+    ) -> Self {
+        Self {
+            display: display.clone(),
+            midi_out_queue,
+            bpm: 0f32,
+            rolling: false,
+            ws_tx: None,
+            set_names: Vec::new(),
+            set_selected: None,
+        }
+    }
+
     fn send_power_cmd(&mut self, cmd: PowerCommand) {
         for m in power_sysex(cmd).into_iter() {
             let _ = self.midi_out_queue.send(m);
@@ -167,8 +184,28 @@ impl Context {
         self.set_names.len()
     }
 
-    fn set_select(&mut self, _set: usize) {
-        //TODO
+    async fn set_select(&mut self, set: usize) {
+        self.set_selected = self.set_names.get(set).map(|s| s.clone());
+        if let Some(name) = &self.set_selected {
+            let msg = OscMessage {
+                addr: SET_LOAD_ADDR.to_string(),
+                args: vec![OscType::String(name.clone())],
+            };
+            self.send_osc(msg).await;
+        }
+    }
+
+    fn set_set_names(&mut self, names: &Vec<String>) {
+        //we always want to keep track of the names but we might not change state
+        let mut names = names.clone();
+        names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        self.set_names = names;
+
+        //TODO change selected index?
+    }
+
+    fn set_names(&self) -> &Vec<String> {
+        &self.set_names
     }
 
     fn light_button(&mut self, btn: u8, val: u8) {
@@ -185,9 +222,9 @@ impl Context {
         self.light_button(
             PLAY_MIDI,
             if on {
-                RGBColor::Green
+                MoveColor::Green
             } else {
-                RGBColor::LightGray
+                MoveColor::LightGray
             } as u8,
         );
     }
@@ -197,6 +234,10 @@ impl Context {
             addr: TRANSPORT_ROLLING_ADDR.to_string(),
             args: vec![OscType::Bool(!self.rolling)],
         };
+        self.send_osc(msg).await;
+    }
+
+    async fn send_osc(&mut self, msg: OscMessage) {
         let packet = OscPacket::Message(msg);
         if let Ok(msg) = rosc::encoder::encode(&packet) {
             if let Some(ws) = self.ws_tx.as_mut() {
@@ -211,17 +252,10 @@ impl StateController {
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
         display: &mut Rc<Mutex<MoveDisplay>>,
     ) -> Self {
-        let mut context = Context {
-            display: display.clone(),
-            midi_out_queue,
-            bpm: 0f32,
-            rolling: false,
-            ws_tx: None,
-            set_names: Vec::new(),
-        };
+        let mut context = Context::new(midi_out_queue, display);
 
-        context.light_button(MENU_MIDI, RGBColor::LightGray as _);
-        context.light_button(PLAY_MIDI, RGBColor::LightGray as _);
+        context.light_button(MENU_MIDI, MoveColor::LightGray as _);
+        context.light_button(PLAY_MIDI, MoveColor::LightGray as _);
 
         Self {
             instances: HashMap::new(),
@@ -259,8 +293,7 @@ impl StateController {
     }
 
     pub async fn set_set_names(&mut self, names: &Vec<String>) {
-        //we always want to keep track of the names but we might not change state
-        self.context_mut().set_names = names.clone();
+        self.context_mut().set_set_names(names);
         self.handle_event(Events::SetNamesChanged).await;
     }
 
@@ -536,6 +569,18 @@ impl StateController {
                     self.context_mut().light_button(MENU_MIDI, 0);
                     self.context_mut().light_button(BACK_MIDI, 0);
                 }
+                States::SetsList(selected) => {
+                    let selected = *selected;
+                    {
+                        let display = self.locked_display().await;
+                        draw_menu(display, self.context().set_names(), selected);
+                    }
+
+                    self.context_mut()
+                        .light_button(MENU_MIDI, MoveColor::Black as _);
+                    self.context_mut()
+                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                }
                 _ => (),
             }
         }
@@ -556,4 +601,48 @@ impl StateController {
     fn context_mut(&mut self) -> &mut Context {
         self.statemachine.context_mut()
     }
+}
+
+fn draw_menu<D: DerefMut<Target = MoveDisplay>>(
+    mut display: D,
+    items: &Vec<String>,
+    selected: usize,
+) {
+    use embedded_layout::{layout::linear::LinearLayout, prelude::*};
+    let text_style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+
+    display.clear(BinaryColor::Off).unwrap();
+    let display_area = display.bounding_box();
+
+    let mut list: [String; 3] = Default::default();
+
+    let start = if selected == 0 || items.len() <= 3 {
+        0
+    } else {
+        selected - 1
+    };
+
+    for (index, (l, item)) in list
+        .iter_mut()
+        .zip(items.iter().skip(start).take(3))
+        .enumerate()
+    {
+        *l = if index + start == selected {
+            format!(">  {}", item)
+        } else {
+            format!("   {}", item)
+        }
+        .to_string();
+    }
+
+    LinearLayout::vertical(
+        Chain::new(Text::new(list[0].as_str(), Point::zero(), text_style))
+            .append(Text::new(list[1].as_str(), Point::zero(), text_style))
+            .append(Text::new(list[2].as_str(), Point::zero(), text_style)),
+    )
+    .with_alignment(horizontal::Left)
+    .arrange()
+    .align_to(&display_area, horizontal::Left, vertical::Center)
+    .draw(display.deref_mut())
+    .unwrap();
 }
