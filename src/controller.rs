@@ -29,6 +29,9 @@ const PLAY_MIDI: u8 = 0x55;
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 
+const VOLUME_WHEEL_ENCODER: usize = 9;
+const JOG_WHEEL_ENCODER: usize = 10;
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum RGBColor {
@@ -83,37 +86,56 @@ enum Button {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct Btn(Button, bool);
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct ParamUpdate {
     instance: usize,
     index: usize,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-struct Encoder(usize, u8);
-
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Events {
-    Btn(Btn),
+    BtnDown(Button),
+    EncLeft(usize),
+    EncRight(usize),
+
     ParamUpdate(ParamUpdate),
-    Encoder(Encoder),
     Transport(bool),
     Tempo(f32),
+
+    SetNamesChanged,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum MenuItems {
+    SetPresets,
+    Sets,
+    //TODO, Instance select?
 }
 
 smlang::statemachine! {
     states_attr: #[derive(Clone)],
     transitions: {
-        *Init + Btn(Btn(Button::Menu, true)) = Menu,
-        PromptPower + Btn(Btn(Button::JogWheel, true)) = PowerOff,
-        PromptPower + Btn(Btn(Button::Back, true))  = Menu,
-        _ + Btn(Btn(Button::PowerShort, _)) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
-        _ + Btn(Btn(Button::PowerLong, _)) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
+        *Init + BtnDown(Button::Menu) = Menu(MenuItems::SetPresets),
+        PromptPower + BtnDown(Button::JogWheel) = PowerOff,
+        PromptPower + BtnDown(Button::Back) = Menu(MenuItems::SetPresets),
+
+        //nav
+        Menu(MenuItems) + EncRight(JOG_WHEEL_ENCODER) [state == &MenuItems::SetPresets] = Menu(MenuItems::Sets),
+        Menu(MenuItems) + EncLeft(JOG_WHEEL_ENCODER) [state == &MenuItems::Sets] = Menu(MenuItems::SetPresets),
+
+        //select
+        Menu(MenuItems) + BtnDown(Button::JogWheel) [state == &MenuItems::Sets && ctx.sets_len() > 0] = SetsList(0),
+
+        SetsList(usize) + BtnDown(Button::Back) = Menu(MenuItems::Sets),
+        SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() > *state + 1] = SetsList(*state + 1),
+        SetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetsList(*state - 1),
+        SetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_select(*state); = Menu(MenuItems::SetPresets),
+        //SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() == 0] = Menu(MenuItems::Sets), //abort
+
+        _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
+        _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
         _ + Tempo(_) / ctx.update_tempo(*event);,
         _ + Transport(_) / ctx.update_transport(*event);,
-        _ + Btn(Btn(Button::Play, true)) / ctx.toggle_transport().await;,
+        _ + BtnDown(Button::Play) / ctx.toggle_transport().await;,
     }
 }
 
@@ -123,7 +145,6 @@ pub struct StateController {
     pub selected_param: Option<(usize, usize)>,
     sysex: Vec<u8>,
     statemachine: StateMachine,
-    set_names: Vec<String>,
 }
 
 struct Context {
@@ -132,6 +153,7 @@ struct Context {
     bpm: f32,
     rolling: bool,
     ws_tx: Option<SplitSink<WebSocket, Message>>,
+    set_names: Vec<String>,
 }
 
 impl Context {
@@ -139,6 +161,14 @@ impl Context {
         for m in power_sysex(cmd).into_iter() {
             let _ = self.midi_out_queue.send(m);
         }
+    }
+
+    fn sets_len(&self) -> usize {
+        self.set_names.len()
+    }
+
+    fn set_select(&mut self, _set: usize) {
+        //TODO
     }
 
     fn light_button(&mut self, btn: u8, val: u8) {
@@ -187,6 +217,7 @@ impl StateController {
             bpm: 0f32,
             rolling: false,
             ws_tx: None,
+            set_names: Vec::new(),
         };
 
         context.light_button(MENU_MIDI, RGBColor::LightGray as _);
@@ -198,7 +229,6 @@ impl StateController {
             selected_param: None,
             sysex: Vec::new(),
             statemachine: StateMachine::new(context),
-            set_names: Vec::new(),
         }
     }
 
@@ -228,8 +258,10 @@ impl StateController {
         self.params = params;
     }
 
-    pub fn set_set_names(&mut self, names: &Vec<String>) {
-        self.set_names = names.clone();
+    pub async fn set_set_names(&mut self, names: &Vec<String>) {
+        //we always want to keep track of the names but we might not change state
+        self.context_mut().set_names = names.clone();
+        self.handle_event(Events::SetNamesChanged).await;
     }
 
     pub async fn select_param(&mut self, v: Option<(usize, usize)>) {
@@ -310,12 +342,10 @@ impl StateController {
                 //println!("power sysex {:02x?}", sysex);
                 if let Some(status) = sysex.get(6) {
                     if status & 0b1000 != 0 {
-                        self.handle_event(Events::Btn(Btn(Button::PowerShort, true)))
-                            .await;
+                        self.handle_event(Events::BtnDown(Button::PowerShort)).await;
                     }
                     if status & 0b1_0000 != 0 {
-                        self.handle_event(Events::Btn(Btn(Button::PowerLong, true)))
-                            .await;
+                        self.handle_event(Events::BtnDown(Button::PowerLong)).await;
                     }
                 }
             }
@@ -338,38 +368,43 @@ impl StateController {
                     //0..7 params
                     //8 volume
                     //9 jog wheel
+                    /*
+                     * TODO
                     self.handle_event(Events::Btn(Btn(
                         Button::EncoderTouch(bytes[1] as usize),
                         bytes[2] != 0,
                     )))
                     .await;
+                    */
                 }
             }
             0xB0 => {
                 self.sysex.clear();
                 match bytes[1] {
                     //jog wheel btn
-                    0x03 => {
-                        self.handle_event(Events::Btn(Btn(Button::JogWheel, bytes[2] != 0)))
-                            .await;
+                    0x03 if bytes[2] != 0 => {
+                        self.handle_event(Events::BtnDown(Button::JogWheel)).await;
                     }
-                    0x0e => {
-                        //jog wheel action
-                    }
+                    0x0e => match bytes[2] {
+                        1 => {
+                            self.handle_event(Events::EncRight(JOG_WHEEL_ENCODER)).await;
+                        }
+                        127 => {
+                            self.handle_event(Events::EncLeft(JOG_WHEEL_ENCODER)).await;
+                        }
+                        _ => (),
+                    },
                     //hamburger
-                    MENU_MIDI => {
-                        self.handle_event(Events::Btn(Btn(Button::Menu, bytes[2] != 0)))
-                            .await;
+                    MENU_MIDI if bytes[2] != 0 => {
+                        self.handle_event(Events::BtnDown(Button::Menu)).await;
                     }
                     //menu back button
-                    BACK_MIDI => {
-                        self.handle_event(Events::Btn(Btn(Button::Back, bytes[2] != 0)))
-                            .await;
+                    BACK_MIDI if bytes[2] != 0 => {
+                        self.handle_event(Events::BtnDown(Button::Back)).await;
                     }
                     //play button
-                    PLAY_MIDI => {
-                        self.handle_event(Events::Btn(Btn(Button::Play, bytes[2] != 0)))
-                            .await;
+                    PLAY_MIDI if bytes[2] != 0 => {
+                        self.handle_event(Events::BtnDown(Button::Play)).await;
                     }
                     0xf4 => {
                         //volume jog
@@ -377,11 +412,16 @@ impl StateController {
 
                     //param encoders
                     index @ 71..=78 => {
-                        self.handle_event(Events::Encoder(Encoder(
-                            (index - 71) as usize,
-                            bytes[2],
-                        )))
-                        .await;
+                        let index = (index - 71) as usize;
+                        match bytes[2] {
+                            1 => {
+                                self.handle_event(Events::EncLeft(index)).await;
+                            }
+                            127 => {
+                                self.handle_event(Events::EncLeft(index)).await;
+                            }
+                            _ => (),
+                        }
 
                         /*
                         let inst = 0;
@@ -484,10 +524,17 @@ impl StateController {
                     self.context_mut().light_button(BACK_MIDI, 127);
                     self.display_centered("Press wheel to\nshut down").await;
                 }
-                States::Menu => {
+                States::Menu(selected) => {
+                    match selected {
+                        MenuItems::Sets => {
+                            self.display_centered("Sets").await;
+                        }
+                        MenuItems::SetPresets => {
+                            self.display_centered("Set Presets").await;
+                        }
+                    }
                     self.context_mut().light_button(MENU_MIDI, 0);
                     self.context_mut().light_button(BACK_MIDI, 0);
-                    self.display_centered("Menu TODO").await;
                 }
                 _ => (),
             }

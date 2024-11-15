@@ -299,7 +299,7 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
                         if let Some(sets) = get_sets().await {
                             *g = None;
                             let mut g = state.lock().await;
-                            g.set_set_names(&sets);
+                            g.set_set_names(&sets).await;
                         }
                     }
                 }
@@ -397,7 +397,8 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
                                                                     let mut g = state.lock().await;
                                                                     g.set_set_names(
                                                                         &range.range[0].vals,
-                                                                    );
+                                                                    )
+                                                                    .await;
                                                                 }
                                                             }
                                                             _ => (),
