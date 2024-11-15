@@ -20,6 +20,7 @@ use {
     regex::Regex,
     reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
+    serde::{Deserialize, Serialize},
     std::{
         cmp::{Ordering, PartialEq, PartialOrd},
         collections::HashMap,
@@ -31,7 +32,6 @@ use {
         time::{Duration, Instant},
     },
     tokio::sync::mpsc as async_mpsc,
-    serde::{Deserialize, Serialize}
 };
 
 //NOTE channel type should match the reciever: https://users.rust-lang.org/t/communicating-between-sync-and-async-code/41005/3
@@ -283,7 +283,7 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
         {
             let res: Result<SetRange, _> = res.json().await;
             if let Ok(res) = res {
-                return Some(res.range[0].vals.clone())
+                return Some(res.range[0].vals.clone());
             }
         }
         None
@@ -324,13 +324,13 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
     #[derive(Serialize, Deserialize, Debug)]
     struct SetRangeItem {
         #[serde(rename = "VALS")]
-        vals: Vec<String>
+        vals: Vec<String>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
     struct SetRange {
         #[serde(rename = "RANGE")]
-        range: [SetRangeItem; 1]
+        range: [SetRangeItem; 1],
     }
 
     let web_future = async {
@@ -353,7 +353,7 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
                         {
                             //set up sender
                             let mut g = state.lock().await;
-                            g.set_ws(tx);
+                            g.set_ws(tx).await;
                         }
 
                         //do inst query
@@ -389,10 +389,15 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
                                                             Some(
                                                                 "/rnbo/inst/control/sets/load",
                                                             ) => {
-                                                                let range: Result<SetRange, _> = serde_json::from_value(data.clone());
+                                                                let range: Result<SetRange, _> =
+                                                                    serde_json::from_value(
+                                                                        data.clone(),
+                                                                    );
                                                                 if let Ok(range) = range {
                                                                     let mut g = state.lock().await;
-                                                                    g.set_set_names(&range.range[0].vals);
+                                                                    g.set_set_names(
+                                                                        &range.range[0].vals,
+                                                                    );
                                                                 }
                                                             }
                                                             _ => (),

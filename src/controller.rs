@@ -28,6 +28,22 @@ const PLAY_MIDI: u8 = 0x55;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
+enum RGBColor {
+    Black = 0,
+
+    FullWhite = 120, // Full brightness white (FFF, "white" below is CCC)
+
+    White = 122,
+    LightGray = 123,
+    DarkGray = 124,
+
+    Blue = 125,
+    Green = 126,
+    Red = 127,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u8)]
 enum PowerCommand {
     ///Power off the device immediately; `shutdown` should be sent before. if shutdown has not been sent, powering off is delayed for 5 seconds.
     PowerOff = 1,
@@ -60,7 +76,7 @@ enum Button {
     PowerShort,
     Menu,
     Play,
-    Encoder(usize),
+    EncoderTouch(usize),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -73,9 +89,15 @@ struct ParamUpdate {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct Encoder(usize, u8);
+
+#[derive(Copy, Clone, Debug, PartialEq)]
 enum Events {
     Btn(Btn),
     ParamUpdate(ParamUpdate),
+    Encoder(Encoder),
+    Transport(bool),
+    Tempo(f32),
 }
 
 smlang::statemachine! {
@@ -86,6 +108,8 @@ smlang::statemachine! {
         PromptPower + Btn(Btn(Button::Back, true))  = Menu,
         _ + Btn(Btn(Button::PowerShort, _)) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
         _ + Btn(Btn(Button::PowerLong, _)) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
+        _ + Tempo(_) / ctx.update_tempo(*event);,
+        _ + Transport(_) / ctx.update_transport(*event);,
     }
 }
 
@@ -102,6 +126,8 @@ pub struct StateController {
 struct Context {
     display: Rc<Mutex<MoveDisplay>>,
     midi_out_queue: sync_mpsc::SyncSender<Midi>,
+    bpm: f32,
+    rolling: bool,
 }
 
 impl Context {
@@ -114,6 +140,23 @@ impl Context {
     fn light_button(&mut self, btn: u8, val: u8) {
         let _ = self.midi_out_queue.send(Midi::cc(btn, val, 0));
     }
+
+    fn update_tempo(&mut self, v: f32) {
+        self.bpm = v;
+        //TODO
+    }
+
+    fn update_transport(&mut self, on: bool) {
+        self.rolling = on;
+        self.light_button(
+            PLAY_MIDI,
+            if on {
+                RGBColor::Green
+            } else {
+                RGBColor::LightGray
+            } as u8,
+        );
+    }
 }
 
 impl StateController {
@@ -124,8 +167,12 @@ impl StateController {
         let mut context = Context {
             display: display.clone(),
             midi_out_queue,
+            bpm: 0f32,
+            rolling: false,
         };
-        context.light_button(MENU_MIDI, 127);
+
+        context.light_button(MENU_MIDI, RGBColor::LightGray as _);
+        context.light_button(PLAY_MIDI, RGBColor::LightGray as _);
 
         Self {
             instances: HashMap::new(),
@@ -138,7 +185,18 @@ impl StateController {
         }
     }
 
-    pub fn set_ws(&mut self, ws: SplitSink<WebSocket, Message>) {
+    pub async fn set_ws(&mut self, mut ws: SplitSink<WebSocket, Message>) {
+        //query values
+        for addr in ["/rnbo/jack/transport/rolling", "/rnbo/jack/transport/bpm"] {
+            let msg = OscMessage {
+                addr: addr.to_string(),
+                args: Vec::new(),
+            };
+            let packet = OscPacket::Message(msg);
+            if let Ok(msg) = rosc::encoder::encode(&packet) {
+                let _ = ws.send(Message::Binary(msg)).await;
+            }
+        }
         self.ws_tx = Some(ws);
     }
 
@@ -187,24 +245,43 @@ impl StateController {
 
     pub async fn handle_osc(&mut self, msg: &OscMessage) {
         if msg.args.len() == 1 {
+            println!("got osc {}", msg.addr);
             let mut update = None;
-            if let Some(instance) = self.params.get(&msg.addr) {
-                if let Some(inst) = self.instances.get_mut(&instance) {
-                    if let Some(index) = match &msg.args[0] {
-                        OscType::Double(v) => inst.update_param_f64(&msg.addr, *v),
-                        OscType::Float(v) => inst.update_param_f64(&msg.addr, *v as f64),
-                        OscType::Int(v) => inst.update_param_f64(&msg.addr, *v as f64),
-                        OscType::String(v) => inst.update_param_s(&msg.addr, v),
-                        _ => None,
-                    } {
-                        update = Some((*instance, index));
+            match msg.addr.as_str() {
+                "/rnbo/jack/transport/rolling" => {
+                    if let OscType::Bool(rolling) = msg.args[0] {
+                        self.handle_event(Events::Transport(rolling)).await;
                     }
                 }
-            }
+                "/rnbo/jack/transport/bpm" => {
+                    if let Some(bpm) = match &msg.args[0] {
+                        OscType::Double(v) => Some(*v as f32),
+                        OscType::Float(v) => Some(*v),
+                        _ => None,
+                    } {
+                        self.handle_event(Events::Tempo(bpm)).await;
+                    }
+                }
+                _ => {
+                    if let Some(instance) = self.params.get(&msg.addr) {
+                        if let Some(inst) = self.instances.get_mut(&instance) {
+                            if let Some(index) = match &msg.args[0] {
+                                OscType::Double(v) => inst.update_param_f64(&msg.addr, *v),
+                                OscType::Float(v) => inst.update_param_f64(&msg.addr, *v as f64),
+                                OscType::Int(v) => inst.update_param_f64(&msg.addr, *v as f64),
+                                OscType::String(v) => inst.update_param_s(&msg.addr, v),
+                                _ => None,
+                            } {
+                                update = Some((*instance, index));
+                            }
+                        }
+                    }
 
-            if let Some((instance, index)) = update {
-                self.handle_event(Events::ParamUpdate(ParamUpdate { instance, index }))
-                    .await;
+                    if let Some((instance, index)) = update {
+                        self.handle_event(Events::ParamUpdate(ParamUpdate { instance, index }))
+                            .await;
+                    }
+                }
             }
         }
     }
@@ -234,16 +311,22 @@ impl StateController {
     pub async fn handle_midi(&mut self, bytes: &[u8; 3]) {
         println!("got midi {:02x?}", bytes);
 
+        //volume 0x08
+        //jog 0x09
+
         match bytes[0] {
             0x90 => {
                 self.sysex.clear();
-                //param select
-                if bytes[1] < 8 {
-                    //select!
-                    self.select_param(Some((0, bytes[1] as usize))).await;
+                if bytes[1] < 10 {
+                    //0..7 params
+                    //8 volume
+                    //9 jog wheel
+                    self.handle_event(Events::Btn(Btn(
+                        Button::EncoderTouch(bytes[1] as usize),
+                        bytes[2] != 0,
+                    )))
+                    .await;
                 }
-                //volume 0x08
-                //jog 0x09
             }
             0xB0 => {
                 self.sysex.clear();
@@ -277,9 +360,9 @@ impl StateController {
 
                     //param encoders
                     index @ 71..=78 => {
-                        self.handle_event(Events::Btn(Btn(
-                            Button::Encoder((index - 71) as usize),
-                            bytes[2] != 0,
+                        self.handle_event(Events::Encoder(Encoder(
+                            (index - 71) as usize,
+                            bytes[2],
                         )))
                         .await;
 
