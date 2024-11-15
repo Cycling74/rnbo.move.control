@@ -615,8 +615,11 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
 
     let mut list: [String; 3] = Default::default();
 
+    //try to keep 3 on screen, select indicator may need to move to first or last item depending
     let start = if selected == 0 || items.len() <= 3 {
         0
+    } else if selected + 1 >= items.len() {
+        items.len() - 3
     } else {
         selected - 1
     };
