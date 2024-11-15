@@ -26,6 +26,9 @@ const MENU_MIDI: u8 = 0x32;
 const BACK_MIDI: u8 = 0x33;
 const PLAY_MIDI: u8 = 0x55;
 
+const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
+const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum RGBColor {
@@ -110,6 +113,7 @@ smlang::statemachine! {
         _ + Btn(Btn(Button::PowerLong, _)) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
         _ + Tempo(_) / ctx.update_tempo(*event);,
         _ + Transport(_) / ctx.update_transport(*event);,
+        _ + Btn(Btn(Button::Play, true)) / ctx.toggle_transport().await;,
     }
 }
 
@@ -117,7 +121,6 @@ pub struct StateController {
     pub instances: HashMap<usize, PatcherInst>,
     pub params: HashMap<String, usize>,
     pub selected_param: Option<(usize, usize)>,
-    ws_tx: Option<SplitSink<WebSocket, Message>>,
     sysex: Vec<u8>,
     statemachine: StateMachine,
     set_names: Vec<String>,
@@ -128,6 +131,7 @@ struct Context {
     midi_out_queue: sync_mpsc::SyncSender<Midi>,
     bpm: f32,
     rolling: bool,
+    ws_tx: Option<SplitSink<WebSocket, Message>>,
 }
 
 impl Context {
@@ -157,6 +161,19 @@ impl Context {
             } as u8,
         );
     }
+
+    async fn toggle_transport(&mut self) {
+        let msg = OscMessage {
+            addr: TRANSPORT_ROLLING_ADDR.to_string(),
+            args: vec![OscType::Bool(!self.rolling)],
+        };
+        let packet = OscPacket::Message(msg);
+        if let Ok(msg) = rosc::encoder::encode(&packet) {
+            if let Some(ws) = self.ws_tx.as_mut() {
+                let _ = ws.send(Message::Binary(msg)).await;
+            }
+        }
+    }
 }
 
 impl StateController {
@@ -169,6 +186,7 @@ impl StateController {
             midi_out_queue,
             bpm: 0f32,
             rolling: false,
+            ws_tx: None,
         };
 
         context.light_button(MENU_MIDI, RGBColor::LightGray as _);
@@ -178,7 +196,6 @@ impl StateController {
             instances: HashMap::new(),
             params: HashMap::new(),
             selected_param: None,
-            ws_tx: None,
             sysex: Vec::new(),
             statemachine: StateMachine::new(context),
             set_names: Vec::new(),
@@ -187,7 +204,7 @@ impl StateController {
 
     pub async fn set_ws(&mut self, mut ws: SplitSink<WebSocket, Message>) {
         //query values
-        for addr in ["/rnbo/jack/transport/rolling", "/rnbo/jack/transport/bpm"] {
+        for addr in [TRANSPORT_ROLLING_ADDR, TRANSPORT_BPM_ADDR] {
             let msg = OscMessage {
                 addr: addr.to_string(),
                 args: Vec::new(),
@@ -197,7 +214,7 @@ impl StateController {
                 let _ = ws.send(Message::Binary(msg)).await;
             }
         }
-        self.ws_tx = Some(ws);
+        self.context_mut().ws_tx = Some(ws);
     }
 
     pub fn set_state(&mut self, instances: HashMap<usize, PatcherInst>) {
@@ -248,12 +265,12 @@ impl StateController {
             println!("got osc {}", msg.addr);
             let mut update = None;
             match msg.addr.as_str() {
-                "/rnbo/jack/transport/rolling" => {
+                TRANSPORT_ROLLING_ADDR => {
                     if let OscType::Bool(rolling) = msg.args[0] {
                         self.handle_event(Events::Transport(rolling)).await;
                     }
                 }
-                "/rnbo/jack/transport/bpm" => {
+                TRANSPORT_BPM_ADDR => {
                     if let Some(bpm) = match &msg.args[0] {
                         OscType::Double(v) => Some(*v as f32),
                         OscType::Float(v) => Some(*v),
@@ -451,7 +468,7 @@ impl StateController {
     }
 
     async fn handle_event(&mut self, e: Events) {
-        if let Some(ns) = self.statemachine.process_event(e) {
+        if let Some(ns) = self.statemachine.process_event(e).await {
             //got new state
             match ns {
                 States::PowerOff => {
