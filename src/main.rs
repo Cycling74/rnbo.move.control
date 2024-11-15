@@ -275,13 +275,9 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
         None
     }
 
-    async fn get_sets() -> Option<Vec<String>> {
-        if let Ok(res) = reqwest::Client::new()
-            .get("http://127.0.0.1:5678/rnbo/inst/control/sets/load?RANGE")
-            .send()
-            .await
-        {
-            let res: Result<SetRange, _> = res.json().await;
+    async fn get_string_range(path: &str) -> Option<Vec<String>> {
+        if let Ok(res) = reqwest::Client::new().get(path).send().await {
+            let res: Result<StringRange, _> = res.json().await;
             if let Ok(res) = res {
                 return Some(res.range[0].vals.clone());
             }
@@ -296,10 +292,23 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
                 let mut g = sets_query.lock().await;
                 if let Some(v) = g.deref() {
                     if Instant::now() - *v > HTTP_QUERY_DELAY {
-                        if let Some(sets) = get_sets().await {
+                        if let Some(names) = get_string_range(
+                            "http://127.0.0.1:5678/rnbo/inst/control/sets/load?RANGE",
+                        )
+                        .await
+                        {
                             *g = None;
                             let mut g = state.lock().await;
-                            g.set_set_names(&sets).await;
+                            g.set_set_names(&names).await;
+                        }
+                        if let Some(names) = get_string_range(
+                            "http://127.0.0.1:5678/rnbo/inst/control/sets/presets/load?RANGE",
+                        )
+                        .await
+                        {
+                            *g = None;
+                            let mut g = state.lock().await;
+                            g.set_set_preset_names(&names).await;
                         }
                     }
                 }
@@ -322,15 +331,15 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
     };
 
     #[derive(Serialize, Deserialize, Debug)]
-    struct SetRangeItem {
+    struct StringRangeItem {
         #[serde(rename = "VALS")]
         vals: Vec<String>,
     }
 
     #[derive(Serialize, Deserialize, Debug)]
-    struct SetRange {
+    struct StringRange {
         #[serde(rename = "RANGE")]
-        range: [SetRangeItem; 1],
+        range: [StringRangeItem; 1],
     }
 
     let web_future = async {
@@ -386,16 +395,29 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
                                                             .map(|p| p.as_str())
                                                             .flatten()
                                                         {
-                                                            Some(
-                                                                "/rnbo/inst/control/sets/load",
-                                                            ) => {
-                                                                let range: Result<SetRange, _> =
+                                                            Some(controller::SET_LOAD_ADDR) => {
+                                                                let range: Result<StringRange, _> =
                                                                     serde_json::from_value(
                                                                         data.clone(),
                                                                     );
                                                                 if let Ok(range) = range {
                                                                     let mut g = state.lock().await;
                                                                     g.set_set_names(
+                                                                        &range.range[0].vals,
+                                                                    )
+                                                                    .await;
+                                                                }
+                                                            }
+                                                            Some(
+                                                                controller::SET_PRESETS_LOAD_ADDR,
+                                                            ) => {
+                                                                let range: Result<StringRange, _> =
+                                                                    serde_json::from_value(
+                                                                        data.clone(),
+                                                                    );
+                                                                if let Ok(range) = range {
+                                                                    let mut g = state.lock().await;
+                                                                    g.set_set_preset_names(
                                                                         &range.range[0].vals,
                                                                     )
                                                                     .await;

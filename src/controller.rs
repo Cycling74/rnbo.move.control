@@ -28,7 +28,9 @@ const PLAY_MIDI: u8 = 0x55;
 
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
-const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
+
+pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
+pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
 
 const VOLUME_WHEEL_ENCODER: usize = 9;
 const JOG_WHEEL_ENCODER: usize = 10;
@@ -103,6 +105,7 @@ enum Events {
     Tempo(f32),
 
     SetNamesChanged,
+    SetPresetNamesChanged,
 }
 
 const MENU_ITEMS: [&'static str; 2] = ["Set Presets", "Sets"];
@@ -127,12 +130,18 @@ smlang::statemachine! {
 
         //select
         Menu(MenuItems) + BtnDown(Button::JogWheel) [state == &MenuItems::Sets && ctx.sets_len() > 0] = SetsList(0),
+        Menu(MenuItems) + BtnDown(Button::JogWheel) [state == &MenuItems::SetPresets && ctx.set_presets_len() > 0] = SetPresetsList(0),
 
         SetsList(usize) + BtnDown(Button::Back) = Menu(MenuItems::Sets),
         SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() > *state + 1] = SetsList(*state + 1),
         SetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetsList(*state - 1),
         SetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_select(*state).await; = Menu(MenuItems::SetPresets),
         //SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() == 0] = Menu(MenuItems::Sets), //abort
+
+        SetPresetsList(usize) + BtnDown(Button::Back) = Menu(MenuItems::SetPresets),
+        SetPresetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.set_presets_len() > *state + 1] = SetPresetsList(*state + 1),
+        SetPresetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetPresetsList(*state - 1),
+        SetPresetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_preset_select(*state).await;,
 
         _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
         _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
@@ -157,6 +166,7 @@ struct Context {
     rolling: bool,
     ws_tx: Option<SplitSink<WebSocket, Message>>,
     set_names: Vec<String>,
+    set_preset_names: Vec<String>,
     set_selected: Option<String>,
 }
 
@@ -172,6 +182,7 @@ impl Context {
             rolling: false,
             ws_tx: None,
             set_names: Vec::new(),
+            set_preset_names: Vec::new(),
             set_selected: None,
         }
     }
@@ -186,11 +197,26 @@ impl Context {
         self.set_names.len()
     }
 
-    async fn set_select(&mut self, set: usize) {
-        self.set_selected = self.set_names.get(set).map(|s| s.clone());
+    fn set_presets_len(&self) -> usize {
+        self.set_preset_names.len()
+    }
+
+    async fn set_select(&mut self, index: usize) {
+        self.set_selected = self.set_names.get(index).map(|s| s.clone());
         if let Some(name) = &self.set_selected {
             let msg = OscMessage {
                 addr: SET_LOAD_ADDR.to_string(),
+                args: vec![OscType::String(name.clone())],
+            };
+            self.send_osc(msg).await;
+        }
+    }
+
+    async fn set_preset_select(&mut self, index: usize) {
+        let selected = self.set_preset_names.get(index).map(|s| s.clone());
+        if let Some(name) = &selected {
+            let msg = OscMessage {
+                addr: SET_PRESETS_LOAD_ADDR.to_string(),
                 args: vec![OscType::String(name.clone())],
             };
             self.send_osc(msg).await;
@@ -206,8 +232,18 @@ impl Context {
         //TODO change selected index?
     }
 
+    fn set_set_preset_names(&mut self, names: &Vec<String>) {
+        let mut names = names.clone();
+        names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        self.set_preset_names = names;
+    }
+
     fn set_names(&self) -> &Vec<String> {
         &self.set_names
+    }
+
+    fn set_preset_names(&self) -> &Vec<String> {
+        &self.set_preset_names
     }
 
     fn light_button(&mut self, btn: u8, val: u8) {
@@ -297,6 +333,11 @@ impl StateController {
     pub async fn set_set_names(&mut self, names: &Vec<String>) {
         self.context_mut().set_set_names(names);
         self.handle_event(Events::SetNamesChanged).await;
+    }
+
+    pub async fn set_set_preset_names(&mut self, names: &Vec<String>) {
+        self.context_mut().set_set_preset_names(names);
+        self.handle_event(Events::SetPresetNamesChanged).await;
     }
 
     pub async fn select_param(&mut self, v: Option<(usize, usize)>) {
@@ -573,6 +614,23 @@ impl StateController {
                     {
                         let display = self.locked_display().await;
                         draw_menu(display, &"Load Set", self.context().set_names(), selected);
+                    }
+
+                    self.context_mut()
+                        .light_button(MENU_MIDI, MoveColor::Black as _);
+                    self.context_mut()
+                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                }
+                States::SetPresetsList(selected) => {
+                    let selected = *selected;
+                    {
+                        let display = self.locked_display().await;
+                        draw_menu(
+                            display,
+                            &"Load Set Preset",
+                            self.context().set_preset_names(),
+                            selected,
+                        );
                     }
 
                     self.context_mut()
