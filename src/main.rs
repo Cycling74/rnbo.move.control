@@ -42,7 +42,7 @@ mod midi;
 mod param;
 mod patcher;
 
-const HTTP_QUERY_DELAY: Duration = Duration::from_millis(20);
+const HTTP_QUERY_DELAY: Duration = Duration::from_millis(200);
 
 struct Driver {
     display: Port<MidiOut>,
@@ -262,17 +262,24 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
 
     //http://c74rpi.local:5678
 
-    async fn get_instances() -> Option<HashMap<usize, PatcherInst>> {
+    async fn get_instances() -> Result<HashMap<usize, PatcherInst>, ()> {
         if let Ok(res) = reqwest::Client::new()
             .get("http://127.0.0.1:5678/rnbo/inst")
             .send()
             .await
         {
-            if let Ok(res) = res.json().await {
-                return PatcherInst::parse_all(&res);
+            let res = res.json().await.map_err(|_| ())?;
+            //println!("got instances {:?}", res);
+            if let Some(inst) = PatcherInst::parse_all(&res) {
+                Ok(inst)
+            } else {
+                eprintln!("err parsing instances");
+                Err(())
             }
+        } else {
+            eprintln!("err getting instances");
+            Err(())
         }
-        None
     }
 
     async fn get_string_range(path: &str) -> Option<Vec<String>> {
@@ -291,7 +298,7 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
             {
                 let mut g = sets_query.lock().await;
                 if let Some(v) = g.deref() {
-                    if Instant::now() - *v > HTTP_QUERY_DELAY {
+                    if *v <= Instant::now() {
                         if let Some(names) = get_string_range(
                             "http://127.0.0.1:5678/rnbo/inst/control/sets/load?RANGE",
                         )
@@ -317,9 +324,9 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
             {
                 let mut g = inst_query.lock().await;
                 if let Some(v) = g.deref() {
-                    if Instant::now() - *v > HTTP_QUERY_DELAY {
+                    if *v <= Instant::now() {
                         //println!("got instance update");
-                        if let Some(inst) = get_instances().await {
+                        if let Ok(inst) = get_instances().await {
                             *g = None;
                             let mut g = state.lock().await;
                             g.set_state(inst);
@@ -368,13 +375,13 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
                         //do inst query
                         {
                             let mut g = inst_query.lock().await;
-                            *g = Some(Instant::now());
+                            *g = Some(Instant::now() + HTTP_QUERY_DELAY);
                         }
 
                         //do sets query
                         {
                             let mut g = sets_query.lock().await;
-                            *g = Some(Instant::now());
+                            *g = Some(Instant::now() + HTTP_QUERY_DELAY);
                         }
 
                         while let Ok(message) = rx.try_next().await {
@@ -439,6 +446,7 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
                                                 } {
                                                     //added or removed
                                                     if inst_path_regex.is_match(path) {
+                                                        println!("update instances");
                                                         let mut g = inst_query.lock().await;
                                                         *g = Some(Instant::now());
                                                     }

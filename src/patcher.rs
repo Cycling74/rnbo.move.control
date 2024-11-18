@@ -8,6 +8,25 @@ pub struct PatcherInst {
     presets: Vec<String>,
 }
 
+fn parse_presets(contents: &serde_json::Map<String, serde_json::Value>) -> Option<Vec<String>> {
+    let mut presets = Vec::new();
+    for e in contents
+        .get("presets")?
+        .as_object()?
+        .get("CONTENTS")?
+        .as_object()?
+        .get("entries")?
+        .as_object()?
+        .get("VALUE")?
+        .as_array()?
+        .iter()
+    {
+        presets.push(e.as_str()?.to_string());
+    }
+
+    Some(presets)
+}
+
 impl PatcherInst {
     pub fn index(&self) -> usize {
         self.index
@@ -59,21 +78,9 @@ impl PatcherInst {
             .get("VALUE")?
             .as_str()?
             .to_string();
-        let params = Param::parse_all(contents.get("params")?)?;
-        let mut presets = Vec::new();
-        for e in contents
-            .get("presets")?
-            .as_object()?
-            .get("CONTENTS")?
-            .as_object()?
-            .get("entries")?
-            .as_object()?
-            .get("VALUE")?
-            .as_array()?
-            .iter()
-        {
-            presets.push(e.as_str()?.to_string());
-        }
+        let params = Param::parse_all(contents.get("params")?).unwrap_or_default();
+        let presets = parse_presets(&contents).unwrap_or_default();
+
         Some(PatcherInst {
             index,
             name,

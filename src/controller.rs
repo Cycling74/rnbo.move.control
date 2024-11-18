@@ -108,40 +108,39 @@ enum Events {
     SetPresetNamesChanged,
 }
 
-const MENU_ITEMS: [&'static str; 2] = ["Set Presets", "Sets"];
-
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum MenuItems {
-    SetPresets = 0,
-    Sets = 1,
-    //TODO, Instance select?
-}
+const MENU_ITEMS: [&'static str; 3] = ["Set Presets", "Sets", "Patcher Instances"];
+const SET_PRESETS_INDEX: usize = 0;
+const SETS_INDEX: usize = 1;
+const PATCHER_INSTANCES_INDEX: usize = 2;
 
 smlang::statemachine! {
     states_attr: #[derive(Clone)],
     transitions: {
-        *Init + BtnDown(Button::Menu) = Menu(MenuItems::SetPresets),
+        *Init + BtnDown(Button::Menu) = Menu(0),
         PromptPower + BtnDown(Button::JogWheel) = PowerOff,
-        PromptPower + BtnDown(Button::Back) = Menu(MenuItems::SetPresets),
+        PromptPower + BtnDown(Button::Back) = Menu(0),
 
         //nav
-        Menu(MenuItems) + EncRight(JOG_WHEEL_ENCODER) [state == &MenuItems::SetPresets] = Menu(MenuItems::Sets),
-        Menu(MenuItems) + EncLeft(JOG_WHEEL_ENCODER) [state == &MenuItems::Sets] = Menu(MenuItems::SetPresets),
+        Menu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < MENU_ITEMS.len()] = Menu(*state + 1),
+        Menu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = Menu(*state - 1),
 
         //select
-        Menu(MenuItems) + BtnDown(Button::JogWheel) [state == &MenuItems::Sets && ctx.sets_len() > 0] = SetsList(0),
-        Menu(MenuItems) + BtnDown(Button::JogWheel) [state == &MenuItems::SetPresets && ctx.set_presets_len() > 0] = SetPresetsList(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == SETS_INDEX && ctx.sets_len() > 0] = SetsList(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == SET_PRESETS_INDEX && ctx.set_presets_len() > 0] = SetPresetsList(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.patcher_instances_len() > 0] = PatcherInstances(0),
 
-        SetsList(usize) + BtnDown(Button::Back) = Menu(MenuItems::Sets),
+        SetsList(usize) + BtnDown(Button::Back) = Menu(SETS_INDEX),
         SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() > *state + 1] = SetsList(*state + 1),
         SetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetsList(*state - 1),
-        SetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_select(*state).await; = Menu(MenuItems::SetPresets),
+        SetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_select(*state).await; = Menu(SET_PRESETS_INDEX),
         //SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() == 0] = Menu(MenuItems::Sets), //abort
 
-        SetPresetsList(usize) + BtnDown(Button::Back) = Menu(MenuItems::SetPresets),
+        SetPresetsList(usize) + BtnDown(Button::Back) = Menu(SET_PRESETS_INDEX),
         SetPresetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.set_presets_len() > *state + 1] = SetPresetsList(*state + 1),
         SetPresetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetPresetsList(*state - 1),
         SetPresetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_preset_select(*state).await;,
+
+        PatcherInstances(usize) + BtnDown(Button::Back) = Menu(PATCHER_INSTANCES_INDEX),
 
         _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
         _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
@@ -167,6 +166,8 @@ struct Context {
     ws_tx: Option<SplitSink<WebSocket, Message>>,
     set_names: Vec<String>,
     set_preset_names: Vec<String>,
+    patcher_instance_names: Vec<String>,
+    patcher_instance_indexes: Vec<usize>,
     set_selected: Option<String>,
 }
 
@@ -187,6 +188,8 @@ impl Context {
             set_names: Vec::new(),
             set_preset_names: Vec::new(),
             set_selected: None,
+            patcher_instance_names: Vec::new(),
+            patcher_instance_indexes: Vec::new(),
         }
     }
 
@@ -202,6 +205,10 @@ impl Context {
 
     fn set_presets_len(&self) -> usize {
         self.set_preset_names.len()
+    }
+
+    fn patcher_instances_len(&self) -> usize {
+        self.patcher_instance_names.len()
     }
 
     async fn set_select(&mut self, index: usize) {
@@ -247,6 +254,23 @@ impl Context {
 
     fn set_preset_names(&self) -> &Vec<String> {
         &self.set_preset_names
+    }
+
+    fn set_patchers(&mut self, instances: &HashMap<usize, PatcherInst>) {
+        self.patcher_instance_indexes = instances.keys().map(|k| *k).collect();
+        self.patcher_instance_indexes.sort();
+        self.patcher_instance_names.clear();
+        for i in self.patcher_instance_indexes.iter() {
+            self.patcher_instance_names.push(format!(
+                "{}: {}",
+                i,
+                instances.get(&i).unwrap().name()
+            ));
+        }
+    }
+
+    fn patcher_instance_names(&self) -> &Vec<String> {
+        &self.patcher_instance_names
     }
 
     fn light_button(&mut self, btn: u8, val: u8) {
@@ -323,6 +347,8 @@ impl StateController {
     }
 
     pub fn set_state(&mut self, instances: HashMap<usize, PatcherInst>) {
+        self.context_mut().set_patchers(&instances);
+
         let mut params: HashMap<String, usize> = HashMap::new();
         for (index, v) in instances.iter() {
             for p in v.params().iter() {
@@ -604,7 +630,7 @@ impl StateController {
                     self.display_centered("Press wheel to\nshut down").await;
                 }
                 States::Menu(selected) => {
-                    let selected: usize = *selected as _;
+                    let selected: usize = *selected;
                     {
                         let display = self.locked_display().await;
                         draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected);
@@ -632,6 +658,23 @@ impl StateController {
                             display,
                             &"Load Set Preset",
                             self.context().set_preset_names(),
+                            selected,
+                        );
+                    }
+
+                    self.context_mut()
+                        .light_button(MENU_MIDI, MoveColor::Black as _);
+                    self.context_mut()
+                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                }
+                States::PatcherInstances(selected) => {
+                    let selected = *selected;
+                    {
+                        let display = self.locked_display().await;
+                        draw_menu(
+                            display,
+                            &"Patcher Instances",
+                            self.context().patcher_instance_names(),
                             selected,
                         );
                     }
