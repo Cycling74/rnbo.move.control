@@ -175,6 +175,9 @@ impl Context {
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
         display: &mut Rc<Mutex<MoveDisplay>>,
     ) -> Self {
+        //send a reset
+        let _ = midi_out_queue.send(Midi::reset());
+
         Self {
             display: display.clone(),
             midi_out_queue,
