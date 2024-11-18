@@ -1,3 +1,5 @@
+use crate::param::Param;
+
 use {
     crate::{display::MoveDisplay, midi::Midi, patcher::PatcherInst},
     embedded_graphics::{
@@ -34,6 +36,8 @@ pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
 
 const VOLUME_WHEEL_ENCODER: usize = 9;
 const JOG_WHEEL_ENCODER: usize = 10;
+
+const PARAM_PAGE_SIZE: usize = 8;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -99,6 +103,7 @@ enum Events {
     BtnDown(Button),
     EncLeft(usize),
     EncRight(usize),
+    EncTouch(usize),
 
     ParamUpdate(ParamUpdate),
     Transport(bool),
@@ -141,6 +146,20 @@ smlang::statemachine! {
         SetPresetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_preset_select(*state).await;,
 
         PatcherInstances(usize) + BtnDown(Button::Back) = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherInstances(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instances_len() > *state + 1] = PatcherInstances(*state + 1),
+        PatcherInstances(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PatcherInstances(*state - 1),
+        PatcherInstances(usize) + BtnDown(Button::JogWheel) = PatcherParams((*state, 0)),
+
+        PatcherParams((usize, usize)) + BtnDown(Button::Back) = PatcherInstances(state.0),
+        PatcherParams((usize, usize)) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.0) > state.1 + 1] = PatcherParams((state.0, state.1 + 1)),
+        PatcherParams((usize, usize)) + EncLeft(JOG_WHEEL_ENCODER) [state.1 > 0] = PatcherParams((state.0 , state.1 - 1)),
+
+        PatcherParams((usize, usize)) + EncTouch(_) [*event < 8] = PatcherParamDetail((state.0 , state.1, *event)),
+        PatcherParamDetail((usize, usize, usize)) + EncTouch(_) [*event < 8] = PatcherParamDetail((state.0 , state.1, *event)),
+
+        PatcherParamDetail((usize, usize, usize)) + BtnDown(Button::Back) = PatcherParams((state.0, state.1)),
+        PatcherParamDetail((usize, usize, usize)) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.0) > state.1 + 1] = PatcherParamDetail((state.0, state.1 + 1, state.2)),
+        PatcherParamDetail((usize, usize, usize)) + EncLeft(JOG_WHEEL_ENCODER) [state.1 > 0] = PatcherParamDetail((state.0 , state.1 - 1, state.2)),
 
         _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
         _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
@@ -168,6 +187,7 @@ struct Context {
     set_preset_names: Vec<String>,
     patcher_instance_names: Vec<String>,
     patcher_instance_indexes: Vec<usize>,
+    patcher_params: HashMap<usize, Vec<Param>>,
     set_selected: Option<String>,
 }
 
@@ -190,6 +210,7 @@ impl Context {
             set_selected: None,
             patcher_instance_names: Vec::new(),
             patcher_instance_indexes: Vec::new(),
+            patcher_params: HashMap::new(),
         }
     }
 
@@ -209,6 +230,27 @@ impl Context {
 
     fn patcher_instances_len(&self) -> usize {
         self.patcher_instance_names.len()
+    }
+
+    fn patcher_instance_param_pages(&self, instance: usize) -> usize {
+        self.patcher_params
+            .get(&instance)
+            .map(|params| {
+                params.len() / PARAM_PAGE_SIZE
+                    + if params.len() % PARAM_PAGE_SIZE == 0 {
+                        0
+                    } else {
+                        1
+                    }
+            })
+            .unwrap_or(0)
+    }
+
+    fn patcher_instance_params(&self, instance: usize) -> usize {
+        self.patcher_params
+            .get(&instance)
+            .map(|params| params.len())
+            .unwrap_or(0)
     }
 
     async fn set_select(&mut self, index: usize) {
@@ -260,12 +302,15 @@ impl Context {
         self.patcher_instance_indexes = instances.keys().map(|k| *k).collect();
         self.patcher_instance_indexes.sort();
         self.patcher_instance_names.clear();
+        self.patcher_params.clear();
+
         for i in self.patcher_instance_indexes.iter() {
-            self.patcher_instance_names.push(format!(
-                "{}: {}",
-                i,
-                instances.get(&i).unwrap().name()
-            ));
+            let inst = instances.get(&i).unwrap();
+            let mut params = inst.params().clone();
+            params.sort_by(|a, b| a.index().cmp(&b.index()));
+            self.patcher_params.insert(*i, params);
+            self.patcher_instance_names
+                .push(format!("{}: {}", i, inst.name()));
         }
     }
 
@@ -469,7 +514,8 @@ impl StateController {
         match bytes[0] {
             0x90 => {
                 self.sysex.clear();
-                if bytes[1] < 10 {
+                if bytes[1] < 10 && bytes[2] != 0 {
+                    self.handle_event(Events::EncTouch(bytes[1] as usize)).await;
                     //0..7 params
                     //8 volume
                     //9 jog wheel
@@ -683,6 +729,57 @@ impl StateController {
                         .light_button(MENU_MIDI, MoveColor::Black as _);
                     self.context_mut()
                         .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                }
+                States::PatcherParams((instance, page)) => {
+                    //XXX optimise
+                    {
+                        let instance = *instance;
+                        let page = *page;
+                        let name = self.context().patcher_instance_names.get(instance).unwrap();
+
+                        let mut title = format!("{} Params", name);
+                        if title.len() > 16 {
+                            title.truncate(14);
+                            title.push_str("..");
+                        }
+
+                        let pages = self.context().patcher_instance_param_pages(instance);
+                        let mut names = Vec::new();
+                        for p in 0..pages {
+                            names.push(format!("Page {}", p + 1));
+                        }
+
+                        let display = self.locked_display().await;
+                        draw_menu(display, title.as_str(), names.as_slice(), page);
+                    }
+
+                    self.context_mut()
+                        .light_button(MENU_MIDI, MoveColor::Black as _);
+                    self.context_mut()
+                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                }
+                States::PatcherParamDetail((instance, page, offset)) => {
+                    let instance = *instance;
+                    let index = *page + *offset;
+
+                    let mut display = self.locked_display().await;
+                    let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+                    display.clear(BinaryColor::Off).unwrap();
+                    let size = display.size();
+
+                    if let Some(inst) = self.instances.get(&instance) {
+                        if let Some(param) = inst.params().get(index) {
+                            let s = format!("{}\n{}", param.name(), param.render_value());
+                            Text::with_alignment(
+                                s.as_str(),
+                                Point::new(size.width as i32 / 2, size.height as i32 / 2),
+                                style,
+                                Alignment::Center,
+                            )
+                            .draw(display.deref_mut())
+                            .unwrap();
+                        }
+                    }
                 }
                 _ => (),
             }
