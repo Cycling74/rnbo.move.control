@@ -161,6 +161,11 @@ smlang::statemachine! {
         PatcherParamDetail((usize, usize, usize)) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.0) > state.1 + 1] = PatcherParamDetail((state.0, state.1 + 1, state.2)),
         PatcherParamDetail((usize, usize, usize)) + EncLeft(JOG_WHEEL_ENCODER) [state.1 > 0] = PatcherParamDetail((state.0 , state.1 - 1, state.2)),
 
+        PatcherParamDetail((usize, usize, usize)) + EncLeft(_) [*event < 8] / ctx.offset_param(state.0, state.2, -1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
+        PatcherParamDetail((usize, usize, usize)) + EncRight(_) [*event < 8] / ctx.offset_param(state.0, state.2, 1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
+
+        PatcherParamDetail((usize, usize, usize)) + ParamUpdate(_) [state.0 == event.instance] = PatcherParamDetail((state.0 , state.1, state.2)), //TODO filter by index
+
         _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
         _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
         _ + Tempo(_) / ctx.update_tempo(*event);,
@@ -170,9 +175,7 @@ smlang::statemachine! {
 }
 
 pub struct StateController {
-    pub instances: HashMap<usize, PatcherInst>,
     pub params: HashMap<String, usize>,
-    pub selected_param: Option<(usize, usize)>,
     sysex: Vec<u8>,
     statemachine: StateMachine,
 }
@@ -322,6 +325,55 @@ impl Context {
         let _ = self.midi_out_queue.send(Midi::cc(btn, val, 0));
     }
 
+    async fn offset_param(&mut self, instance: usize, index: usize, offset: isize) {
+        if let Some(instance) = self.patcher_params.get_mut(&instance) {
+            if let Some(param) = instance.get_mut(index) {
+                let mut args = Vec::new();
+                let step = 0.01; //TODO allow for other step sizes
+                                 //operate on the normalized value.. TODO, change step
+                let v = (param.norm() + if offset > 0 { step } else { -step }).clamp(0.0, 1.0);
+                param.set_norm(v);
+                args.push(OscType::Double(v));
+                let msg = OscMessage {
+                    addr: format!("{}/normalized", param.addr()),
+                    args,
+                };
+                self.send_osc(msg).await;
+            }
+        }
+    }
+
+    fn update_param(&mut self, instance: usize, msg: &OscMessage) -> Option<(usize, usize)> {
+        //TODO get norm from OSC
+        if let Some(params) = self.patcher_params.get_mut(&instance) {
+            if let Some((index, p)) = params
+                .iter_mut()
+                .enumerate()
+                .find(|(_, p)| p.addr() == msg.addr)
+            {
+                match &msg.args[0] {
+                    OscType::Double(v) => p.update_f64(*v),
+                    OscType::Float(v) => p.update_f64(*v as f64),
+                    OscType::Int(v) => p.update_f64(*v as f64),
+                    OscType::String(v) => p.update_s(v),
+                    _ => {
+                        return None;
+                    }
+                }
+                return Some((instance, index));
+            }
+        }
+        None
+    }
+
+    fn param(&self, instance: usize, index: usize) -> Option<&Param> {
+        if let Some(params) = self.patcher_params.get(&instance) {
+            params.get(index)
+        } else {
+            None
+        }
+    }
+
     fn update_tempo(&mut self, v: f32) {
         self.bpm = v;
         //TODO
@@ -368,9 +420,7 @@ impl StateController {
         context.light_button(PLAY_MIDI, MoveColor::LightGray as _);
 
         Self {
-            instances: HashMap::new(),
             params: HashMap::new(),
-            selected_param: None,
             sysex: Vec::new(),
             statemachine: StateMachine::new(context),
         }
@@ -400,7 +450,6 @@ impl StateController {
                 params.insert(p.addr().to_string(), *index);
             }
         }
-        self.instances = instances;
         self.params = params;
     }
 
@@ -414,38 +463,10 @@ impl StateController {
         self.handle_event(Events::SetPresetNamesChanged).await;
     }
 
-    pub async fn select_param(&mut self, v: Option<(usize, usize)>) {
-        self.selected_param = v;
-        self.render_param().await;
-    }
-
-    pub async fn render_param(&mut self) {
-        let mut display = self.locked_display().await;
-        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-        display.clear(BinaryColor::Off).unwrap();
-        let size = display.size();
-
-        if let Some((inst, param)) = self.selected_param {
-            if let Some(inst) = self.instances.get(&inst) {
-                if let Some(param) = inst.params().get(param) {
-                    let s = format!("{}\n{}", param.name(), param.render_value());
-                    Text::with_alignment(
-                        s.as_str(),
-                        Point::new(size.width as i32 / 2, size.height as i32 / 2),
-                        style,
-                        Alignment::Center,
-                    )
-                    .draw(display.deref_mut())
-                    .unwrap();
-                }
-            }
-        }
-    }
-
     pub async fn handle_osc(&mut self, msg: &OscMessage) {
         if msg.args.len() == 1 {
             println!("got osc {}", msg.addr);
-            let mut update = None;
+            //let mut update = None;
             match msg.addr.as_str() {
                 TRANSPORT_ROLLING_ADDR => {
                     if let OscType::Bool(rolling) = msg.args[0] {
@@ -462,23 +483,13 @@ impl StateController {
                     }
                 }
                 _ => {
-                    if let Some(instance) = self.params.get(&msg.addr) {
-                        if let Some(inst) = self.instances.get_mut(&instance) {
-                            if let Some(index) = match &msg.args[0] {
-                                OscType::Double(v) => inst.update_param_f64(&msg.addr, *v),
-                                OscType::Float(v) => inst.update_param_f64(&msg.addr, *v as f64),
-                                OscType::Int(v) => inst.update_param_f64(&msg.addr, *v as f64),
-                                OscType::String(v) => inst.update_param_s(&msg.addr, v),
-                                _ => None,
-                            } {
-                                update = Some((*instance, index));
-                            }
+                    if let Some(instance) = self.params.get(&msg.addr).map(|i| *i) {
+                        if let Some((instance, index)) =
+                            self.context_mut().update_param(instance, msg)
+                        {
+                            self.handle_event(Events::ParamUpdate(ParamUpdate { instance, index }))
+                                .await;
                         }
-                    }
-
-                    if let Some((instance, index)) = update {
-                        self.handle_event(Events::ParamUpdate(ParamUpdate { instance, index }))
-                            .await;
                     }
                 }
             }
@@ -566,33 +577,13 @@ impl StateController {
                         let index = (index - 71) as usize;
                         match bytes[2] {
                             1 => {
-                                self.handle_event(Events::EncLeft(index)).await;
+                                self.handle_event(Events::EncRight(index)).await;
                             }
                             127 => {
                                 self.handle_event(Events::EncLeft(index)).await;
                             }
                             _ => (),
                         }
-
-                        /*
-                        let inst = 0;
-                        let index = (index - 71) as usize;
-                        let v = bytes[2];
-                        //left == 127
-                        //right == 1
-                        if let Some(msg) = self.render_osc(inst, index, v as isize) {
-                            let packet = OscPacket::Message(msg);
-                            if let Ok(msg) = rosc::encoder::encode(&packet) {
-                                let mut tx = ws_tx.lock().await;
-                                if let Some(tx) = tx.deref_mut() {
-                                    let _ = tx.send(Message::Binary(msg)).await;
-                                }
-                            }
-                        }
-                        if self.selected_param != Some((0, index)) {
-                            self.select_param(Some((0, index))).await;
-                        }
-                        */
                     }
                     _ => (),
                 }
@@ -622,24 +613,6 @@ impl StateController {
                 }
             }
         }
-    }
-
-    pub fn render_osc(&mut self, inst: usize, param: usize, v: isize) -> Option<OscMessage> {
-        if let Some(inst) = self.instances.get_mut(&inst) {
-            if let Some(param) = inst.params_mut().get_mut(param) {
-                let mut args = Vec::new();
-                let step = 0.01;
-                //operate on the normalized value.. TODO, change step
-                let v = (param.norm() + if v < 64 { step } else { -step }).clamp(0.0, 1.0);
-                param.set_norm(v); //TODO get norm from OSC
-                args.push(OscType::Double(v));
-                return Some(OscMessage {
-                    addr: format!("{}/normalized", param.addr()),
-                    args,
-                });
-            }
-        }
-        None
     }
 
     async fn display_centered(&mut self, text: &str) {
@@ -760,25 +733,27 @@ impl StateController {
                 }
                 States::PatcherParamDetail((instance, page, offset)) => {
                     let instance = *instance;
-                    let index = *page + *offset;
+                    let index = *page * PARAM_PAGE_SIZE + *offset;
+
+                    let s = self
+                        .context()
+                        .param(instance, index)
+                        .map(|param| format!("{}\n{}", param.name(), param.render_value()));
 
                     let mut display = self.locked_display().await;
                     let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
                     display.clear(BinaryColor::Off).unwrap();
-                    let size = display.size();
 
-                    if let Some(inst) = self.instances.get(&instance) {
-                        if let Some(param) = inst.params().get(index) {
-                            let s = format!("{}\n{}", param.name(), param.render_value());
-                            Text::with_alignment(
-                                s.as_str(),
-                                Point::new(size.width as i32 / 2, size.height as i32 / 2),
-                                style,
-                                Alignment::Center,
-                            )
-                            .draw(display.deref_mut())
-                            .unwrap();
-                        }
+                    if let Some(s) = s {
+                        let size = display.size();
+                        Text::with_alignment(
+                            s.as_str(),
+                            Point::new(size.width as i32 / 2, size.height as i32 / 2),
+                            style,
+                            Alignment::Center,
+                        )
+                        .draw(display.deref_mut())
+                        .unwrap();
                     }
                 }
                 _ => (),
