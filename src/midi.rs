@@ -5,17 +5,20 @@ pub struct Midi {
 
 impl Midi {
     pub fn new(v: &[u8]) -> Self {
+        assert!(v.len() <= 3);
         let mut bytes = [0; 3];
-        bytes.copy_from_slice(v);
-
-        if v.len() != 3 {
-            println!("got midi that isn't 3 bytes: {:?}", v);
+        for (b, i) in bytes.iter_mut().zip(v) {
+            *b = *i;
         }
 
         Self {
             bytes,
             len: v.len(),
         }
+    }
+
+    pub fn reset() -> Self {
+        Self::new(&[0xFF])
     }
 
     pub fn cc(num: u8, val: u8, chan: u8) -> Self {
