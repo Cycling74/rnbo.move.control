@@ -65,14 +65,14 @@
 
 use std::cmp::{Ordering, PartialEq, PartialOrd};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ParamDetail {
     Float { val: f64, min: f64, max: f64 },
     Bool(bool),
     Enum(usize, Vec<String>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Param {
     index: usize,
     addr: String,
