@@ -63,7 +63,12 @@
 }
 */
 
-use std::cmp::{Ordering, PartialEq, PartialOrd};
+use std::{
+    cmp::PartialOrd,
+    time::{Duration, Instant},
+};
+
+const NORM_PENDING_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone)]
 pub enum ParamDetail {
@@ -75,29 +80,16 @@ pub enum ParamDetail {
 #[derive(Debug, Clone)]
 pub struct Param {
     index: usize,
+
     addr: String,
+    addr_norm: String,
+
     name: String,
     detail: ParamDetail,
+
     norm: f64,
-}
-
-#[derive(PartialEq, Debug)]
-pub struct ParamNormUpdate {
-    time: std::time::Instant,
-    inst: usize,
-    index: usize,
-    val: f64,
-}
-
-impl PartialOrd for ParamNormUpdate {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        (self.time, self.inst, self.index, self.val).partial_cmp(&(
-            other.time,
-            other.inst,
-            other.index,
-            other.val,
-        ))
-    }
+    norm_update_last: Instant,
+    norm_pending: Option<(f64, Instant)>,
 }
 
 impl Param {
@@ -108,16 +100,31 @@ impl Param {
         self.addr.as_str()
     }
 
+    pub fn addr_norm(&self) -> &str {
+        self.addr_norm.as_str()
+    }
+
     pub fn name(&self) -> &str {
         self.name.as_str()
     }
 
-    pub fn norm(&self) -> f64 {
+    pub fn norm(&mut self) -> f64 {
+        if let Some((v, time)) = self.norm_pending {
+            if time + NORM_PENDING_DELAY < Instant::now() {
+                self.norm = v;
+                self.norm_pending = None;
+            }
+        }
         self.norm
     }
 
     pub fn set_norm(&mut self, v: f64) {
         self.norm = v;
+        self.norm_update_last = Instant::now();
+    }
+
+    pub fn set_norm_pending(&mut self, v: f64) {
+        self.norm_pending = Some((v, Instant::now()));
     }
 
     pub fn detail(&self) -> &ParamDetail {
@@ -156,16 +163,13 @@ impl Param {
         }
     }
 
-    pub fn update_norm(&mut self, v: f64) {
-        self.norm = v;
-    }
-
     pub fn parse(json: &serde_json::Value) -> Option<Self> {
         if let serde_json::Value::Object(obj) = json {
             let range = obj.get("RANGE")?.as_array()?.get(0)?.as_object()?;
             let addr = obj.get("FULL_PATH")?.as_str()?.to_string();
             let name = addr.split("/params/").nth(1)?.to_string();
             let contents = obj.get("CONTENTS")?;
+            let addr_norm = format!("{}/normalized", addr);
 
             let norm = contents
                 .get("normalized")?
@@ -195,9 +199,12 @@ impl Param {
                     Some(Param {
                         index,
                         addr,
+                        addr_norm,
                         name,
                         detail,
                         norm,
+                        norm_update_last: Instant::now(),
+                        norm_pending: None,
                     })
                 }
                 "f" => {
@@ -210,9 +217,12 @@ impl Param {
                     Some(Param {
                         index,
                         addr,
+                        addr_norm,
                         name,
                         detail,
                         norm,
+                        norm_update_last: Instant::now(),
+                        norm_pending: None,
                     })
                 }
                 _ => None,

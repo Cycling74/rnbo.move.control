@@ -176,6 +176,7 @@ smlang::statemachine! {
 
 pub struct StateController {
     pub params: HashMap<String, usize>,
+    pub params_norm: HashMap<String, usize>,
     sysex: Vec<u8>,
     statemachine: StateMachine,
 }
@@ -335,7 +336,7 @@ impl Context {
                 param.set_norm(v);
                 args.push(OscType::Double(v));
                 let msg = OscMessage {
-                    addr: format!("{}/normalized", param.addr()),
+                    addr: param.addr_norm().to_string(),
                     args,
                 };
                 self.send_osc(msg).await;
@@ -364,6 +365,23 @@ impl Context {
             }
         }
         None
+    }
+
+    fn update_param_norm(&mut self, instance: usize, msg: &OscMessage) {
+        if let Some(params) = self.patcher_params.get_mut(&instance) {
+            if let Some((_index, p)) = params
+                .iter_mut()
+                .enumerate()
+                .find(|(_, p)| p.addr_norm() == msg.addr)
+            {
+                match &msg.args[0] {
+                    OscType::Double(v) => p.set_norm_pending(*v),
+                    OscType::Float(v) => p.set_norm_pending(*v as f64),
+                    OscType::Int(v) => p.set_norm_pending(*v as f64),
+                    _ => (),
+                }
+            }
+        }
     }
 
     fn param(&self, instance: usize, index: usize) -> Option<&Param> {
@@ -421,6 +439,7 @@ impl StateController {
 
         Self {
             params: HashMap::new(),
+            params_norm: HashMap::new(),
             sysex: Vec::new(),
             statemachine: StateMachine::new(context),
         }
@@ -445,12 +464,16 @@ impl StateController {
         self.context_mut().set_patchers(&instances);
 
         let mut params: HashMap<String, usize> = HashMap::new();
+        let mut params_norm: HashMap<String, usize> = HashMap::new();
+
         for (index, v) in instances.iter() {
             for p in v.params().iter() {
                 params.insert(p.addr().to_string(), *index);
+                params_norm.insert(p.addr_norm().to_string(), *index);
             }
         }
         self.params = params;
+        self.params_norm = params_norm;
     }
 
     pub async fn set_set_names(&mut self, names: &Vec<String>) {
@@ -490,6 +513,8 @@ impl StateController {
                             self.handle_event(Events::ParamUpdate(ParamUpdate { instance, index }))
                                 .await;
                         }
+                    } else if let Some(instance) = self.params_norm.get(&msg.addr).map(|i| *i) {
+                        self.context_mut().update_param_norm(instance, msg);
                     }
                 }
             }
