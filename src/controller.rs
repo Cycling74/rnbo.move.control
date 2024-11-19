@@ -150,7 +150,7 @@ smlang::statemachine! {
         PatcherInstances(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PatcherInstances(*state - 1),
         PatcherInstances(usize) + BtnDown(Button::JogWheel) = PatcherParams((*state, 0)),
 
-        PatcherParams((usize, usize)) + BtnDown(Button::Back) = PatcherInstances(state.0),
+        PatcherParams((usize, usize)) + BtnDown(Button::Back) / ctx.clear_params(); = PatcherInstances(state.0),
         PatcherParams((usize, usize)) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.0) > state.1 + 1] = PatcherParams((state.0, state.1 + 1)),
         PatcherParams((usize, usize)) + EncLeft(JOG_WHEEL_ENCODER) [state.1 > 0] = PatcherParams((state.0 , state.1 - 1)),
 
@@ -411,16 +411,36 @@ impl Context {
         }
     }
 
+    fn clear_params(&mut self) {
+        for index in 0..PARAM_PAGE_SIZE {
+            let num = index + 71;
+            let _ = self
+                .midi_out_queue
+                .send(Midi::cc(num as u8, MoveColor::Black as _, 0));
+        }
+    }
+
     fn render_param(&mut self, instance: usize, index: usize) {
-        if let Some(p) = self.param(instance, index) {
-            let value = (p.norm_prefer_pending() * 127.0).clamp(0.0, 127.0) as u8;
-            let num = (index % PARAM_PAGE_SIZE) as u8 + 71;
+        let num = (index % PARAM_PAGE_SIZE) as u8 + 71;
+        if let Some(_p) = self.param(instance, index) {
             let _ = self
                 .midi_out_queue
                 .send(Midi::cc(num, MoveColor::Red as _, 0));
 
-            //let _ = self.midi_out_queue.send(Midi::note_on(num, value, 0));
+            //XXX how to set brightness??
+
+            /*
+            let value = (p.norm_prefer_pending() * 127.0).clamp(0.0, 127.0) as u8;
             println!("render {} {} {} {}", instance, index, num, value);
+
+            let _ = self
+                .midi_out_queue
+                .send(Midi::cc((index % PARAM_PAGE_SIZE) as _, value, 0));
+            */
+        } else {
+            let _ = self
+                .midi_out_queue
+                .send(Midi::cc(num, MoveColor::Black as _, 0));
         }
     }
 
