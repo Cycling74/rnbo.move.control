@@ -118,6 +118,15 @@ impl Param {
         self.norm
     }
 
+    //get the pending value, useful for drawing
+    pub fn norm_prefer_pending(&self) -> f64 {
+        if let Some((v, _time)) = self.norm_pending {
+            v
+        } else {
+            self.norm
+        }
+    }
+
     pub fn set_norm(&mut self, v: f64) {
         self.norm = v;
         self.norm_update_last = Instant::now();
