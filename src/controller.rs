@@ -92,7 +92,7 @@ enum Button {
     EncoderTouch(usize),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 struct ParamUpdate {
     instance: usize,
     index: usize,
@@ -161,8 +161,8 @@ smlang::statemachine! {
         PatcherParamDetail((usize, usize, usize)) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.0) > state.1 + 1] = PatcherParamDetail((state.0, state.1 + 1, state.2)),
         PatcherParamDetail((usize, usize, usize)) + EncLeft(JOG_WHEEL_ENCODER) [state.1 > 0] = PatcherParamDetail((state.0 , state.1 - 1, state.2)),
 
-        PatcherParamDetail((usize, usize, usize)) + EncLeft(_) [*event < 8] / ctx.offset_param(state.0, state.2, -1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
-        PatcherParamDetail((usize, usize, usize)) + EncRight(_) [*event < 8] / ctx.offset_param(state.0, state.2, 1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
+        PatcherParamDetail((usize, usize, usize)) + EncLeft(_) [*event < 8] / ctx.offset_param(state.0, state.1, state.2, -1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
+        PatcherParamDetail((usize, usize, usize)) + EncRight(_) [*event < 8] / ctx.offset_param(state.0, state.1, state.2, 1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
 
         PatcherParamDetail((usize, usize, usize)) + ParamUpdate(_) [state.0 == event.instance] = PatcherParamDetail((state.0 , state.1, state.2)), //TODO filter by index
 
@@ -326,7 +326,8 @@ impl Context {
         let _ = self.midi_out_queue.send(Midi::cc(btn, val, 0));
     }
 
-    async fn offset_param(&mut self, instance: usize, index: usize, offset: isize) {
+    async fn offset_param(&mut self, instance: usize, page: usize, index: usize, offset: isize) {
+        let index = page * PARAM_PAGE_SIZE + index;
         if let Some(instance) = self.patcher_params.get_mut(&instance) {
             if let Some(param) = instance.get_mut(index) {
                 let mut args = Vec::new();
@@ -367,21 +368,39 @@ impl Context {
         None
     }
 
-    fn update_param_norm(&mut self, instance: usize, msg: &OscMessage) {
+    //return is instance index, param index, norm value
+    fn update_param_norm(
+        &mut self,
+        instance: usize,
+        msg: &OscMessage,
+    ) -> Option<(usize, usize, f64)> {
         if let Some(params) = self.patcher_params.get_mut(&instance) {
-            if let Some((_index, p)) = params
+            if let Some((index, p)) = params
                 .iter_mut()
                 .enumerate()
                 .find(|(_, p)| p.addr_norm() == msg.addr)
             {
-                match &msg.args[0] {
-                    OscType::Double(v) => p.set_norm_pending(*v),
-                    OscType::Float(v) => p.set_norm_pending(*v as f64),
-                    OscType::Int(v) => p.set_norm_pending(*v as f64),
-                    _ => (),
-                }
+                let v = match &msg.args[0] {
+                    OscType::Double(v) => {
+                        p.set_norm_pending(*v);
+                        Some(*v)
+                    }
+                    OscType::Float(v) => {
+                        let v = *v as f64;
+                        p.set_norm_pending(v);
+                        Some(v)
+                    }
+                    OscType::Int(v) => {
+                        let v = *v as f64;
+                        p.set_norm_pending(v);
+                        Some(v)
+                    }
+                    _ => None,
+                };
+                return v.map(|v| (instance, index, v));
             }
         }
+        None
     }
 
     fn param(&self, instance: usize, index: usize) -> Option<&Param> {
@@ -389,6 +408,26 @@ impl Context {
             params.get(index)
         } else {
             None
+        }
+    }
+
+    fn render_param(&mut self, instance: usize, index: usize) {
+        if let Some(p) = self.param(instance, index) {
+            let value = (p.norm_prefer_pending() * 127.0).clamp(0.0, 127.0) as u8;
+            let num = (index % PARAM_PAGE_SIZE) as u8 + 71;
+            let _ = self
+                .midi_out_queue
+                .send(Midi::cc(num, MoveColor::Red as _, 0));
+
+            //let _ = self.midi_out_queue.send(Midi::note_on(num, value, 0));
+            println!("render {} {} {} {}", instance, index, num, value);
+        }
+    }
+
+    fn render_param_page(&mut self, instance: usize, page: usize) {
+        let offset = page * PARAM_PAGE_SIZE;
+        for index in 0..PARAM_PAGE_SIZE {
+            self.render_param(instance, index + offset);
         }
     }
 
@@ -514,7 +553,12 @@ impl StateController {
                                 .await;
                         }
                     } else if let Some(instance) = self.params_norm.get(&msg.addr).map(|i| *i) {
-                        self.context_mut().update_param_norm(instance, msg);
+                        if let Some((instance, index, _value)) =
+                            self.context_mut().update_param_norm(instance, msg)
+                        {
+                            self.handle_event(Events::ParamUpdate(ParamUpdate { instance, index }))
+                                .await;
+                        }
                     }
                 }
             }
@@ -729,10 +773,10 @@ impl StateController {
                         .light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
                 States::PatcherParams((instance, page)) => {
+                    let instance = *instance;
+                    let page = *page;
                     //XXX optimise
                     {
-                        let instance = *instance;
-                        let page = *page;
                         let name = self.context().patcher_instance_names.get(instance).unwrap();
 
                         let mut title = format!("{} Params", name);
@@ -751,35 +795,40 @@ impl StateController {
                         draw_menu(display, title.as_str(), names.as_slice(), page);
                     }
 
-                    self.context_mut()
-                        .light_button(MENU_MIDI, MoveColor::Black as _);
-                    self.context_mut()
-                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                    let ctx = self.context_mut();
+                    ctx.render_param_page(instance, page);
+                    ctx.light_button(MENU_MIDI, MoveColor::Black as _);
+                    ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
                 States::PatcherParamDetail((instance, page, offset)) => {
                     let instance = *instance;
-                    let index = *page * PARAM_PAGE_SIZE + *offset;
+                    let page = *page;
+                    let index = page * PARAM_PAGE_SIZE + *offset;
 
-                    let s = self
-                        .context()
-                        .param(instance, index)
-                        .map(|param| format!("{}\n{}", param.name(), param.render_value()));
+                    {
+                        let s = self
+                            .context()
+                            .param(instance, index)
+                            .map(|param| format!("{}\n{}", param.name(), param.render_value()));
 
-                    let mut display = self.locked_display().await;
-                    let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-                    display.clear(BinaryColor::Off).unwrap();
+                        let mut display = self.locked_display().await;
+                        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+                        display.clear(BinaryColor::Off).unwrap();
 
-                    if let Some(s) = s {
-                        let size = display.size();
-                        Text::with_alignment(
-                            s.as_str(),
-                            Point::new(size.width as i32 / 2, size.height as i32 / 2),
-                            style,
-                            Alignment::Center,
-                        )
-                        .draw(display.deref_mut())
-                        .unwrap();
+                        if let Some(s) = s {
+                            let size = display.size();
+                            Text::with_alignment(
+                                s.as_str(),
+                                Point::new(size.width as i32 / 2, size.height as i32 / 2),
+                                style,
+                                Alignment::Center,
+                            )
+                            .draw(display.deref_mut())
+                            .unwrap();
+                        }
                     }
+                    let ctx = self.context_mut();
+                    ctx.render_param_page(instance, page);
                 }
                 _ => (),
             }
