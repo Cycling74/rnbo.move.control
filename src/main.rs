@@ -71,25 +71,41 @@ impl jack::ProcessHandler for Driver {
         let midi_in = self.midi_in.iter(ps);
         let mut midi_out = self.midi_out.writer(ps);
         for i in midi_in {
-            //only send pad buttons and step buttons thru
-            let thru = if i.bytes.len() == 3 {
-                match i.bytes[0] {
+            //only filter out sysex, jog wheel, volume, back and menu
+            //optionally (TODO) filter out encoders
+            let filter = match i.bytes.len() {
+                3 => match i.bytes[0] {
+                    //Note on/off
                     0x90 | 0x80 => match i.bytes[1] {
-                        //pad butttons, step buttons
-                        68..=99 | 16..=31 => true,
+                        //encoders, volume, wheel
+                        0..=9 => true,
                         _ => false,
                     },
-                    0xD0 => true,
-                    _ => false,
+                    //CC
+                    0xB0 => match i.bytes[1] {
+                        //wheel press/turn, back, play/stop, menu (session/note)
+                        3 | 14 | 51 | 85 | 50 => true,
+                        //encoders.., volume
+                        71..=79 => true,
+                        _ => false,
+                    },
+                    //sysex
+                    0xF0 | 0xF7 => true,
+                    _ => i.bytes[0] & 0x80 == 0 && (i.bytes[1] == 0xF7 || i.bytes[2] == 0xF7), //sysex end
+                },
+                2 => i.bytes[0] & 0x80 == 0 && i.bytes[1] == 0xF7,
+                1 => i.bytes[0] == 0xF7,
+                _ => {
+                    println!("unhandled {} byte MIDI message", i.bytes.len());
+                    continue;
                 }
-            } else {
-                false
             };
-            if thru {
-                midi_out.write(&i).unwrap();
-            } else {
+
+            if filter {
                 //println!("not thru {:02x?}", i.bytes);
                 let _ = self.midi_in_queue.try_send(Midi::new(i.bytes));
+            } else {
+                midi_out.write(&i).unwrap();
             }
         }
 
