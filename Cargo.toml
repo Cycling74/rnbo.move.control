@@ -21,3 +21,4 @@ tokio = { version = "1.36.0", features = ["full"] }
 smlang = { git = "https://github.com/x37v/smlang-rs", branch = "main" }
 serde = { version = "1.0.215", features = ["std", "derive"] }
 embedded-layout = "0.4.1"
+itertools = "0.13.0"
