@@ -12,8 +12,8 @@ use {
     },
     futures_util::{stream::SplitSink, SinkExt, StreamExt, TryStreamExt},
     jack::{
-        Client, ClientOptions, Control, MidiIn, MidiOut, Port, PortId, ProcessScope, RawMidi,
-        Unowned,
+        AudioIn, AudioOut, Client, ClientOptions, Control, MidiIn, MidiOut, Port, PortId,
+        ProcessScope, RawMidi, Unowned,
     },
     param::Param,
     patcher::PatcherInst,
@@ -22,12 +22,14 @@ use {
     rosc::{OscMessage, OscPacket, OscType},
     serde::{Deserialize, Serialize},
     std::{
-        cmp::{Ordering, PartialEq, PartialOrd},
         collections::HashMap,
         error::Error,
         ops::{Deref, DerefMut},
         rc::Rc,
-        sync::mpsc as sync_mpsc,
+        sync::{
+            atomic::{AtomicU8, Ordering},
+            mpsc as sync_mpsc, Arc,
+        },
         thread,
         time::{Duration, Instant},
     },
@@ -169,6 +171,84 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
         disconnect_queue: disconnect_tx,
     };
 
+    //volume control
+    let volume = Arc::new(AtomicU8::new(255)); //TODO get from cache
+    let volumeclient = {
+        let volume = volume.clone();
+        let (volumeclient, _status) =
+            jack::Client::new("move-volume", jack::ClientOptions::empty()).unwrap();
+        let in0 = volumeclient
+            .register_port("in0", AudioIn)
+            .expect("error creating in0");
+        let in1 = volumeclient
+            .register_port("in1", AudioIn)
+            .expect("error creating in1");
+
+        let mut out0 = volumeclient
+            .register_port("out0", AudioOut)
+            .expect("error creating out0");
+        let mut out1 = volumeclient
+            .register_port("out1", AudioOut)
+            .expect("error creating out1");
+
+        let mut volume_last: u8 = 255;
+        let mut volume_last_f: f32 = 1.0;
+
+        let process_callback = move |_: &jack::Client, ps: &jack::ProcessScope| -> jack::Control {
+            let out0 = out0.as_mut_slice(ps);
+            let out1 = out1.as_mut_slice(ps);
+            let in0 = in0.as_slice(ps);
+            let in1 = in1.as_slice(ps);
+
+            let volume = volume.load(Ordering::SeqCst);
+            if volume == volume_last {
+                if volume == 0xFF {
+                    out0.clone_from_slice(in0);
+                    out1.clone_from_slice(in1);
+                } else {
+                    for (o0, o1, i0, i1) in
+                        itertools::izip!(out0.iter_mut(), out1.iter_mut(), in0.iter(), in1.iter())
+                    {
+                        *o0 = *i0 * volume_last_f;
+                        *o1 = *i1 * volume_last_f;
+                    }
+                }
+            } else {
+                //fade
+                let frames = ps.n_frames();
+
+                let mut cur = volume_last as f32;
+                let step = (volume as f32 - cur) / (frames as f32);
+
+                for (o0, o1, i0, i1) in
+                    itertools::izip!(out0.iter_mut(), out1.iter_mut(), in0.iter(), in1.iter())
+                {
+                    volume_last_f = (cur / 255.0).powf(4.0).clamp(0.0, 1.0);
+                    *o0 = *i0 * volume_last_f;
+                    *o1 = *i1 * volume_last_f;
+
+                    cur += step;
+                }
+
+                volume_last = volume;
+            }
+            jack::Control::Continue
+        };
+        let process = jack::ClosureProcessHandler::new(process_callback);
+        let volumeclient = volumeclient.activate_async((), process).unwrap();
+
+        volumeclient
+            .as_client()
+            .connect_ports_by_name("move-volume:out0", "system:playback_1")
+            .unwrap();
+        volumeclient
+            .as_client()
+            .connect_ports_by_name("move-volume:out1", "system:playback_2")
+            .unwrap();
+
+        volumeclient
+    };
+
     let style = MonoTextStyle::new(&profont::PROFONT_24_POINT, BinaryColor::On);
     let size = display.size();
     Text::with_alignment(
@@ -234,7 +314,7 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
     let mut display = Rc::new(tokio::sync::Mutex::new(display));
 
     let state: std::sync::Arc<tokio::sync::Mutex<StateController>> = std::sync::Arc::new(
-        tokio::sync::Mutex::new(StateController::new(midi_out_tx, &mut display)),
+        tokio::sync::Mutex::new(StateController::new(midi_out_tx, &mut display, volume)),
     );
 
     let display_future = async {

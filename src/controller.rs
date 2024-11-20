@@ -17,7 +17,10 @@ use {
         error::Error,
         ops::{Deref, DerefMut},
         rc::Rc,
-        sync::mpsc as sync_mpsc,
+        sync::{
+            atomic::{AtomicU8, Ordering as AtomicOrdering},
+            mpsc as sync_mpsc, Arc,
+        },
         thread,
         time::{Duration, Instant},
     },
@@ -165,6 +168,9 @@ smlang::statemachine! {
         PatcherParamDetail((usize, usize, usize)) + EncRight(_) [*event < 8] / ctx.offset_param(state.0, state.1, state.2, 1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
 
         PatcherParamDetail((usize, usize, usize)) + ParamUpdate(_) [state.0 == event.instance] = PatcherParamDetail((state.0 , state.1, state.2)), //TODO filter by index
+                                                                                                                                                   //
+        _ + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
+        _ + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
 
         _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
         _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
@@ -193,12 +199,14 @@ struct Context {
     patcher_instance_indexes: Vec<usize>,
     patcher_params: HashMap<usize, Vec<Param>>,
     set_selected: Option<String>,
+    volume: Arc<AtomicU8>,
 }
 
 impl Context {
     fn new(
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
         display: &mut Rc<Mutex<MoveDisplay>>,
+        volume: Arc<AtomicU8>,
     ) -> Self {
         //send a reset
         let _ = midi_out_queue.send(Midi::reset());
@@ -215,6 +223,7 @@ impl Context {
             patcher_instance_names: Vec::new(),
             patcher_instance_indexes: Vec::new(),
             patcher_params: HashMap::new(),
+            volume,
         }
     }
 
@@ -324,6 +333,14 @@ impl Context {
 
     fn light_button(&mut self, btn: u8, val: u8) {
         let _ = self.midi_out_queue.send(Midi::cc(btn, val, 0));
+    }
+
+    fn offset_volume(&mut self, amt: isize) {
+        let cur = self.volume.load(AtomicOrdering::SeqCst) as isize;
+        let next = (cur + amt).clamp(0, 255);
+        if next != cur {
+            self.volume.store(next as u8, AtomicOrdering::SeqCst);
+        }
     }
 
     async fn offset_param(&mut self, instance: usize, page: usize, index: usize, offset: isize) {
@@ -490,8 +507,9 @@ impl StateController {
     pub fn new(
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
         display: &mut Rc<Mutex<MoveDisplay>>,
+        volume: Arc<AtomicU8>,
     ) -> Self {
-        let mut context = Context::new(midi_out_queue, display);
+        let mut context = Context::new(midi_out_queue, display, volume);
 
         context.light_button(MENU_MIDI, MoveColor::LightGray as _);
         context.light_button(PLAY_MIDI, MoveColor::LightGray as _);
@@ -645,6 +663,17 @@ impl StateController {
                         }
                         _ => (),
                     },
+                    0x4f => match bytes[2] {
+                        1 => {
+                            self.handle_event(Events::EncRight(VOLUME_WHEEL_ENCODER))
+                                .await;
+                        }
+                        127 => {
+                            self.handle_event(Events::EncLeft(VOLUME_WHEEL_ENCODER))
+                                .await;
+                        }
+                        _ => (),
+                    },
                     //hamburger
                     MENU_MIDI if bytes[2] != 0 => {
                         self.handle_event(Events::BtnDown(Button::Menu)).await;
@@ -656,9 +685,6 @@ impl StateController {
                     //play button
                     PLAY_MIDI if bytes[2] != 0 => {
                         self.handle_event(Events::BtnDown(Button::Play)).await;
-                    }
-                    0xf4 => {
-                        //volume jog
                     }
 
                     //param encoders
