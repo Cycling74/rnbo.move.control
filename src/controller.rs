@@ -83,6 +83,17 @@ fn power_sysex(cmd: PowerCommand) -> [Midi; 3] {
     ]
 }
 
+fn led_color(index: u8, r: u8, g: u8, b: u8) -> [Midi; 6] {
+    [
+        Midi::new(&[0xF0, 0x00, 0x21]),
+        Midi::new(&[0x1D, 0x01, 0x01]),
+        Midi::new(&[0x3b, 0b0001_0000 /*cc*/, index]),
+        Midi::new(&[r & 0x7F, (r & 0x80) >> 7, g & 0x7f]),
+        Midi::new(&[(g & 0x80) >> 7, b & 0x7F, (b & 0x80) >> 7]),
+        Midi::new(&[0xF7, 0, 0]),
+    ]
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Button {
     JogWheel,
@@ -624,7 +635,7 @@ impl StateController {
     }
 
     pub async fn handle_midi(&mut self, bytes: &[u8; 3]) {
-        println!("got midi {:02x?}", bytes);
+        //println!("got midi {:02x?}", bytes);
 
         //volume 0x08
         //jog 0x09
@@ -769,8 +780,12 @@ impl StateController {
                         let display = self.locked_display().await;
                         draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected);
                     }
-                    self.context_mut().light_button(MENU_MIDI, 0);
-                    self.context_mut().light_button(BACK_MIDI, 0);
+                    let ctx = self.context_mut();
+                    ctx.light_button(MENU_MIDI, 0);
+                    ctx.light_button(BACK_MIDI, 0);
+                    for midi in led_color(71, 0, 255, 255) {
+                        let _ = ctx.midi_out_queue.send(midi);
+                    }
                 }
                 States::SetsList(selected) => {
                     let selected = *selected;
