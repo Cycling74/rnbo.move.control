@@ -9,6 +9,7 @@ use {
         text::{Alignment, Text},
     },
     futures_util::{stream::SplitSink, SinkExt, StreamExt, TryStreamExt},
+    palette::{Darken, Srgb},
     reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
     std::{
@@ -83,14 +84,27 @@ fn power_sysex(cmd: PowerCommand) -> [Midi; 3] {
     ]
 }
 
-fn led_color(index: u8, r: u8, g: u8, b: u8) -> [Midi; 6] {
+fn led_color(index: u8, color: &Srgb<u8>) -> [Midi; 6] {
+    let (mut r, mut g, mut b) = color.into_components();
+
+    //need at least 1 bit set
+    r = r.max(1);
+    g = g.max(1);
+    b = b.max(1);
+
+    let chan = 0b0001_0000; /*cc*/
+    let index = index + 71;
+
+    println!("led_color({}, {}, {}, {}, {})", chan, index, r, g, b);
+
+    //let chan = 0b0000_0000; /*note*/
     [
         Midi::new(&[0xF0, 0x00, 0x21]),
         Midi::new(&[0x1D, 0x01, 0x01]),
-        Midi::new(&[0x3b, 0b0001_0000 /*cc*/, index]),
-        Midi::new(&[r & 0x7F, (r & 0x80) >> 7, g & 0x7f]),
-        Midi::new(&[(g & 0x80) >> 7, b & 0x7F, (b & 0x80) >> 7]),
-        Midi::new(&[0xF7, 0, 0]),
+        Midi::new(&[0x3b, chan, index]),
+        Midi::new(&[r & 0x7F, r >> 7, g & 0x7f]),
+        Midi::new(&[g >> 7, b & 0x7F, b >> 7]),
+        Midi::new(&[0xF7]),
     ]
 }
 
@@ -162,11 +176,11 @@ smlang::statemachine! {
         PatcherInstances(usize) + BtnDown(Button::Back) = Menu(PATCHER_INSTANCES_INDEX),
         PatcherInstances(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instances_len() > *state + 1] = PatcherInstances(*state + 1),
         PatcherInstances(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PatcherInstances(*state - 1),
-        PatcherInstances(usize) + BtnDown(Button::JogWheel) = PatcherParams((*state, 0)),
+        PatcherInstances(usize) + BtnDown(Button::JogWheel) / ctx.render_param_page(*state, 0); = PatcherParams((*state, 0)),
 
         PatcherParams((usize, usize)) + BtnDown(Button::Back) / ctx.clear_params(); = PatcherInstances(state.0),
-        PatcherParams((usize, usize)) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.0) > state.1 + 1] = PatcherParams((state.0, state.1 + 1)),
-        PatcherParams((usize, usize)) + EncLeft(JOG_WHEEL_ENCODER) [state.1 > 0] = PatcherParams((state.0 , state.1 - 1)),
+        PatcherParams((usize, usize)) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.0) > state.1 + 1] / ctx.render_param_page(state.0, state.1 + 1);  = PatcherParams((state.0, state.1 + 1)),
+        PatcherParams((usize, usize)) + EncLeft(JOG_WHEEL_ENCODER) [state.1 > 0]/ ctx.render_param_page(state.0, state.1 - 1); = PatcherParams((state.0 , state.1 - 1)),
 
         PatcherParams((usize, usize)) + EncTouch(_) [*event < 8] = PatcherParamDetail((state.0 , state.1, *event)),
         PatcherParamDetail((usize, usize, usize)) + EncTouch(_) [*event < 8] = PatcherParamDetail((state.0 , state.1, *event)),
@@ -178,7 +192,7 @@ smlang::statemachine! {
         PatcherParamDetail((usize, usize, usize)) + EncLeft(_) [*event < 8] / ctx.offset_param(state.0, state.1, state.2, -1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
         PatcherParamDetail((usize, usize, usize)) + EncRight(_) [*event < 8] / ctx.offset_param(state.0, state.1, state.2, 1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
 
-        PatcherParamDetail((usize, usize, usize)) + ParamUpdate(_) [state.0 == event.instance] = PatcherParamDetail((state.0 , state.1, state.2)), //TODO filter by index
+        //PatcherParamDetail((usize, usize, usize)) + ParamUpdate(_) [state.0 == event.instance] = PatcherParamDetail((state.0 , state.1, state.2)), //TODO filter by index
                                                                                                                                                    //
         _ + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
         _ + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
@@ -371,6 +385,7 @@ impl Context {
                 self.send_osc(msg).await;
             }
         }
+        self.render_param(instance, index);
     }
 
     fn update_param(&mut self, instance: usize, msg: &OscMessage) -> Option<(usize, usize)> {
@@ -449,30 +464,21 @@ impl Context {
     }
 
     fn render_param(&mut self, instance: usize, index: usize) {
-        let num = (index % PARAM_PAGE_SIZE) as u8 + 71;
-        if let Some(_p) = self.param(instance, index) {
-            let _ = self
-                .midi_out_queue
-                .send(Midi::cc(num, MoveColor::Red as _, 0));
+        let num = (index % PARAM_PAGE_SIZE) as u8;
 
-            //XXX how to set brightness??
+        if let Some(p) = self.param(instance, index) {
+            let v = p.norm_prefer_pending();
 
-            /*
-            let value = (p.norm_prefer_pending() * 127.0).clamp(0.0, 127.0) as u8;
-            println!("render {} {} {} {}", instance, index, num, value);
+            let color = Srgb::new(0.0, v, 0.0).into_format();
 
-            let _ = self
-                .midi_out_queue
-                .send(Midi::cc((index % PARAM_PAGE_SIZE) as _, value, 0));
-            */
-        } else {
-            let _ = self
-                .midi_out_queue
-                .send(Midi::cc(num, MoveColor::Black as _, 0));
+            for m in led_color(num, &color) {
+                let _ = self.midi_out_queue.send(m);
+            }
         }
     }
 
     fn render_param_page(&mut self, instance: usize, page: usize) {
+        self.clear_params();
         let offset = page * PARAM_PAGE_SIZE;
         for index in 0..PARAM_PAGE_SIZE {
             self.render_param(instance, index + offset);
@@ -615,128 +621,159 @@ impl StateController {
     }
 
     pub async fn handle_sysex(&mut self) {
+        println!("handle sysex {:02x?}", self.sysex);
         let sysex: Vec<u8> = std::mem::take(&mut self.sysex);
-        match sysex[0..6] {
-            [0x00, 0x21, 0x1d, 0x01, 0x01, 0x3a] => {
-                //println!("power sysex {:02x?}", sysex);
-                if let Some(status) = sysex.get(6) {
-                    if status & 0b1000 != 0 {
-                        self.handle_event(Events::BtnDown(Button::PowerShort)).await;
-                    }
-                    if status & 0b1_0000 != 0 {
-                        self.handle_event(Events::BtnDown(Button::PowerLong)).await;
+        if sysex.len() >= 6 {
+            match sysex[0..6] {
+                [0x00, 0x21, 0x1d, 0x01, 0x01, 0x3a] => {
+                    //println!("power sysex {:02x?}", sysex);
+                    if let Some(status) = sysex.get(6) {
+                        if status & 0b1_0000 != 0 {
+                            self.handle_event(Events::BtnDown(Button::PowerLong)).await;
+                        } else if status & 0b1000 != 0 {
+                            self.handle_event(Events::BtnDown(Button::PowerShort)).await;
+                        }
                     }
                 }
+                _ => {
+                    println!("unhandled sysex {:02x?}", sysex);
+                }
             }
-            _ => {
-                println!("unhandled sysex {:02x?}", sysex);
-            }
+        } else {
+            println!("unhandled sysex {:02x?}", sysex);
         }
     }
 
-    pub async fn handle_midi(&mut self, bytes: &[u8; 3]) {
+    pub async fn handle_midi(&mut self, bytes: &[u8]) {
         //println!("got midi {:02x?}", bytes);
 
         //volume 0x08
         //jog 0x09
-
-        match bytes[0] {
-            0x90 => {
-                self.sysex.clear();
-                if bytes[1] < 10 && bytes[2] != 0 {
-                    self.handle_event(Events::EncTouch(bytes[1] as usize)).await;
-                    //0..7 params
-                    //8 volume
-                    //9 jog wheel
-                    /*
-                     * TODO
-                    self.handle_event(Events::Btn(Btn(
-                        Button::EncoderTouch(bytes[1] as usize),
-                        bytes[2] != 0,
-                    )))
-                    .await;
-                    */
-                }
-            }
-            0xB0 => {
-                self.sysex.clear();
-                match bytes[1] {
-                    //jog wheel btn
-                    0x03 if bytes[2] != 0 => {
-                        self.handle_event(Events::BtnDown(Button::JogWheel)).await;
-                    }
-                    0x0e => match bytes[2] {
-                        1 => {
-                            self.handle_event(Events::EncRight(JOG_WHEEL_ENCODER)).await;
-                        }
-                        127 => {
-                            self.handle_event(Events::EncLeft(JOG_WHEEL_ENCODER)).await;
-                        }
-                        _ => (),
-                    },
-                    0x4f => match bytes[2] {
-                        1 => {
-                            self.handle_event(Events::EncRight(VOLUME_WHEEL_ENCODER))
-                                .await;
-                        }
-                        127 => {
-                            self.handle_event(Events::EncLeft(VOLUME_WHEEL_ENCODER))
-                                .await;
-                        }
-                        _ => (),
-                    },
-                    //hamburger
-                    MENU_MIDI if bytes[2] != 0 => {
-                        self.handle_event(Events::BtnDown(Button::Menu)).await;
-                    }
-                    //menu back button
-                    BACK_MIDI if bytes[2] != 0 => {
-                        self.handle_event(Events::BtnDown(Button::Back)).await;
-                    }
-                    //play button
-                    PLAY_MIDI if bytes[2] != 0 => {
-                        self.handle_event(Events::BtnDown(Button::Play)).await;
-                    }
-
-                    //param encoders
-                    index @ 71..=78 => {
-                        let index = (index - 71) as usize;
-                        match bytes[2] {
-                            1 => {
-                                self.handle_event(Events::EncRight(index)).await;
-                            }
-                            127 => {
-                                self.handle_event(Events::EncLeft(index)).await;
-                            }
-                            _ => (),
-                        }
-                    }
-                    _ => (),
-                }
-            }
-            0xF0 => {
-                self.sysex.push(bytes[1]);
-                self.sysex.push(bytes[2]);
-            }
-            0xF7 => {
-                self.handle_sysex().await;
-            }
-            _ => {
-                if bytes[0] & 0x80 != 0 {
+        match bytes.len() {
+            1 => {
+                println!("got 1 byte midi {:?}", bytes);
+                if bytes[0] == 0xF7 {
+                    self.handle_sysex().await;
+                } else if bytes[0] & 0x80 != 0 {
                     self.sysex.clear();
                 } else if self.sysex.len() > 0 {
-                    //active sysex
-                    if bytes[1] == 0xF7 {
-                        self.sysex.push(bytes[0]);
-                        self.handle_sysex().await;
-                    } else if bytes[2] == 0xF7 {
-                        self.sysex.push(bytes[0]);
-                        self.sysex.push(bytes[1]);
-                        self.handle_sysex().await;
-                    } else {
-                        self.sysex.extend_from_slice(bytes.as_slice());
+                    self.sysex.extend_from_slice(bytes);
+                }
+            }
+            2 => {
+                println!("got 2 byte midi {:?}", bytes);
+                if bytes[0] == 0xF7 {
+                    self.handle_sysex().await;
+                } else if bytes[1] == 0xF7 {
+                    self.sysex.push(bytes[0]);
+                    self.handle_sysex().await;
+                } else if bytes[0] & 0x80 != 0 {
+                    self.sysex.clear();
+                } else if self.sysex.len() > 0 {
+                    self.sysex.extend_from_slice(bytes);
+                }
+            }
+            3 => match bytes[0] {
+                0x90 => {
+                    self.sysex.clear();
+                    if bytes[1] < 10 && bytes[2] != 0 {
+                        self.handle_event(Events::EncTouch(bytes[1] as usize)).await;
+                        //0..7 params
+                        //8 volume
+                        //9 jog wheel
+                        /*
+                         * TODO
+                         self.handle_event(Events::Btn(Btn(
+                         Button::EncoderTouch(bytes[1] as usize),
+                         bytes[2] != 0,
+                         )))
+                         .await;
+                        */
                     }
                 }
+                0xB0 => {
+                    self.sysex.clear();
+                    match bytes[1] {
+                        //jog wheel btn
+                        0x03 if bytes[2] != 0 => {
+                            self.handle_event(Events::BtnDown(Button::JogWheel)).await;
+                        }
+                        0x0e => match bytes[2] {
+                            1 => {
+                                self.handle_event(Events::EncRight(JOG_WHEEL_ENCODER)).await;
+                            }
+                            127 => {
+                                self.handle_event(Events::EncLeft(JOG_WHEEL_ENCODER)).await;
+                            }
+                            _ => (),
+                        },
+                        0x4f => match bytes[2] {
+                            1 => {
+                                self.handle_event(Events::EncRight(VOLUME_WHEEL_ENCODER))
+                                    .await;
+                            }
+                            127 => {
+                                self.handle_event(Events::EncLeft(VOLUME_WHEEL_ENCODER))
+                                    .await;
+                            }
+                            _ => (),
+                        },
+                        //hamburger
+                        MENU_MIDI if bytes[2] != 0 => {
+                            self.handle_event(Events::BtnDown(Button::Menu)).await;
+                        }
+                        //menu back button
+                        BACK_MIDI if bytes[2] != 0 => {
+                            self.handle_event(Events::BtnDown(Button::Back)).await;
+                        }
+                        //play button
+                        PLAY_MIDI if bytes[2] != 0 => {
+                            self.handle_event(Events::BtnDown(Button::Play)).await;
+                        }
+
+                        //param encoders
+                        index @ 71..=78 => {
+                            let index = (index - 71) as usize;
+                            match bytes[2] {
+                                1 => {
+                                    self.handle_event(Events::EncRight(index)).await;
+                                }
+                                127 => {
+                                    self.handle_event(Events::EncLeft(index)).await;
+                                }
+                                _ => (),
+                            }
+                        }
+                        _ => (),
+                    }
+                }
+                0xF0 => {
+                    self.sysex.push(bytes[1]);
+                    self.sysex.push(bytes[2]);
+                }
+                0xF7 => {
+                    self.handle_sysex().await;
+                }
+                _ => {
+                    if bytes[0] & 0x80 != 0 {
+                        self.sysex.clear();
+                    } else if self.sysex.len() > 0 {
+                        //active sysex
+                        if bytes[1] == 0xF7 {
+                            self.sysex.push(bytes[0]);
+                            self.handle_sysex().await;
+                        } else if bytes[2] == 0xF7 {
+                            self.sysex.push(bytes[0]);
+                            self.sysex.push(bytes[1]);
+                            self.handle_sysex().await;
+                        } else {
+                            self.sysex.extend_from_slice(bytes);
+                        }
+                    }
+                }
+            },
+            _ => {
+                println!("got other byte midi {:?}", bytes);
             }
         }
     }
@@ -783,9 +820,6 @@ impl StateController {
                     let ctx = self.context_mut();
                     ctx.light_button(MENU_MIDI, 0);
                     ctx.light_button(BACK_MIDI, 0);
-                    for midi in led_color(71, 0, 255, 255) {
-                        let _ = ctx.midi_out_queue.send(midi);
-                    }
                 }
                 States::SetsList(selected) => {
                     let selected = *selected;
@@ -857,7 +891,6 @@ impl StateController {
                     }
 
                     let ctx = self.context_mut();
-                    ctx.render_param_page(instance, page);
                     ctx.light_button(MENU_MIDI, MoveColor::Black as _);
                     ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
@@ -888,8 +921,6 @@ impl StateController {
                             .unwrap();
                         }
                     }
-                    let ctx = self.context_mut();
-                    ctx.render_param_page(instance, page);
                 }
                 _ => (),
             }

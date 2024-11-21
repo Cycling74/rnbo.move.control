@@ -88,7 +88,6 @@ pub struct Param {
     detail: ParamDetail,
 
     norm: f64,
-    norm_update_last: Instant,
     norm_pending: Option<(f64, Instant)>,
 }
 
@@ -129,7 +128,6 @@ impl Param {
 
     pub fn set_norm(&mut self, v: f64) {
         self.norm = v;
-        self.norm_update_last = Instant::now();
     }
 
     pub fn set_norm_pending(&mut self, v: f64) {
@@ -212,7 +210,6 @@ impl Param {
                         name,
                         detail,
                         norm,
-                        norm_update_last: Instant::now(),
                         norm_pending: None,
                     })
                 }
@@ -230,7 +227,6 @@ impl Param {
                         name,
                         detail,
                         norm,
-                        norm_update_last: Instant::now(),
                         norm_pending: None,
                     })
                 }

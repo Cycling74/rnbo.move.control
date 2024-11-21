@@ -33,8 +33,8 @@ impl Midi {
         Midi::new(&[0x80u8 | chan, num, vel])
     }
 
-    pub fn bytes(&self) -> &[u8; 3] {
-        &self.bytes
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes[0..self.len]
     }
 
     pub fn len(&self) -> usize {

@@ -89,11 +89,10 @@ impl jack::ProcessHandler for Driver {
                         71..=79 => true,
                         _ => false,
                     },
-                    //sysex
-                    0xF0 | 0xF7 => true,
-                    _ => i.bytes[0] & 0x80 == 0 && (i.bytes[1] == 0xF7 || i.bytes[2] == 0xF7), //sysex end
+                    0xF0 | 0xF7 => true,         //sysex start or end
+                    _ => i.bytes[0] & 0x80 == 0, //sysex continue
                 },
-                2 => i.bytes[0] & 0x80 == 0 && i.bytes[1] == 0xF7,
+                2 => i.bytes[0] == 0xF7 || i.bytes[1] == 0xF7,
                 1 => i.bytes[0] == 0xF7,
                 _ => {
                     println!("unhandled {} byte MIDI message", i.bytes.len());
