@@ -84,6 +84,14 @@ fn power_sysex(cmd: PowerCommand) -> [Midi; 3] {
     ]
 }
 
+fn brightness_sysex(level: u8) -> [Midi; 3] {
+    [
+        Midi::new(&[0xF0, 0x00, 0x21]),
+        Midi::new(&[0x1D, 0x01, 0x01]),
+        Midi::new(&[0x06, level.max(127) as u8, 0xF7]),
+    ]
+}
+
 fn led_color(index: u8, color: &Srgb<u8>) -> [Midi; 6] {
     let (mut r, mut g, mut b) = color.into_components();
 
@@ -95,7 +103,7 @@ fn led_color(index: u8, color: &Srgb<u8>) -> [Midi; 6] {
     let chan = 0b0001_0000; /*cc*/
     let index = index + 71;
 
-    println!("led_color({}, {}, {}, {}, {})", chan, index, r, g, b);
+    //println!("led_color({}, {}, {}, {}, {})", chan, index, r, g, b);
 
     //let chan = 0b0000_0000; /*note*/
     [
@@ -235,6 +243,10 @@ impl Context {
     ) -> Self {
         //send a reset
         let _ = midi_out_queue.send(Midi::reset());
+
+        for m in brightness_sysex(127) {
+            let _ = midi_out_queue.send(m);
+        }
 
         Self {
             display: display.clone(),
@@ -467,9 +479,10 @@ impl Context {
         let num = (index % PARAM_PAGE_SIZE) as u8;
 
         if let Some(p) = self.param(instance, index) {
+            let cap = 0.96;
             let v = p.norm_prefer_pending();
 
-            let color = Srgb::new(0.0, v, 0.0).into_format();
+            let color = Srgb::new(0.0, 0.0, 1.0).darken(cap - v * cap).into_format();
 
             for m in led_color(num, &color) {
                 let _ = self.midi_out_queue.send(m);
