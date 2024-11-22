@@ -210,6 +210,7 @@ smlang::statemachine! {
         PatcherParams(PatcherParams) + EncRight(_) [*event < 8] / ctx.offset_param(state.index, state.page, *event, 1).await;,
 
         //update with incoming event
+        //XXX draw param if it is in view
         PatcherParams(PatcherParams) + ParamUpdate(_) [ctx.param_focused(event, state)] = PatcherParams(state.clone()),
 
             /*
@@ -257,7 +258,7 @@ struct Context {
     set_names: Vec<String>,
     set_preset_names: Vec<String>,
     patcher_instance_names: Vec<String>,
-    patcher_instance_indexes: Vec<usize>,
+    patcher_instance_to_index: HashMap<usize, usize>,
     patcher_params: HashMap<usize, Vec<Param>>,
     set_selected: Option<String>,
     volume: Arc<AtomicU8>,
@@ -286,7 +287,7 @@ impl Context {
             set_preset_names: Vec::new(),
             set_selected: None,
             patcher_instance_names: Vec::new(),
-            patcher_instance_indexes: Vec::new(),
+            patcher_instance_to_index: HashMap::new(),
             patcher_params: HashMap::new(),
             volume,
         }
@@ -377,16 +378,23 @@ impl Context {
     }
 
     fn set_patchers(&mut self, instances: &HashMap<usize, PatcherInst>) {
-        self.patcher_instance_indexes = instances.keys().map(|k| *k).collect();
-        self.patcher_instance_indexes.sort();
+        let mut indexes: Vec<usize> = instances.keys().map(|k| *k).collect();
+        indexes.sort();
+
+        self.patcher_instance_to_index.clear();
         self.patcher_instance_names.clear();
         self.patcher_params.clear();
 
-        for i in self.patcher_instance_indexes.iter() {
+        //context addresses instances by index from 0, not by instance index (which could be
+        //sparse)
+        for (index, i) in indexes.iter().enumerate() {
+            self.patcher_instance_to_index.insert(*i, index);
+
             let inst = instances.get(&i).unwrap();
             let mut params = inst.params().clone();
             params.sort_by(|a, b| a.index().cmp(&b.index()));
-            self.patcher_params.insert(*i, params);
+
+            self.patcher_params.insert(index, params);
             self.patcher_instance_names
                 .push(format!("{}: {}", i, inst.name()));
         }
@@ -409,14 +417,18 @@ impl Context {
     }
 
     fn param_focused(&self, update: &ParamUpdate, state: &PatcherParams) -> bool {
-        //TODO
-        true
+        if let Some(f) = state.focused {
+            //already mapped index == instance
+            state.index == update.instance && (state.page * PARAM_PAGE_SIZE + f) == update.index
+        } else {
+            false
+        }
     }
 
-    async fn offset_param(&mut self, instance: usize, page: usize, index: usize, offset: isize) {
-        let index = page * PARAM_PAGE_SIZE + index;
+    async fn offset_param(&mut self, instance: usize, page: usize, param: usize, offset: isize) {
+        let param = page * PARAM_PAGE_SIZE + param;
         if let Some(instance) = self.patcher_params.get_mut(&instance) {
-            if let Some(param) = instance.get_mut(index) {
+            if let Some(param) = instance.get_mut(param) {
                 let mut args = Vec::new();
                 let step = 0.01; //TODO allow for other step sizes
                                  //operate on the normalized value.. TODO, change step
@@ -430,10 +442,12 @@ impl Context {
                 self.send_osc(msg).await;
             }
         }
-        self.render_param(instance, index);
+        self.render_param(instance, param);
     }
 
-    fn update_param(&mut self, instance: usize, msg: &OscMessage) -> Option<(usize, usize)> {
+    fn update_param(&mut self, instance: usize, msg: &OscMessage) -> Option<Events> {
+        let instance = self.patcher_instance_to_index.get(&instance)?;
+
         //TODO get norm from OSC
         if let Some(params) = self.patcher_params.get_mut(&instance) {
             if let Some((index, p)) = params
@@ -450,18 +464,18 @@ impl Context {
                         return None;
                     }
                 }
-                return Some((instance, index));
+                return Some(Events::ParamUpdate(ParamUpdate {
+                    instance: *instance,
+                    index,
+                }));
             }
         }
         None
     }
 
     //return is instance index, param index, norm value
-    fn update_param_norm(
-        &mut self,
-        instance: usize,
-        msg: &OscMessage,
-    ) -> Option<(usize, usize, f64)> {
+    fn update_param_norm(&mut self, instance: usize, msg: &OscMessage) -> Option<Events> {
+        let instance = self.patcher_instance_to_index.get(&instance)?;
         if let Some(params) = self.patcher_params.get_mut(&instance) {
             if let Some((index, p)) = params
                 .iter_mut()
@@ -485,7 +499,12 @@ impl Context {
                     }
                     _ => None,
                 };
-                return v.map(|v| (instance, index, v));
+                return v.map(|_v| {
+                    Events::ParamUpdate(ParamUpdate {
+                        instance: *instance,
+                        index,
+                    })
+                });
             }
         }
         None
@@ -647,18 +666,12 @@ impl StateController {
                 }
                 _ => {
                     if let Some(instance) = self.params.get(&msg.addr).map(|i| *i) {
-                        if let Some((instance, index)) =
-                            self.context_mut().update_param(instance, msg)
-                        {
-                            self.handle_event(Events::ParamUpdate(ParamUpdate { instance, index }))
-                                .await;
+                        if let Some(e) = self.context_mut().update_param(instance, msg) {
+                            self.handle_event(e).await;
                         }
                     } else if let Some(instance) = self.params_norm.get(&msg.addr).map(|i| *i) {
-                        if let Some((instance, index, _value)) =
-                            self.context_mut().update_param_norm(instance, msg)
-                        {
-                            self.handle_event(Events::ParamUpdate(ParamUpdate { instance, index }))
-                                .await;
+                        if let Some(e) = self.context_mut().update_param_norm(instance, msg) {
+                            self.handle_event(e).await;
                         }
                     }
                 }
