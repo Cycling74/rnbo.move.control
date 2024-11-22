@@ -209,27 +209,10 @@ smlang::statemachine! {
         PatcherParams(PatcherParams) + EncLeft(_) [*event < 8] / ctx.offset_param(state.index, state.page, *event, -1).await;,
         PatcherParams(PatcherParams) + EncRight(_) [*event < 8] / ctx.offset_param(state.index, state.page, *event, 1).await;,
 
-        //update with incoming event
-        //XXX draw param if it is in view
+        //draw param and update the LED if it is in view
+        //this actually updates the state and we might not need to, but we do need to render the
+        //param
         PatcherParams(PatcherParams) + ParamUpdate(_) [ctx.param_visible(event, state)] / ctx.render_param(event.instance, event.index); = PatcherParams(state.clone()),
-
-            /*
-        PatcherParams((usize, usize)) + BtnDown(Button::Back) / ctx.clear_params(); = PatcherInstances(state.0),
-        PatcherParams((usize, usize)) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.0) > state.1 + 1] / ctx.render_param_page(state.0, state.1 + 1);  = PatcherParams((state.0, state.1 + 1)),
-        PatcherParams((usize, usize)) + EncLeft(JOG_WHEEL_ENCODER) [state.1 > 0]/ ctx.render_param_page(state.0, state.1 - 1); = PatcherParams((state.0 , state.1 - 1)),
-
-        PatcherParams((usize, usize)) + EncTouch(_) [*event < 8] = PatcherParamDetail((state.0 , state.1, *event)),
-        PatcherParamDetail((usize, usize, usize)) + EncTouch(_) [*event < 8] = PatcherParamDetail((state.0 , state.1, *event)),
-
-        PatcherParamDetail((usize, usize, usize)) + BtnDown(Button::Back) = PatcherParams((state.0, state.1)),
-        PatcherParamDetail((usize, usize, usize)) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.0) > state.1 + 1] = PatcherParamDetail((state.0, state.1 + 1, state.2)),
-        PatcherParamDetail((usize, usize, usize)) + EncLeft(JOG_WHEEL_ENCODER) [state.1 > 0] = PatcherParamDetail((state.0 , state.1 - 1, state.2)),
-
-        PatcherParamDetail((usize, usize, usize)) + EncLeft(_) [*event < 8] / ctx.offset_param(state.0, state.1, state.2, -1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
-        PatcherParamDetail((usize, usize, usize)) + EncRight(_) [*event < 8] / ctx.offset_param(state.0, state.1, state.2, 1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
-        */
-
-        //PatcherParamDetail((usize, usize, usize)) + ParamUpdate(_) [state.0 == event.instance] = PatcherParamDetail((state.0 , state.1, state.2)), //TODO filter by index
                                                                                                                                                    //
         _ + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
         _ + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
