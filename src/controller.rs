@@ -213,7 +213,7 @@ smlang::statemachine! {
         //this actually updates the state and we might not need to, but we do need to render the
         //param
         PatcherParams(PatcherParams) + ParamUpdate(_) [ctx.param_visible(event, state)] / ctx.render_param(event.instance, event.index); = PatcherParams(state.clone()),
-                                                                                                                                                   //
+
         _ + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
         _ + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
 
