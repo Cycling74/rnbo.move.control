@@ -2,11 +2,11 @@ use embedded_graphics_core::{draw_target::DrawTarget, pixelcolor::BinaryColor, p
 
 const HEADER_LEN: usize = 8;
 const DISPLAY_BYTES: usize = 1024;
-const DISPLAY_WIDTH: u32 = 128;
-const DISPLAY_HEIGHT: u32 = 64;
 
-const DISPLAY_WIDTH_M1: u32 = 128 - 1;
-const DISPLAY_HEIGHT_M1: u32 = 64 - 1;
+pub const DISPLAY_WIDTH: u32 = 128;
+pub const DISPLAY_HEIGHT: u32 = 64;
+pub const DISPLAY_WIDTH_M1: u32 = 128 - 1;
+pub const DISPLAY_HEIGHT_M1: u32 = 64 - 1;
 
 pub const BUFFER_LEN: usize = HEADER_LEN + DISPLAY_BYTES;
 
