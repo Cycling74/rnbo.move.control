@@ -1,0 +1,18 @@
+{
+  "jack": {
+    "cmd": "/data/UserData/jack2/bin/jackd",
+    "args": ["-d", "move"]
+  },
+  "apps": [
+    {
+      "cmd": "/data/UserData/rnbo/rnbooscquery",
+      "args": ["-c", "/data/UserData/rnbo/runner-config.json"]
+    },
+    {
+      "cmd": "python3",
+      "args": [
+        "/data/UserData/rnbo/rnbo-runner-panel", "--directory", "/data/UserData/rnbo/share/rnbo-runner-panel/www/"
+      ]
+    }
+  ]
+}

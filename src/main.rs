@@ -4,6 +4,7 @@ use {
         display::{DrawCommand, MoveDisplay},
         midi::Midi,
     },
+    clap::Parser,
     embedded_graphics::{
         mono_font::MonoTextStyle,
         pixelcolor::BinaryColor,
@@ -21,10 +22,12 @@ use {
     reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
     serde::{Deserialize, Serialize},
+    std::process::{Child, Command},
     std::{
         collections::HashMap,
         error::Error,
         ops::{Deref, DerefMut},
+        path::PathBuf,
         rc::Rc,
         sync::{
             atomic::{AtomicU8, Ordering},
@@ -35,6 +38,30 @@ use {
     },
     tokio::sync::mpsc as async_mpsc,
 };
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// path to configuration json
+    #[arg(short, long, default_value = "~/rnbo/rnbomovecontrol.json")]
+    config: String,
+
+    /// path to startup config json
+    #[arg(short, long)]
+    startup: Option<String>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+struct StartupProcess {
+    cmd: String,
+    args: Option<Vec<String>>,
+}
+
+#[derive(Deserialize, Debug)]
+struct StartupConfig {
+    jack: Option<StartupProcess>,
+    apps: Option<Vec<StartupProcess>>,
+}
 
 //NOTE channel type should match the reciever: https://users.rust-lang.org/t/communicating-between-sync-and-async-code/41005/3
 
@@ -154,7 +181,11 @@ impl jack::NotificationHandler for ConnectionControl {
     }
 }
 
-async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
+async fn with_client(
+    c: Client,
+    startup: &Vec<StartupProcess>,
+    config: &PathBuf,
+) -> Result<(), Box<dyn Error>> {
     let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
     let (midi_out_tx, midi_out_rx) = sync_mpsc::sync_channel(1024);
     let (midi_in_tx, mut midi_in_rx) = async_mpsc::channel(1024);
@@ -325,6 +356,21 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
         c.connect_ports_by_name("system:midi_capture", format!("{}:midi_in", name).as_str())
             .unwrap();
     }
+
+    let children: Result<Vec<Child>, _> = startup
+        .iter()
+        .map(|s| {
+            let mut cmd = Command::new(s.cmd.clone());
+            if let Some(args) = s.args.clone() {
+                cmd.args(args)
+            } else {
+                &mut cmd
+            }
+            .spawn()
+        })
+        .collect();
+
+    let children = children?;
 
     let mut display = Rc::new(tokio::sync::Mutex::new(display));
 
@@ -585,18 +631,65 @@ async fn with_client(c: Client) -> Result<(), Box<dyn Error>> {
         _ = signal_future => (), _ = process_midi => (), _ = disconnect_future => (),
     };
     let _ = c.deactivate();
+
+    for mut child in children {
+        child.kill()?
+    }
+
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
+
+    let config = args.config;
+    let config = if let Some(config) = config.strip_prefix("~/") {
+        let mut p = home::home_dir().expect("to get home directory");
+        p.push(config);
+        p
+    } else {
+        PathBuf::from(config)
+    };
+
+    let mut jack: Option<Child> = None;
+    let mut tostartup: Vec<StartupProcess> = Vec::new();
+
+    if let Some(startup) = args.startup {
+        let startup = PathBuf::from(startup)
+            .canonicalize()
+            .expect("to parse startup file path");
+
+        println!("got here {:?}", startup);
+
+        let startup = std::fs::read_to_string(startup).expect("Unable to read startup file");
+        let startup: StartupConfig = serde_json::from_str(&startup)?;
+
+        if let Some(j) = startup.jack {
+            let mut cmd = Command::new(j.cmd);
+
+            jack = Some(
+                if let Some(args) = j.args {
+                    cmd.args(args)
+                } else {
+                    &mut cmd
+                }
+                .spawn()?,
+            )
+        }
+
+        if let Some(s) = startup.apps {
+            tostartup = s.clone();
+        }
+    }
+
     let name = "move-control";
     let pollms = 500;
 
     //wait until jack exists
     loop {
         if let Ok((c, _status)) = Client::new(name, ClientOptions::empty()) {
-            let res = with_client(c).await;
+            let res = with_client(c, &tostartup, &config).await;
             match res {
                 Ok(()) => break,
                 Err(e) => {
@@ -608,5 +701,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         tokio::time::sleep(Duration::from_millis(pollms)).await;
     }
+
+    if let Some(mut jack) = jack {
+        jack.kill()?;
+    }
+
     Ok(())
 }
