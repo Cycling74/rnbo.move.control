@@ -211,7 +211,7 @@ smlang::statemachine! {
 
         //update with incoming event
         //XXX draw param if it is in view
-        PatcherParams(PatcherParams) + ParamUpdate(_) [ctx.param_focused(event, state)] = PatcherParams(state.clone()),
+        PatcherParams(PatcherParams) + ParamUpdate(_) [ctx.param_visible(event, state)] / ctx.render_param(event.instance, event.index); = PatcherParams(state.clone()),
 
             /*
         PatcherParams((usize, usize)) + BtnDown(Button::Back) / ctx.clear_params(); = PatcherInstances(state.0),
@@ -416,13 +416,10 @@ impl Context {
         }
     }
 
-    fn param_focused(&self, update: &ParamUpdate, state: &PatcherParams) -> bool {
-        if let Some(f) = state.focused {
-            //already mapped index == instance
-            state.index == update.instance && (state.page * PARAM_PAGE_SIZE + f) == update.index
-        } else {
-            false
-        }
+    fn param_visible(&self, update: &ParamUpdate, state: &PatcherParams) -> bool {
+        let offset = state.page * PARAM_PAGE_SIZE;
+        let range = offset..(offset + PARAM_PAGE_SIZE);
+        state.index == update.instance && range.contains(&update.index)
     }
 
     async fn offset_param(&mut self, instance: usize, page: usize, param: usize, offset: isize) {
@@ -666,8 +663,9 @@ impl StateController {
                 }
                 _ => {
                     if let Some(instance) = self.params.get(&msg.addr).map(|i| *i) {
-                        if let Some(e) = self.context_mut().update_param(instance, msg) {
-                            self.handle_event(e).await;
+                        if let Some(_e) = self.context_mut().update_param(instance, msg) {
+                            //ignore, we wait for normalized
+                            //self.handle_event(e).await;
                         }
                     } else if let Some(instance) = self.params_norm.get(&msg.addr).map(|i| *i) {
                         if let Some(e) = self.context_mut().update_param_norm(instance, msg) {
