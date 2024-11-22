@@ -1,11 +1,16 @@
 use crate::param::Param;
 
 use {
-    crate::{display::MoveDisplay, midi::Midi, patcher::PatcherInst},
+    crate::{
+        display::{MoveDisplay, DISPLAY_HEIGHT, DISPLAY_WIDTH},
+        midi::Midi,
+        patcher::PatcherInst,
+    },
     embedded_graphics::{
         mono_font::MonoTextStyle,
         pixelcolor::BinaryColor,
         prelude::*,
+        primitives::{PrimitiveStyleBuilder, Rectangle},
         text::{Alignment, Text},
     },
     futures_util::{stream::SplitSink, SinkExt, StreamExt, TryStreamExt},
@@ -149,6 +154,13 @@ enum Events {
     SetPresetNamesChanged,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PatcherParams {
+    index: usize, //not instance index, index within out list
+    page: usize,
+    focused: Option<usize>,
+}
+
 const MENU_ITEMS: [&'static str; 3] = ["Set Presets", "Sets", "Patcher Instances"];
 const SET_PRESETS_INDEX: usize = 0;
 const SETS_INDEX: usize = 1;
@@ -184,8 +196,23 @@ smlang::statemachine! {
         PatcherInstances(usize) + BtnDown(Button::Back) = Menu(PATCHER_INSTANCES_INDEX),
         PatcherInstances(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instances_len() > *state + 1] = PatcherInstances(*state + 1),
         PatcherInstances(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PatcherInstances(*state - 1),
-        PatcherInstances(usize) + BtnDown(Button::JogWheel) / ctx.render_param_page(*state, 0); = PatcherParams((*state, 0)),
+        PatcherInstances(usize) + BtnDown(Button::JogWheel) / ctx.render_param_page(*state, 0);
+            = PatcherParams(PatcherParams { index: *state, page: 0, focused: None }),
 
+        PatcherParams(PatcherParams) + BtnDown(Button::Back) / ctx.clear_params(); = PatcherInstances(state.index),
+        PatcherParams(PatcherParams) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.index) > state.page + 1] / ctx.render_param_page(state.index, state.page + 1);
+            = PatcherParams(PatcherParams { index: state.index, page: state.page + 1, focused: state.focused }),
+        PatcherParams(PatcherParams) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.render_param_page(state.index, state.page - 1);
+            = PatcherParams(PatcherParams { index: state.index, page: state.page - 1, focused: state.focused }),
+        PatcherParams(PatcherParams) + EncTouch(_) [*event < 8]
+            = PatcherParams(PatcherParams { index: state.index, page: state.page, focused: Some(*event) }),
+        PatcherParams(PatcherParams) + EncLeft(_) [*event < 8] / ctx.offset_param(state.index, state.page, *event, -1).await;,
+        PatcherParams(PatcherParams) + EncRight(_) [*event < 8] / ctx.offset_param(state.index, state.page, *event, 1).await;,
+
+        //update with incoming event
+        PatcherParams(PatcherParams) + ParamUpdate(_) [ctx.param_focused(event, state)] = PatcherParams(state.clone()),
+
+            /*
         PatcherParams((usize, usize)) + BtnDown(Button::Back) / ctx.clear_params(); = PatcherInstances(state.0),
         PatcherParams((usize, usize)) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.0) > state.1 + 1] / ctx.render_param_page(state.0, state.1 + 1);  = PatcherParams((state.0, state.1 + 1)),
         PatcherParams((usize, usize)) + EncLeft(JOG_WHEEL_ENCODER) [state.1 > 0]/ ctx.render_param_page(state.0, state.1 - 1); = PatcherParams((state.0 , state.1 - 1)),
@@ -199,6 +226,7 @@ smlang::statemachine! {
 
         PatcherParamDetail((usize, usize, usize)) + EncLeft(_) [*event < 8] / ctx.offset_param(state.0, state.1, state.2, -1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
         PatcherParamDetail((usize, usize, usize)) + EncRight(_) [*event < 8] / ctx.offset_param(state.0, state.1, state.2, 1).await; = PatcherParamDetail((state.0 , state.1, state.2)),
+        */
 
         //PatcherParamDetail((usize, usize, usize)) + ParamUpdate(_) [state.0 == event.instance] = PatcherParamDetail((state.0 , state.1, state.2)), //TODO filter by index
                                                                                                                                                    //
@@ -378,6 +406,11 @@ impl Context {
         if next != cur {
             self.volume.store(next as u8, AtomicOrdering::SeqCst);
         }
+    }
+
+    fn param_focused(&self, update: &ParamUpdate, state: &PatcherParams) -> bool {
+        //TODO
+        true
     }
 
     async fn offset_param(&mut self, instance: usize, page: usize, index: usize, offset: isize) {
@@ -880,12 +913,29 @@ impl StateController {
                     self.context_mut()
                         .light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
-                States::PatcherParams((instance, page)) => {
-                    let instance = *instance;
-                    let page = *page;
-                    //XXX optimise
+                States::PatcherParams(state) => {
+                    let index = state.index;
+                    let page = state.page;
+                    let focus = state.focused.clone();
                     {
-                        let name = self.context().patcher_instance_names.get(instance).unwrap();
+                        let pages = self.context().patcher_instance_param_pages(index);
+
+                        //focused valaue
+                        let focus = if let Some(focus) = focus {
+                            if let Some(param) =
+                                self.context().param(index, focus + page * PARAM_PAGE_SIZE)
+                            {
+                                Some(format!("{}\n{}", param.name(), param.render_value()))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        let text_style =
+                            MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+                        let name = self.context().patcher_instance_names.get(index).unwrap();
 
                         let mut title = format!("{} Params", name);
                         if title.len() > 16 {
@@ -893,47 +943,58 @@ impl StateController {
                             title.push_str("..");
                         }
 
-                        let pages = self.context().patcher_instance_param_pages(instance);
-                        let mut names = Vec::new();
-                        for p in 0..pages {
-                            names.push(format!("Page {}", p + 1));
-                        }
-
-                        let display = self.locked_display().await;
-                        draw_menu(display, title.as_str(), names.as_slice(), page);
-                    }
-
-                    let ctx = self.context_mut();
-                    ctx.light_button(MENU_MIDI, MoveColor::Black as _);
-                    ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::PatcherParamDetail((instance, page, offset)) => {
-                    let instance = *instance;
-                    let page = *page;
-                    let index = page * PARAM_PAGE_SIZE + *offset;
-
-                    {
-                        let s = self
-                            .context()
-                            .param(instance, index)
-                            .map(|param| format!("{}\n{}", param.name(), param.render_value()));
-
                         let mut display = self.locked_display().await;
-                        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
                         display.clear(BinaryColor::Off).unwrap();
 
-                        if let Some(s) = s {
-                            let size = display.size();
+                        Text::with_alignment(
+                            title.as_str(),
+                            Point::new(DISPLAY_WIDTH as i32 / 2, 11),
+                            text_style,
+                            Alignment::Center,
+                        )
+                        .draw(display.deref_mut())
+                        .unwrap();
+
+                        //draw pager
+                        if pages > 1 {
+                            let style = PrimitiveStyleBuilder::new()
+                                .stroke_color(BinaryColor::On)
+                                .stroke_width(1)
+                                .fill_color(BinaryColor::On)
+                                .build();
+
+                            let step = DISPLAY_WIDTH / pages as u32;
+                            let width = step - 4;
+
+                            let y = (DISPLAY_HEIGHT - 3) as i32;
+                            let mut x = (step / 2) as i32;
+
+                            //TODO assert that we can actually draw these
+
+                            for p in 0..pages {
+                                let height = if p == page { 3 } else { 1 };
+                                Rectangle::with_center(Point::new(x, y), Size::new(width, height))
+                                    .into_styled(style)
+                                    .draw(display.deref_mut())
+                                    .unwrap();
+                                x = x + (step as i32);
+                            }
+                        }
+
+                        if let Some(focus) = focus {
                             Text::with_alignment(
-                                s.as_str(),
-                                Point::new(size.width as i32 / 2, size.height as i32 / 2),
-                                style,
+                                focus.as_str(),
+                                Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
+                                text_style,
                                 Alignment::Center,
                             )
                             .draw(display.deref_mut())
                             .unwrap();
                         }
                     }
+                    let ctx = self.context_mut();
+                    ctx.light_button(MENU_MIDI, MoveColor::Black as _);
+                    ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
                 _ => (),
             }
