@@ -6,7 +6,7 @@
   "apps": [
     {
       "cmd": "/data/UserData/rnbo/bin/rnbooscquery",
-      "args": ["-c", "/data/UserData/rnbo/config/runner-config.json"]
+      "args": ["-c", "/data/UserData/rnbo/config/runner-config.json", "--wait-for-audio"]
     },
     {
       "cmd": "python3",
