@@ -22,7 +22,7 @@ use {
     reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
     serde::{Deserialize, Serialize},
-    std::process::{Child, Command},
+    std::process::{Child, Command, Stdio},
     std::{
         collections::HashMap,
         error::Error,
@@ -366,6 +366,9 @@ async fn with_client(
             } else {
                 &mut cmd
             }
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
             .spawn()
         })
         .collect();
@@ -674,6 +677,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 } else {
                     &mut cmd
                 }
+                .stdin(Stdio::null())
+                .stdout(Stdio::inherit())
                 .spawn()?,
             )
         }
