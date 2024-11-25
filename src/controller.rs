@@ -43,6 +43,9 @@ const PLAY_MIDI: u8 = 0x55;
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 
+const TITLE_TEXT_STYLE: MonoTextStyle<BinaryColor> =
+    MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+
 pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
 pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
 pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
@@ -147,6 +150,7 @@ struct ParamUpdate {
 #[derive(Clone, Debug, PartialEq)]
 enum Events {
     BtnDown(Button),
+    BtnUp(Button),
     EncLeft(usize),
     EncRight(usize),
     EncTouch(usize),
@@ -169,10 +173,11 @@ pub(crate) struct PatcherParams {
     focused: Option<usize>,
 }
 
-const MENU_ITEMS: [&'static str; 3] = ["Set Presets", "Sets", "Patcher Instances"];
+const MENU_ITEMS: [&'static str; 4] = ["Set Presets", "Sets", "Patcher Instances", "Tempo"];
 const SET_PRESETS_INDEX: usize = 0;
 const SETS_INDEX: usize = 1;
 const PATCHER_INSTANCES_INDEX: usize = 2;
+const TEMPO_INDEX: usize = 3;
 
 smlang::statemachine! {
     states_attr: #[derive(Clone)],
@@ -190,6 +195,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == SETS_INDEX && ctx.sets_len() > 0] = SetsList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == SET_PRESETS_INDEX && ctx.set_presets_len() > 0] = SetPresetsList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.patcher_instances_len() > 0] = PatcherInstances(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
 
         SetsList(usize) + BtnDown(Button::Back) = Menu(SETS_INDEX),
         SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() > *state + 1] = SetsList(*state + 1),
@@ -229,6 +235,13 @@ smlang::statemachine! {
         //param
         PatcherParams(PatcherParams) + ParamUpdate(_) [ctx.param_visible(event, state)] / ctx.render_param(event.instance, event.index); = PatcherParams(state.clone()),
 
+        TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
+        TempoEditor + EncRight(JOG_WHEEL_ENCODER) / ctx.offset_tempo(1.0).await; = TempoEditor,
+        TempoEditor + EncLeft(JOG_WHEEL_ENCODER) / ctx.offset_tempo(-1.0).await; = TempoEditor,
+        TempoEditor + BtnDown(Button::JogWheel) / ctx.set_tempo_offset_mul(1.0); = TempoEditor,
+        TempoEditor + BtnUp(Button::JogWheel) / ctx.set_tempo_offset_mul(5.0); = TempoEditor,
+        TempoEditor + Tempo(_) / ctx.update_tempo(*event); = TempoEditor,
+
         _ + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
         _ + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
 
@@ -260,6 +273,7 @@ struct Context {
     display: Rc<Mutex<MoveDisplay>>,
     midi_out_queue: sync_mpsc::SyncSender<Midi>,
     bpm: f32,
+    tempo_offset_mul: f32,
     rolling: bool,
     ws_tx: Option<SplitSink<WebSocket, Message>>,
     set_names: Vec<String>,
@@ -305,6 +319,7 @@ impl Context {
             display: display.clone(),
             midi_out_queue,
             bpm: 0f32,
+            tempo_offset_mul: 5.0,
             rolling: false,
             ws_tx: None,
             set_names: Vec::new(),
@@ -578,7 +593,22 @@ impl Context {
 
     fn update_tempo(&mut self, v: f32) {
         self.bpm = v;
-        //TODO
+    }
+
+    async fn offset_tempo(&mut self, offset: f32) {
+        let v = (self.bpm + offset * self.tempo_offset_mul).clamp(0.5, 500.0); //XXX range?
+        if v != self.bpm {
+            self.bpm = v;
+            let msg = OscMessage {
+                addr: TRANSPORT_BPM_ADDR.to_string(),
+                args: vec![OscType::Float(v)],
+            };
+            self.send_osc(msg).await;
+        }
+    }
+
+    fn set_tempo_offset_mul(&mut self, mul: f32) {
+        self.tempo_offset_mul = mul;
     }
 
     fn update_transport(&mut self, on: bool) {
@@ -815,8 +845,12 @@ impl StateController {
                     self.sysex.clear();
                     match bytes[1] {
                         //jog wheel btn
-                        0x03 if bytes[2] != 0 => {
-                            self.handle_event(Events::BtnDown(Button::JogWheel)).await;
+                        0x03 => {
+                            if bytes[2] != 0 {
+                                self.handle_event(Events::BtnDown(Button::JogWheel)).await;
+                            } else {
+                                self.handle_event(Events::BtnUp(Button::JogWheel)).await;
+                            }
                         }
                         0x0e => match bytes[2] {
                             1 => {
@@ -902,16 +936,8 @@ impl StateController {
         let mut display = self.locked_display().await;
         let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
         display.clear(BinaryColor::Off).unwrap();
-        let size = display.size();
 
-        Text::with_alignment(
-            text,
-            Point::new(size.width as i32 / 2, size.height as i32 / 2),
-            style,
-            Alignment::Center,
-        )
-        .draw(display.deref_mut())
-        .unwrap();
+        draw_centered(&mut display, text, style);
     }
 
     async fn handle_event(&mut self, e: Events) {
@@ -937,6 +963,21 @@ impl StateController {
                     }
                     let ctx = self.context_mut();
                     ctx.light_button(BACK_MIDI, 0);
+                }
+                States::TempoEditor => {
+                    let bpm = {
+                        let ctx = self.context_mut();
+                        ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                        ctx.bpm
+                    };
+                    {
+                        let mut display = self.locked_display().await;
+
+                        display.clear(BinaryColor::Off).unwrap();
+                        draw_title(&mut display, &"Tempo (bpm)");
+                        let bpm = format!("{:.1}", bpm);
+                        draw_centered(&mut display, bpm.as_str(), TITLE_TEXT_STYLE);
+                    }
                 }
                 States::SetsList(selected) => {
                     let selected = *selected;
@@ -1021,14 +1062,7 @@ impl StateController {
                         let mut display = self.locked_display().await;
                         display.clear(BinaryColor::Off).unwrap();
 
-                        Text::with_alignment(
-                            title.as_str(),
-                            Point::new(DISPLAY_WIDTH as i32 / 2, 11),
-                            text_style,
-                            Alignment::Center,
-                        )
-                        .draw(display.deref_mut())
-                        .unwrap();
+                        draw_title(&mut display, title.as_str());
 
                         //draw pager
                         if pages > 1 {
@@ -1092,6 +1126,28 @@ impl StateController {
     fn context_mut(&mut self) -> &mut Context {
         self.statemachine.context_mut()
     }
+}
+
+fn draw_title(display: &mut MoveDisplay, title: &str) {
+    Text::with_alignment(
+        title,
+        Point::new(DISPLAY_WIDTH as i32 / 2, 11),
+        TITLE_TEXT_STYLE,
+        Alignment::Center,
+    )
+    .draw(display)
+    .unwrap();
+}
+
+fn draw_centered(display: &mut MoveDisplay, text: &str, style: MonoTextStyle<BinaryColor>) {
+    Text::with_alignment(
+        text,
+        Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
+        style,
+        Alignment::Center,
+    )
+    .draw(display)
+    .unwrap();
 }
 
 fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
