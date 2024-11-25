@@ -554,7 +554,8 @@ impl Context {
             let cap = 0.96;
             let v = p.norm_prefer_pending();
 
-            let color = Srgb::new(0.0, 0.0, 1.0).darken(cap - v * cap).into_format();
+            //TODO get from metdata?
+            let color = Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap).into_format();
 
             for m in led_color(num, &color) {
                 let _ = self.midi_out_queue.send(m);
