@@ -195,7 +195,6 @@ smlang::statemachine! {
         SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() > *state + 1] = SetsList(*state + 1),
         SetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetsList(*state - 1),
         SetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_select(*state).await; = SetsList(*state),
-        //SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() == 0] = Menu(MenuItems::Sets), //abort
         SetsList(usize) + SetNamesChanged = Menu(SETS_INDEX), //backout, TODO be smarter
         SetsList(usize) + SetCurrentChanged = SetsList(*state), //redraw
 
@@ -221,6 +220,9 @@ smlang::statemachine! {
             = PatcherParams(PatcherParams { index: state.index, page: state.page, focused: Some(*event) }),
         PatcherParams(PatcherParams) + EncLeft(_) [*event < 8] / ctx.offset_param(state.index, state.page, *event, -1).await;,
         PatcherParams(PatcherParams) + EncRight(_) [*event < 8] / ctx.offset_param(state.index, state.page, *event, 1).await;,
+
+        PatcherInstances(usize) + SetCurrentChanged = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherParams(PatcherParams) + SetCurrentChanged  / ctx.clear_params(); = Menu(PATCHER_INSTANCES_INDEX),
 
         //draw param and update the LED if it is in view
         //this actually updates the state and we might not need to, but we do need to render the
