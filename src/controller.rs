@@ -1,9 +1,9 @@
-use crate::param::Param;
-
 use {
     crate::{
+        config::Config,
         display::{MoveDisplay, DISPLAY_HEIGHT, DISPLAY_WIDTH},
         midi::Midi,
+        param::Param,
         patcher::PatcherInst,
     },
     embedded_graphics::{
@@ -21,7 +21,10 @@ use {
         cmp::{Ordering, PartialEq, PartialOrd},
         collections::HashMap,
         error::Error,
+        fs::File,
+        io::BufReader,
         ops::{Deref, DerefMut},
+        path::PathBuf,
         rc::Rc,
         sync::{
             atomic::{AtomicU8, Ordering as AtomicOrdering},
@@ -245,6 +248,8 @@ struct Context {
     patcher_params: HashMap<usize, Vec<Param>>,
     set_selected: Option<String>,
     volume: Arc<AtomicU8>,
+    config: Config,
+    config_path: PathBuf,
 }
 
 impl Context {
@@ -252,6 +257,7 @@ impl Context {
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
         display: &mut Rc<Mutex<MoveDisplay>>,
         volume: Arc<AtomicU8>,
+        config_path: PathBuf,
     ) -> Self {
         //send a reset
         let _ = midi_out_queue.send(Midi::reset());
@@ -259,6 +265,20 @@ impl Context {
         for m in brightness_sysex(127) {
             let _ = midi_out_queue.send(m);
         }
+
+        //do config
+        let config = if std::path::Path::exists(&config_path) {
+            if let Ok(file) = File::open(&config_path) {
+                let reader = BufReader::new(file);
+                serde_json::from_reader(reader).unwrap_or_default()
+            } else {
+                Config::default()
+            }
+        } else {
+            Config::default()
+        };
+
+        volume.store(config.volume, AtomicOrdering::SeqCst);
 
         Self {
             display: display.clone(),
@@ -273,6 +293,8 @@ impl Context {
             patcher_instance_to_index: HashMap::new(),
             patcher_params: HashMap::new(),
             volume,
+            config,
+            config_path,
         }
     }
 
@@ -392,10 +414,12 @@ impl Context {
     }
 
     fn offset_volume(&mut self, amt: isize) {
-        let cur = self.volume.load(AtomicOrdering::SeqCst) as isize;
+        let cur = self.config.volume as isize;
         let next = (cur + amt).clamp(0, 255);
         if next != cur {
-            self.volume.store(next as u8, AtomicOrdering::SeqCst);
+            self.config.volume = next as u8;
+            self.volume
+                .store(self.config.volume, AtomicOrdering::SeqCst);
         }
     }
 
@@ -570,8 +594,9 @@ impl StateController {
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
         display: &mut Rc<Mutex<MoveDisplay>>,
         volume: Arc<AtomicU8>,
+        config_path: PathBuf,
     ) -> Self {
-        let mut context = Context::new(midi_out_queue, display, volume);
+        let mut context = Context::new(midi_out_queue, display, volume, config_path);
 
         context.light_button(MENU_MIDI, MoveColor::LightGray as _);
         context.light_button(PLAY_MIDI, MoveColor::LightGray as _);
@@ -1078,4 +1103,12 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     .align_to(&display_area, horizontal::Left, vertical::Top)
     .draw(display.deref_mut())
     .unwrap();
+}
+
+impl Drop for Context {
+    fn drop(&mut self) {
+        if let Ok(file) = std::fs::File::create(&self.config_path) {
+            let _ = serde_json::to_writer_pretty(file, &self.config);
+        }
+    }
 }

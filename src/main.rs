@@ -1,5 +1,6 @@
 use {
     crate::{
+        config::*,
         controller::StateController,
         display::{DrawCommand, MoveDisplay},
         midi::Midi,
@@ -51,20 +52,9 @@ struct Args {
     startup: Option<String>,
 }
 
-#[derive(Deserialize, Clone, Debug)]
-struct StartupProcess {
-    cmd: String,
-    args: Option<Vec<String>>,
-}
-
-#[derive(Deserialize, Debug)]
-struct StartupConfig {
-    jack: Option<StartupProcess>,
-    apps: Option<Vec<StartupProcess>>,
-}
-
 //NOTE channel type should match the reciever: https://users.rust-lang.org/t/communicating-between-sync-and-async-code/41005/3
 
+mod config;
 mod controller;
 mod display;
 mod midi;
@@ -75,7 +65,8 @@ const HTTP_QUERY_DELAY: Duration = Duration::from_millis(200);
 
 struct Driver {
     display: Port<MidiOut>,
-    midi_out: Port<MidiOut>,
+    midi_thru: Port<MidiOut>,
+    midi_control_out: Port<MidiOut>,
     midi_in: Port<MidiIn>,
     draw_queue: sync_mpsc::Receiver<DrawCommand>,
     midi_in_queue: async_mpsc::Sender<Midi>,
@@ -96,7 +87,7 @@ impl jack::ProcessHandler for Driver {
         }
 
         let midi_in = self.midi_in.iter(ps);
-        let mut midi_out = self.midi_out.writer(ps);
+        let mut midi_thru = self.midi_thru.writer(ps);
         for i in midi_in {
             //only filter out sysex, jog wheel, volume, back and menu
             //optionally (TODO) filter out encoders
@@ -131,10 +122,11 @@ impl jack::ProcessHandler for Driver {
                 //println!("not thru {:02x?}", i.bytes);
                 let _ = self.midi_in_queue.try_send(Midi::new(i.bytes));
             } else {
-                midi_out.write(&i).unwrap();
+                midi_thru.write(&i).unwrap();
             }
         }
 
+        let mut midi_out = self.midi_control_out.writer(ps);
         for i in self.midi_out_queue.try_iter() {
             let m = RawMidi {
                 time: 0,
@@ -194,9 +186,12 @@ async fn with_client(
     let display_port = c
         .register_port("display", MidiOut)
         .expect("error creating display port");
-    let midi_out = c
+    let midi_thru = c
         .register_port("midi_out", MidiOut)
         .expect("error creating midi_out");
+    let midi_control_out = c
+        .register_port("midi_control_out", MidiOut)
+        .expect("error creating midi_control_out");
     let midi_in = c
         .register_port("midi_in", MidiIn)
         .expect("error creating midi_in");
@@ -218,7 +213,7 @@ async fn with_client(
     };
 
     //volume control
-    let volume = Arc::new(AtomicU8::new(255)); //TODO get from cache
+    let volume = Arc::new(AtomicU8::new(0));
     let volumeclient = {
         let volume = volume.clone();
         let (volumeclient, _status) =
@@ -307,7 +302,8 @@ async fn with_client(
 
     let driver = Driver {
         display: display_port,
-        midi_out,
+        midi_thru,
+        midi_control_out,
         midi_in,
         draw_queue: draw_rx,
         midi_in_queue: midi_in_tx,
@@ -349,7 +345,7 @@ async fn with_client(
         c.connect_ports_by_name(display_name.as_str(), "system:display")
             .unwrap();
         c.connect_ports_by_name(
-            format!("{}:midi_out", name).as_str(),
+            format!("{}:midi_control_out", name).as_str(),
             "system:midi_playback",
         )
         .unwrap();
@@ -377,9 +373,13 @@ async fn with_client(
 
     let mut display = Rc::new(tokio::sync::Mutex::new(display));
 
-    let state: std::sync::Arc<tokio::sync::Mutex<StateController>> = std::sync::Arc::new(
-        tokio::sync::Mutex::new(StateController::new(midi_out_tx, &mut display, volume)),
-    );
+    let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
+        std::sync::Arc::new(tokio::sync::Mutex::new(StateController::new(
+            midi_out_tx,
+            &mut display,
+            volume,
+            config.clone(),
+        )));
 
     let display_future = async {
         loop {
