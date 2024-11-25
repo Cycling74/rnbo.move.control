@@ -177,7 +177,8 @@ const PATCHER_INSTANCES_INDEX: usize = 2;
 smlang::statemachine! {
     states_attr: #[derive(Clone)],
     transitions: {
-        *Init + BtnDown(Button::Menu) = Menu(0),
+        *Init + BtnDown(Button::Back) = Init, //dummy
+                          //
         PromptPower + BtnDown(Button::JogWheel) = PowerOff,
         PromptPower + BtnDown(Button::Back) = Menu(0),
 
@@ -228,6 +229,8 @@ smlang::statemachine! {
 
         _ + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
         _ + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
+
+        _ + BtnDown(Button::Menu) / ctx.clear_params(); = Menu(0),
 
         _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
         _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
@@ -915,14 +918,12 @@ impl StateController {
             match ns {
                 States::PowerOff => {
                     self.display_centered("Powering Down").await;
-                    self.context_mut().light_button(MENU_MIDI, 0);
                     self.context_mut().light_button(BACK_MIDI, 0);
                     //leave some time for it do draw
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     self.context_mut().send_power_cmd(PowerCommand::PowerOff);
                 }
                 States::PromptPower => {
-                    self.context_mut().light_button(MENU_MIDI, 0);
                     self.context_mut().light_button(BACK_MIDI, 127);
                     self.display_centered("Press wheel to\nshut down").await;
                 }
@@ -933,7 +934,6 @@ impl StateController {
                         draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
                     }
                     let ctx = self.context_mut();
-                    ctx.light_button(MENU_MIDI, 0);
                     ctx.light_button(BACK_MIDI, 0);
                 }
                 States::SetsList(selected) => {
@@ -950,8 +950,6 @@ impl StateController {
                         );
                     }
 
-                    self.context_mut()
-                        .light_button(MENU_MIDI, MoveColor::Black as _);
                     self.context_mut()
                         .light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
@@ -970,8 +968,6 @@ impl StateController {
                     }
 
                     self.context_mut()
-                        .light_button(MENU_MIDI, MoveColor::Black as _);
-                    self.context_mut()
                         .light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
                 States::PatcherInstances(selected) => {
@@ -987,8 +983,6 @@ impl StateController {
                         );
                     }
 
-                    self.context_mut()
-                        .light_button(MENU_MIDI, MoveColor::Black as _);
                     self.context_mut()
                         .light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
@@ -1072,11 +1066,12 @@ impl StateController {
                         }
                     }
                     let ctx = self.context_mut();
-                    ctx.light_button(MENU_MIDI, MoveColor::Black as _);
                     ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
                 _ => (),
             }
+
+            //self.context_mut().light_button(MENU_MIDI, MoveColor::LightGray as _);
         }
     }
 
