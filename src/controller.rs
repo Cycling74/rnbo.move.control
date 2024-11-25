@@ -44,7 +44,9 @@ const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 
 pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
+pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
 pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
+pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loaded";
 
 const VOLUME_WHEEL_ENCODER: usize = 9;
 const JOG_WHEEL_ENCODER: usize = 10;
@@ -155,6 +157,9 @@ enum Events {
 
     SetNamesChanged,
     SetPresetNamesChanged,
+
+    SetCurrentChanged,
+    SetPresetLoadedChanged,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -188,13 +193,17 @@ smlang::statemachine! {
         SetsList(usize) + BtnDown(Button::Back) = Menu(SETS_INDEX),
         SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() > *state + 1] = SetsList(*state + 1),
         SetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetsList(*state - 1),
-        SetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_select(*state).await; = Menu(SET_PRESETS_INDEX),
+        SetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_select(*state).await; = SetsList(*state),
         //SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() == 0] = Menu(MenuItems::Sets), //abort
+        SetsList(usize) + SetNamesChanged = Menu(SETS_INDEX), //backout, TODO be smarter
+        SetsList(usize) + SetCurrentChanged = SetsList(*state), //redraw
 
         SetPresetsList(usize) + BtnDown(Button::Back) = Menu(SET_PRESETS_INDEX),
         SetPresetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.set_presets_len() > *state + 1] = SetPresetsList(*state + 1),
         SetPresetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetPresetsList(*state - 1),
         SetPresetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_preset_select(*state).await;,
+        SetPresetsList(usize) + SetPresetNamesChanged = Menu(SET_PRESETS_INDEX), //back out TODO be smarter
+        SetPresetsList(usize) + SetPresetLoadedChanged = SetPresetsList(*state), //redraw
 
         PatcherInstances(usize) + BtnDown(Button::Back) = Menu(PATCHER_INSTANCES_INDEX),
         PatcherInstances(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instances_len() > *state + 1] = PatcherInstances(*state + 1),
@@ -231,6 +240,13 @@ smlang::statemachine! {
 pub struct StateController {
     pub params: HashMap<String, usize>,
     pub params_norm: HashMap<String, usize>,
+
+    set_current_name: Option<String>,
+    set_preset_loaded_name: Option<String>,
+
+    set_current_index: Option<usize>,
+    set_preset_loaded_index: Option<usize>,
+
     sysex: Vec<u8>,
     statemachine: StateMachine,
 }
@@ -606,6 +622,11 @@ impl StateController {
             params_norm: HashMap::new(),
             sysex: Vec::new(),
             statemachine: StateMachine::new(context),
+            set_current_name: None,
+            set_preset_loaded_name: None,
+
+            set_current_index: None,
+            set_preset_loaded_index: None,
         }
     }
 
@@ -668,6 +689,34 @@ impl StateController {
                     } {
                         self.handle_event(Events::Tempo(bpm)).await;
                     }
+                }
+                SET_CURRENT_ADDR => {
+                    self.set_current_name = match &msg.args[0] {
+                        OscType::String(name) => Some(name.clone()),
+                        _ => None,
+                    };
+                    self.set_current_index = if let Some(name) = &self.set_current_name {
+                        self.context().set_names().iter().position(|r| r == name)
+                    } else {
+                        None
+                    };
+                    self.handle_event(Events::SetCurrentChanged).await;
+                }
+                SET_PRESETS_LOADED_ADDR => {
+                    self.set_preset_loaded_name = match &msg.args[0] {
+                        OscType::String(name) => Some(name.clone()),
+                        _ => None,
+                    };
+                    self.set_preset_loaded_index = if let Some(name) = &self.set_preset_loaded_name
+                    {
+                        self.context()
+                            .set_preset_names()
+                            .iter()
+                            .position(|r| r == name)
+                    } else {
+                        None
+                    };
+                    self.handle_event(Events::SetPresetLoadedChanged).await;
                 }
                 _ => {
                     if let Some(instance) = self.params.get(&msg.addr).map(|i| *i) {
@@ -880,7 +929,7 @@ impl StateController {
                     let selected: usize = *selected;
                     {
                         let display = self.locked_display().await;
-                        draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected);
+                        draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
                     }
                     let ctx = self.context_mut();
                     ctx.light_button(MENU_MIDI, 0);
@@ -890,7 +939,14 @@ impl StateController {
                     let selected = *selected;
                     {
                         let display = self.locked_display().await;
-                        draw_menu(display, &"Load Set", self.context().set_names(), selected);
+                        let indicated = self.set_current_index;
+                        draw_menu(
+                            display,
+                            &"Load Set",
+                            self.context().set_names(),
+                            selected,
+                            indicated,
+                        );
                     }
 
                     self.context_mut()
@@ -902,11 +958,13 @@ impl StateController {
                     let selected = *selected;
                     {
                         let display = self.locked_display().await;
+                        let indicated = self.set_preset_loaded_index;
                         draw_menu(
                             display,
                             &"Load Set Preset",
                             self.context().set_preset_names(),
                             selected,
+                            indicated,
                         );
                     }
 
@@ -924,6 +982,7 @@ impl StateController {
                             &"Patcher Instances",
                             self.context().patcher_instance_names(),
                             selected,
+                            None,
                         );
                     }
 
@@ -1042,6 +1101,7 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     title: &str,
     items: &[S],
     selected: usize,
+    indicated: Option<usize>,
 ) {
     use embedded_layout::{layout::linear::LinearLayout, prelude::*};
     let text_style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
@@ -1065,10 +1125,13 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
         .zip(items.iter().skip(start).take(3))
         .enumerate()
     {
-        *l = if index + start == selected {
-            format!("> {}", item.as_ref())
+        let off = index + start;
+        let indicator = if Some(off) == indicated { &"*" } else { &" " };
+
+        *l = if off == selected {
+            format!(">{}{}", indicator, item.as_ref())
         } else {
-            format!("  {}", item.as_ref())
+            format!(" {}{}", indicator, item.as_ref())
         }
         .to_string();
 
