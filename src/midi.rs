@@ -3,6 +3,7 @@ pub struct Midi {
     len: usize,
 }
 
+#[allow(dead_code)]
 impl Midi {
     pub fn new(v: &[u8]) -> Self {
         assert!(v.len() <= 3);

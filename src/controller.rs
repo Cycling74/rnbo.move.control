@@ -13,25 +13,23 @@ use {
         primitives::{PrimitiveStyleBuilder, Rectangle},
         text::{Alignment, Text},
     },
-    futures_util::{stream::SplitSink, SinkExt, StreamExt, TryStreamExt},
+    futures_util::{stream::SplitSink, SinkExt},
     palette::{Darken, Srgb},
-    reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
+    reqwest_websocket::{Message, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
     std::{
-        cmp::{Ordering, PartialEq, PartialOrd},
+        cmp::PartialEq,
         collections::HashMap,
-        error::Error,
         fs::File,
         io::BufReader,
-        ops::{Deref, DerefMut},
+        ops::DerefMut,
         path::PathBuf,
         rc::Rc,
         sync::{
             atomic::{AtomicU8, Ordering as AtomicOrdering},
             mpsc as sync_mpsc, Arc,
         },
-        thread,
-        time::{Duration, Instant},
+        time::Duration,
     },
     tokio::sync::{Mutex, MutexGuard},
 };
@@ -51,11 +49,13 @@ pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
 pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
 pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loaded";
 
+const VOLUME_WHEEL_BUTTON: usize = 8;
 const VOLUME_WHEEL_ENCODER: usize = 9;
 const JOG_WHEEL_ENCODER: usize = 10;
 
 const PARAM_PAGE_SIZE: usize = 8;
 
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum MoveColor {
@@ -72,6 +72,7 @@ enum MoveColor {
     Red = 127,
 }
 
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum PowerCommand {
@@ -133,12 +134,10 @@ fn led_color(index: u8, color: &Srgb<u8>) -> [Midi; 6] {
 enum Button {
     JogWheel,
     Back,
-    Shift,
     PowerLong,
     PowerShort,
     Menu,
     Play,
-    EncoderTouch(usize),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -147,7 +146,7 @@ struct ParamUpdate {
     index: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Events {
     BtnDown(Button),
     BtnUp(Button),
@@ -179,13 +178,73 @@ const SETS_INDEX: usize = 1;
 const PATCHER_INSTANCES_INDEX: usize = 2;
 const TEMPO_INDEX: usize = 3;
 
+mod top {
+    use super::{Button, Events, PowerCommand, VOLUME_WHEEL_BUTTON, VOLUME_WHEEL_ENCODER};
+
+    pub struct Context {
+        shared: std::rc::Rc<std::sync::Mutex<super::SharedContext>>,
+    }
+
+    smlang::statemachine! {
+        states_attr: #[derive(Clone, Debug)],
+        transitions: {
+            *Init + BtnDown(Button::Menu) = Main,
+            Init + BtnDown(Button::JogWheel) = Main,
+            Init + BtnDown(Button::Back) = Main,
+
+            Main + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
+            VolumeEditor + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
+
+            Main + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor,
+            Main + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1); = VolumeEditor,
+            Main + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1); = VolumeEditor,
+
+            VolumeEditor + BtnDown(Button::Back) = Main,
+            VolumeEditor + BtnDown(Button::Menu) = Main,
+            VolumeEditor + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1); = VolumeEditor,
+            VolumeEditor + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1); = VolumeEditor,
+            VolumeEditor + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON] = Main,
+
+            PromptPower + BtnDown(Button::JogWheel) = PowerOff,
+            PromptPower + BtnDown(Button::Back) = Main,
+            PromptPower + BtnDown(Button::Menu) = Main,
+
+            _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
+
+        }
+    }
+
+    impl Context {
+        pub fn new(shared: std::rc::Rc<std::sync::Mutex<super::SharedContext>>) -> Self {
+            Self { shared }
+        }
+
+        fn with_shared<T, F: Fn(std::sync::MutexGuard<super::SharedContext>) -> T>(
+            &self,
+            f: F,
+        ) -> T {
+            let g = self.shared.lock().expect("no poison");
+            f(g)
+        }
+
+        pub fn send_power_cmd(&mut self, cmd: PowerCommand) {
+            self.with_shared(|mut s| s.send_power_cmd(cmd))
+        }
+
+        pub fn offset_volume(&mut self, amt: isize) {
+            self.with_shared(|mut s| s.offset_volume(amt))
+        }
+
+        pub fn volume(&self) -> f32 {
+            self.with_shared(|s| s.config.volume as f32 / 255.0)
+        }
+    }
+}
+
 smlang::statemachine! {
-    states_attr: #[derive(Clone)],
+    states_attr: #[derive(Clone, Debug)],
     transitions: {
         *Init + BtnDown(Button::Back) = Init, //dummy
-                          //
-        PromptPower + BtnDown(Button::JogWheel) = PowerOff,
-        PromptPower + BtnDown(Button::Back) = Menu(0),
 
         //nav
         Menu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < MENU_ITEMS.len()] = Menu(*state + 1),
@@ -242,13 +301,8 @@ smlang::statemachine! {
         TempoEditor + BtnUp(Button::JogWheel) / ctx.set_tempo_offset_mul(1.0); = TempoEditor,
         TempoEditor + Tempo(_) / ctx.update_tempo(*event); = TempoEditor,
 
-        _ + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
-        _ + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
-
         _ + BtnDown(Button::Menu) / ctx.clear_params(); = Menu(0),
 
-        _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
-        _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
         _ + Tempo(_) / ctx.update_tempo(*event);,
         _ + Transport(_) / ctx.update_transport(*event);,
         _ + BtnDown(Button::Play) / ctx.toggle_transport().await;,
@@ -266,12 +320,22 @@ pub struct StateController {
     set_preset_loaded_index: Option<usize>,
 
     sysex: Vec<u8>,
-    statemachine: StateMachine,
+
+    topsm: top::StateMachine,
+    sm: StateMachine,
+}
+
+struct SharedContext {
+    display: Rc<Mutex<MoveDisplay>>,
+    midi_out_queue: sync_mpsc::SyncSender<Midi>,
+    volume: Arc<AtomicU8>,
+    config: Config,
+    config_path: PathBuf,
 }
 
 struct Context {
-    display: Rc<Mutex<MoveDisplay>>,
-    midi_out_queue: sync_mpsc::SyncSender<Midi>,
+    shared: std::rc::Rc<std::sync::Mutex<SharedContext>>,
+
     bpm: f32,
     tempo_offset_mul: f32,
     rolling: bool,
@@ -282,12 +346,9 @@ struct Context {
     patcher_instance_to_index: HashMap<usize, usize>,
     patcher_params: HashMap<usize, Vec<Param>>,
     set_selected: Option<String>,
-    volume: Arc<AtomicU8>,
-    config: Config,
-    config_path: PathBuf,
 }
 
-impl Context {
+impl SharedContext {
     fn new(
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
         display: &mut Rc<Mutex<MoveDisplay>>,
@@ -318,6 +379,41 @@ impl Context {
         Self {
             display: display.clone(),
             midi_out_queue,
+            volume,
+            config,
+            config_path,
+        }
+    }
+
+    fn send_power_cmd(&mut self, cmd: PowerCommand) {
+        for m in power_sysex(cmd).into_iter() {
+            let _ = self.midi_out_queue.send(m);
+        }
+    }
+
+    fn offset_volume(&mut self, amt: isize) {
+        let cur = self.config.volume as isize;
+        let next = (cur + amt).clamp(0, 255);
+        if next != cur {
+            self.config.volume = next as u8;
+            self.volume
+                .store(self.config.volume, AtomicOrdering::SeqCst);
+        }
+    }
+
+    async fn locked_display(&self) -> MutexGuard<MoveDisplay> {
+        self.display.lock().await
+    }
+
+    async fn with_display<T, F: Fn(MutexGuard<'_, MoveDisplay>) -> T>(&self, f: F) -> T {
+        let g = self.display.lock().await;
+        f(g)
+    }
+}
+
+impl Context {
+    fn new(shared: std::rc::Rc<std::sync::Mutex<SharedContext>>) -> Self {
+        Self {
             bpm: 0f32,
             tempo_offset_mul: 1.0,
             rolling: false,
@@ -328,15 +424,7 @@ impl Context {
             patcher_instance_names: Vec::new(),
             patcher_instance_to_index: HashMap::new(),
             patcher_params: HashMap::new(),
-            volume,
-            config,
-            config_path,
-        }
-    }
-
-    fn send_power_cmd(&mut self, cmd: PowerCommand) {
-        for m in power_sysex(cmd).into_iter() {
-            let _ = self.midi_out_queue.send(m);
+            shared,
         }
     }
 
@@ -446,17 +534,9 @@ impl Context {
     }
 
     fn light_button(&mut self, btn: u8, val: u8) {
-        let _ = self.midi_out_queue.send(Midi::cc(btn, val, 0));
-    }
-
-    fn offset_volume(&mut self, amt: isize) {
-        let cur = self.config.volume as isize;
-        let next = (cur + amt).clamp(0, 255);
-        if next != cur {
-            self.config.volume = next as u8;
-            self.volume
-                .store(self.config.volume, AtomicOrdering::SeqCst);
-        }
+        self.with_shared(|shared| {
+            let _ = shared.midi_out_queue.send(Midi::cc(btn, val, 0));
+        })
     }
 
     fn param_visible(&self, update: &ParamUpdate, state: &PatcherParams) -> bool {
@@ -559,9 +639,10 @@ impl Context {
     }
 
     fn clear_params(&mut self) {
+        let shared = self.shared.lock().expect("no poison");
         for index in 0..PARAM_PAGE_SIZE {
             let num = index + 71;
-            let _ = self
+            let _ = shared
                 .midi_out_queue
                 .send(Midi::cc(num as u8, MoveColor::Black as _, 0));
         }
@@ -577,8 +658,9 @@ impl Context {
             //TODO get from metdata?
             let color = Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap).into_format();
 
+            let shared = self.shared.lock().expect("no poison");
             for m in led_color(num, &color) {
-                let _ = self.midi_out_queue.send(m);
+                let _ = shared.midi_out_queue.send(m);
             }
         }
     }
@@ -639,6 +721,16 @@ impl Context {
             }
         }
     }
+
+    async fn with_display<T, F: Fn(MutexGuard<'_, MoveDisplay>) -> T>(&self, f: F) -> T {
+        let shared = self.shared.lock().expect("no poison");
+        shared.with_display(f).await
+    }
+
+    fn with_shared<T, F: Fn(std::sync::MutexGuard<SharedContext>) -> T>(&self, f: F) -> T {
+        let g = self.shared.lock().expect("no poison");
+        f(g)
+    }
 }
 
 impl StateController {
@@ -648,16 +740,29 @@ impl StateController {
         volume: Arc<AtomicU8>,
         config_path: PathBuf,
     ) -> Self {
-        let mut context = Context::new(midi_out_queue, display, volume, config_path);
+        let shared = std::rc::Rc::new(std::sync::Mutex::new(SharedContext::new(
+            midi_out_queue,
+            display,
+            volume,
+            config_path,
+        )));
 
+        let mut context = Context::new(shared.clone());
         context.light_button(MENU_MIDI, MoveColor::LightGray as _);
         context.light_button(PLAY_MIDI, MoveColor::LightGray as _);
+        let sm = StateMachine::new_with_state(context, States::Menu(0));
+
+        let context = top::Context::new(shared);
+        let topsm = top::StateMachine::new(context);
 
         Self {
             params: HashMap::new(),
             params_norm: HashMap::new(),
             sysex: Vec::new(),
-            statemachine: StateMachine::new(context),
+
+            sm,
+            topsm,
+
             set_current_name: None,
             set_preset_loaded_name: None,
 
@@ -933,133 +1038,121 @@ impl StateController {
     }
 
     async fn display_centered(&mut self, text: &str) {
-        let mut display = self.locked_display().await;
-        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-        display.clear(BinaryColor::Off).unwrap();
+        self.with_display(|mut display| {
+            let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+            display.clear(BinaryColor::Off).unwrap();
 
-        draw_centered(&mut display, text, style);
+            draw_centered(&mut display, text, style);
+        })
+        .await;
     }
 
-    async fn handle_event(&mut self, e: Events) {
-        if let Some(ns) = self.statemachine.process_event(e).await {
-            //got new state
-            match ns {
-                States::PowerOff => {
-                    self.display_centered("Powering Down").await;
-                    self.context_mut().light_button(BACK_MIDI, 0);
-                    //leave some time for it do draw
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    self.context_mut().send_power_cmd(PowerCommand::PowerOff);
-                }
-                States::PromptPower => {
-                    self.context_mut().light_button(BACK_MIDI, 127);
-                    self.display_centered("Press wheel to\nshut down").await;
-                }
-                States::Menu(selected) => {
-                    let selected: usize = *selected;
-                    {
-                        let display = self.locked_display().await;
-                        draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
-                    }
+    async fn render_state(&mut self, s: &States) {
+        match s {
+            States::Menu(selected) => {
+                let selected: usize = *selected;
+                self.with_display(|display| {
+                    draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
+                })
+                .await;
+                let ctx = self.context_mut();
+                ctx.light_button(BACK_MIDI, 0);
+            }
+            States::TempoEditor => {
+                let bpm = {
                     let ctx = self.context_mut();
-                    ctx.light_button(BACK_MIDI, 0);
-                }
-                States::TempoEditor => {
-                    let bpm = {
-                        let ctx = self.context_mut();
-                        ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                        ctx.bpm
-                    };
-                    {
-                        let mut display = self.locked_display().await;
+                    ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                    ctx.bpm
+                };
+                self.with_display(|mut display| {
+                    display.clear(BinaryColor::Off).unwrap();
+                    draw_title(&mut display, &"Tempo (bpm)");
+                    let bpm = format!("{:.1}", bpm);
+                    draw_centered(&mut display, bpm.as_str(), TITLE_TEXT_STYLE);
+                })
+                .await;
+            }
+            States::SetsList(selected) => {
+                let selected = *selected;
+                let indicated = self.set_current_index;
+                self.with_display(|display| {
+                    draw_menu(
+                        display,
+                        &"Load Set",
+                        self.context().set_names(),
+                        selected,
+                        indicated,
+                    );
+                })
+                .await;
 
-                        display.clear(BinaryColor::Off).unwrap();
-                        draw_title(&mut display, &"Tempo (bpm)");
-                        let bpm = format!("{:.1}", bpm);
-                        draw_centered(&mut display, bpm.as_str(), TITLE_TEXT_STYLE);
-                    }
-                }
-                States::SetsList(selected) => {
-                    let selected = *selected;
-                    {
-                        let display = self.locked_display().await;
-                        let indicated = self.set_current_index;
-                        draw_menu(
-                            display,
-                            &"Load Set",
-                            self.context().set_names(),
-                            selected,
-                            indicated,
-                        );
-                    }
+                self.context_mut()
+                    .light_button(BACK_MIDI, MoveColor::LightGray as _);
+            }
+            States::SetPresetsList(selected) => {
+                let selected = *selected;
+                let indicated = self.set_preset_loaded_index;
+                self.with_display(|display| {
+                    draw_menu(
+                        display,
+                        &"Load Set Preset",
+                        self.context().set_preset_names(),
+                        selected,
+                        indicated,
+                    );
+                })
+                .await;
 
-                    self.context_mut()
-                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::SetPresetsList(selected) => {
-                    let selected = *selected;
-                    {
-                        let display = self.locked_display().await;
-                        let indicated = self.set_preset_loaded_index;
-                        draw_menu(
-                            display,
-                            &"Load Set Preset",
-                            self.context().set_preset_names(),
-                            selected,
-                            indicated,
-                        );
-                    }
+                self.context_mut()
+                    .light_button(BACK_MIDI, MoveColor::LightGray as _);
+            }
+            States::PatcherInstances(selected) => {
+                let selected = *selected;
+                self.with_display(|display| {
+                    draw_menu(
+                        display,
+                        &"Patcher Instances",
+                        self.context().patcher_instance_names(),
+                        selected,
+                        None,
+                    );
+                })
+                .await;
 
-                    self.context_mut()
-                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::PatcherInstances(selected) => {
-                    let selected = *selected;
-                    {
-                        let display = self.locked_display().await;
-                        draw_menu(
-                            display,
-                            &"Patcher Instances",
-                            self.context().patcher_instance_names(),
-                            selected,
-                            None,
-                        );
-                    }
+                self.context_mut()
+                    .light_button(BACK_MIDI, MoveColor::LightGray as _);
+            }
+            States::PatcherParams(state) => {
+                let index = state.index;
+                let page = state.page;
+                let focus = state.focused.clone();
+                {
+                    let pages = self.context().patcher_instance_param_pages(index);
 
-                    self.context_mut()
-                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::PatcherParams(state) => {
-                    let index = state.index;
-                    let page = state.page;
-                    let focus = state.focused.clone();
-                    {
-                        let pages = self.context().patcher_instance_param_pages(index);
-
-                        //focused valaue
-                        let focus = if let Some(focus) = focus {
-                            if let Some(param) =
-                                self.context().param(index, focus + page * PARAM_PAGE_SIZE)
-                            {
-                                Some(format!("{}\n{}", param.name(), param.render_value()))
-                            } else {
-                                None
-                            }
+                    //focused valaue
+                    let focus = if let Some(focus) = focus {
+                        if let Some(param) =
+                            self.context().param(index, focus + page * PARAM_PAGE_SIZE)
+                        {
+                            Some(format!("{}\n{}", param.name(), param.render_value()))
                         } else {
                             None
-                        };
-
-                        let text_style =
-                            MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-                        let name = self.context().patcher_instance_names.get(index).unwrap();
-
-                        let mut title = format!("{} Params", name);
-                        if title.len() > 16 {
-                            title.truncate(14);
-                            title.push_str("..");
                         }
+                    } else {
+                        None
+                    };
 
-                        let mut display = self.locked_display().await;
+                    let text_style =
+                        MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+                    let name = self.context().patcher_instance_names.get(index).unwrap();
+
+                    let mut title = format!("{} Params", name);
+                    if title.len() > 16 {
+                        title.truncate(14);
+                        title.push_str("..");
+                    }
+
+                    self.with_display(|mut display| {
                         display.clear(BinaryColor::Off).unwrap();
 
                         draw_title(&mut display, title.as_str());
@@ -1090,7 +1183,7 @@ impl StateController {
                             }
                         }
 
-                        if let Some(focus) = focus {
+                        if let Some(focus) = &focus {
                             Text::with_alignment(
                                 focus.as_str(),
                                 Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
@@ -1100,31 +1193,119 @@ impl StateController {
                             .draw(display.deref_mut())
                             .unwrap();
                         }
-                    }
-                    let ctx = self.context_mut();
-                    ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                    })
+                    .await;
                 }
-                _ => (),
+                let ctx = self.context_mut();
+                ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
-
-            //self.context_mut().light_button(MENU_MIDI, MoveColor::LightGray as _);
+            _ => (),
         }
     }
 
-    async fn locked_display(&self) -> MutexGuard<MoveDisplay> {
-        self.context().display.lock().await
+    async fn handle_event(&mut self, e: Events) {
+        let was_main = match self.topsm.state() {
+            top::States::Main => true,
+            _ => false,
+        };
+
+        if let Some(ns) = self.topsm.process_event(e) {
+            use top::States;
+            match ns {
+                States::PowerOff => {
+                    self.display_centered("Powering Down").await;
+
+                    {
+                        let ctx = self.context_mut();
+
+                        ctx.light_button(BACK_MIDI, 0);
+                        ctx.light_button(MENU_MIDI, 0);
+                    }
+
+                    //leave some time for it do draw
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    self.topsm
+                        .context_mut()
+                        .send_power_cmd(PowerCommand::PowerOff);
+                }
+                States::PromptPower => {
+                    self.context_mut()
+                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                    self.display_centered("Press wheel to\nshut down").await;
+                }
+                States::VolumeEditor => {
+                    let volume = self.topsm.context().volume();
+                    self.context_mut()
+                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                    self.display_centered("Volume").await;
+                    self.with_display(|mut display| {
+                        display.clear(BinaryColor::Off).unwrap();
+                        draw_title(&mut display, &"Volume");
+                        let volume = format!("{:.2}", volume);
+                        draw_centered(&mut display, volume.as_str(), TITLE_TEXT_STYLE);
+                    })
+                    .await;
+                }
+                _ => (),
+            }
+        }
+
+        //println!("top state {:?}", self.topsm.state());
+
+        match self.topsm.state() {
+            top::States::Main => {
+                //if we're coming out of volume into a parameter editor for instance, we want to
+                //know what we've touched
+                let touch = match e {
+                    Events::EncTouch(e) => e < 8,
+                    _ => false,
+                };
+                let render = if was_main || touch {
+                    let ns = self.sm.process_event(e).await;
+                    ns.is_some()
+                } else {
+                    //if top transitioned, we don't process an event but we do render
+                    true
+                };
+                if render {
+                    let s = self.sm.state().clone();
+                    self.render_state(&s).await;
+                }
+            }
+            _ => {
+                //pass thru  pending changes like sets names changed etc even if
+                let _ = match e {
+                    Events::ParamUpdate(_)
+                    | Events::Transport(_)
+                    | Events::Tempo(_)
+                    | Events::SetNamesChanged
+                    | Events::SetPresetNamesChanged
+                    | Events::SetCurrentChanged
+                    | Events::SetPresetLoadedChanged => self.sm.process_event(e).await,
+                    _ => None,
+                };
+
+                return;
+            }
+        }
     }
 
+    async fn with_display<T, F: Fn(MutexGuard<'_, MoveDisplay>) -> T>(&self, f: F) -> T {
+        self.context().with_display(f).await
+    }
+
+    /*
     fn send_midi(&mut self, midi: Midi) {
         let _ = self.context_mut().midi_out_queue.send(midi);
     }
+    */
 
     fn context(&self) -> &Context {
-        self.statemachine.context()
+        self.sm.context()
     }
 
     fn context_mut(&mut self) -> &mut Context {
-        self.statemachine.context_mut()
+        self.sm.context_mut()
     }
 }
 
@@ -1222,7 +1403,7 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     .unwrap();
 }
 
-impl Drop for Context {
+impl Drop for SharedContext {
     fn drop(&mut self) {
         if let Ok(file) = std::fs::File::create(&self.config_path) {
             let _ = serde_json::to_writer_pretty(file, &self.config);
