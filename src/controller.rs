@@ -1254,7 +1254,13 @@ impl StateController {
 
         match self.topsm.state() {
             top::States::Main => {
-                let render = if was_main {
+                //if we're coming out of volume into a parameter editor for instance, we want to
+                //know what we've touched
+                let touch = match e {
+                    Events::EncTouch(e) => e < 8,
+                    _ => false,
+                };
+                let render = if was_main || touch {
                     let ns = self.sm.process_event(e).await;
                     ns.is_some()
                 } else {
