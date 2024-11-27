@@ -1251,11 +1251,20 @@ impl StateController {
         }
 
         //println!("top state {:?}", self.topsm.state());
-        let mut render: bool;
 
         match self.topsm.state() {
             top::States::Main(_) => {
-                render = !was_main;
+                let render = if was_main {
+                    let ns = self.sm.process_event(e).await;
+                    ns.is_some()
+                } else {
+                    //if top transitioned, we don't process an event but we do render
+                    true
+                };
+                if render {
+                    let s = self.sm.state().clone();
+                    self.render_state(&s).await;
+                }
             }
             _ => {
                 //pass thru  pending changes like sets names changed etc even if
@@ -1269,14 +1278,6 @@ impl StateController {
 
                 return;
             }
-        }
-
-        let ns = self.sm.process_event(e).await;
-        render = render || ns.is_some();
-        if render {
-            let s = self.sm.state().clone();
-
-            self.render_state(&s).await;
         }
     }
 
