@@ -44,6 +44,7 @@ const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 const TITLE_TEXT_STYLE: MonoTextStyle<BinaryColor> =
     MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
 
+pub const INST_UNLOAD_ADDR: &str = "/rnbo/inst/control/unload";
 pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
 pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
 pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
@@ -462,13 +463,22 @@ impl Context {
     }
 
     async fn set_select(&mut self, index: usize) {
-        self.set_selected = self.set_names.get(index).map(|s| s.clone());
-        if let Some(name) = &self.set_selected {
+        //unload
+        if index == 0 {
             let msg = OscMessage {
-                addr: SET_LOAD_ADDR.to_string(),
-                args: vec![OscType::String(name.clone())],
+                addr: INST_UNLOAD_ADDR.to_string(),
+                args: vec![OscType::Int(-1)],
             };
             self.send_osc(msg).await;
+        } else {
+            self.set_selected = self.set_names.get(index).map(|s| s.clone());
+            if let Some(name) = &self.set_selected {
+                let msg = OscMessage {
+                    addr: SET_LOAD_ADDR.to_string(),
+                    args: vec![OscType::String(name.clone())],
+                };
+                self.send_osc(msg).await;
+            }
         }
     }
 
@@ -487,6 +497,9 @@ impl Context {
         //we always want to keep track of the names but we might not change state
         let mut names = names.clone();
         names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+
+        names.insert(0, "<empty>".to_string());
+
         self.set_names = names;
 
         //TODO change selected index?
