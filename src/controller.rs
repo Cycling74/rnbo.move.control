@@ -201,8 +201,8 @@ mod top {
 
             VolumeEditor(super::States) + BtnDown(Button::Back) = Main(state.clone()),
             VolumeEditor(super::States) + BtnDown(Button::Menu) = Main(state.clone()),
-            VolumeEditor(super::States) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
-            VolumeEditor(super::States) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
+            VolumeEditor(super::States) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1); = VolumeEditor(state.clone()),
+            VolumeEditor(super::States) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1); = VolumeEditor(state.clone()),
             VolumeEditor(super::States) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON] = Main(state.clone()),
 
             PromptPower(super::States) + BtnDown(Button::JogWheel) = PowerOff,
@@ -233,6 +233,10 @@ mod top {
 
         pub fn offset_volume(&mut self, amt: isize) {
             self.with_shared(|mut s| s.offset_volume(amt))
+        }
+
+        pub fn volume(&self) -> f32 {
+            self.with_shared(|s| s.config.volume as f32 / 255.0)
         }
     }
 }
@@ -1043,8 +1047,168 @@ impl StateController {
         .await;
     }
 
+    async fn render_state(&mut self, s: &States) {
+        match s {
+            States::Menu(selected) => {
+                let selected: usize = *selected;
+                self.with_display(|display| {
+                    draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
+                })
+                .await;
+                let ctx = self.context_mut();
+                ctx.light_button(BACK_MIDI, 0);
+            }
+            States::TempoEditor => {
+                let bpm = {
+                    let ctx = self.context_mut();
+                    ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                    ctx.bpm
+                };
+                self.with_display(|mut display| {
+                    display.clear(BinaryColor::Off).unwrap();
+                    draw_title(&mut display, &"Tempo (bpm)");
+                    let bpm = format!("{:.1}", bpm);
+                    draw_centered(&mut display, bpm.as_str(), TITLE_TEXT_STYLE);
+                })
+                .await;
+            }
+            States::SetsList(selected) => {
+                let selected = *selected;
+                let indicated = self.set_current_index;
+                self.with_display(|display| {
+                    draw_menu(
+                        display,
+                        &"Load Set",
+                        self.context().set_names(),
+                        selected,
+                        indicated,
+                    );
+                })
+                .await;
+
+                self.context_mut()
+                    .light_button(BACK_MIDI, MoveColor::LightGray as _);
+            }
+            States::SetPresetsList(selected) => {
+                let selected = *selected;
+                let indicated = self.set_preset_loaded_index;
+                self.with_display(|display| {
+                    draw_menu(
+                        display,
+                        &"Load Set Preset",
+                        self.context().set_preset_names(),
+                        selected,
+                        indicated,
+                    );
+                })
+                .await;
+
+                self.context_mut()
+                    .light_button(BACK_MIDI, MoveColor::LightGray as _);
+            }
+            States::PatcherInstances(selected) => {
+                let selected = *selected;
+                self.with_display(|display| {
+                    draw_menu(
+                        display,
+                        &"Patcher Instances",
+                        self.context().patcher_instance_names(),
+                        selected,
+                        None,
+                    );
+                })
+                .await;
+
+                self.context_mut()
+                    .light_button(BACK_MIDI, MoveColor::LightGray as _);
+            }
+            States::PatcherParams(state) => {
+                let index = state.index;
+                let page = state.page;
+                let focus = state.focused.clone();
+                {
+                    let pages = self.context().patcher_instance_param_pages(index);
+
+                    //focused valaue
+                    let focus = if let Some(focus) = focus {
+                        if let Some(param) =
+                            self.context().param(index, focus + page * PARAM_PAGE_SIZE)
+                        {
+                            Some(format!("{}\n{}", param.name(), param.render_value()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    let text_style =
+                        MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+                    let name = self.context().patcher_instance_names.get(index).unwrap();
+
+                    let mut title = format!("{} Params", name);
+                    if title.len() > 16 {
+                        title.truncate(14);
+                        title.push_str("..");
+                    }
+
+                    self.with_display(|mut display| {
+                        display.clear(BinaryColor::Off).unwrap();
+
+                        draw_title(&mut display, title.as_str());
+
+                        //draw pager
+                        if pages > 1 {
+                            let style = PrimitiveStyleBuilder::new()
+                                .stroke_color(BinaryColor::On)
+                                .stroke_width(1)
+                                .fill_color(BinaryColor::On)
+                                .build();
+
+                            let step = DISPLAY_WIDTH / pages as u32;
+                            let width = step - 4;
+
+                            let y = (DISPLAY_HEIGHT - 3) as i32;
+                            let mut x = (step / 2) as i32;
+
+                            //TODO assert that we can actually draw these
+
+                            for p in 0..pages {
+                                let height = if p == page { 3 } else { 1 };
+                                Rectangle::with_center(Point::new(x, y), Size::new(width, height))
+                                    .into_styled(style)
+                                    .draw(display.deref_mut())
+                                    .unwrap();
+                                x = x + (step as i32);
+                            }
+                        }
+
+                        if let Some(focus) = &focus {
+                            Text::with_alignment(
+                                focus.as_str(),
+                                Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
+                                text_style,
+                                Alignment::Center,
+                            )
+                            .draw(display.deref_mut())
+                            .unwrap();
+                        }
+                    })
+                    .await;
+                }
+                let ctx = self.context_mut();
+                ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
+            }
+            _ => (),
+        }
+    }
+
     async fn handle_event(&mut self, e: Events) {
-        println!("handle_event {:?}", e);
+        let was_main = match self.topsm.state() {
+            top::States::Main(_) => true,
+            _ => false,
+        };
+
         if let Some(ns) = self.topsm.process_event(e) {
             use top::States;
             match ns {
@@ -1065,187 +1229,54 @@ impl StateController {
                         .send_power_cmd(PowerCommand::PowerOff);
                 }
                 States::PromptPower(_) => {
-                    self.context_mut().light_button(BACK_MIDI, 127);
+                    self.context_mut()
+                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
                     self.display_centered("Press wheel to\nshut down").await;
                 }
                 States::VolumeEditor(_) => {
-                    //TODO
-                }
-                _ => (),
-            }
-        }
-
-        println!("top state {:?}", self.topsm.state());
-
-        //only pass through if top state is Main
-        //TODO manage pending chnages like sets names changed etc
-        match self.topsm.state() {
-            top::States::Main(_) => (),
-            _ => return,
-        }
-
-        println!("thru to main {:?}", e);
-
-        if let Some(ns) = self.sm.process_event(e).await {
-            //got new state
-            match ns {
-                States::Menu(selected) => {
-                    let selected: usize = *selected;
-                    self.with_display(|display| {
-                        draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
-                    })
-                    .await;
-                    let ctx = self.context_mut();
-                    ctx.light_button(BACK_MIDI, 0);
-                }
-                States::TempoEditor => {
-                    let bpm = {
-                        let ctx = self.context_mut();
-                        ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                        ctx.bpm
-                    };
+                    let volume = self.topsm.context().volume();
+                    self.context_mut()
+                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                    self.display_centered("Volume").await;
                     self.with_display(|mut display| {
                         display.clear(BinaryColor::Off).unwrap();
-                        draw_title(&mut display, &"Tempo (bpm)");
-                        let bpm = format!("{:.1}", bpm);
-                        draw_centered(&mut display, bpm.as_str(), TITLE_TEXT_STYLE);
+                        draw_title(&mut display, &"Volume");
+                        let volume = format!("{:.2}", volume);
+                        draw_centered(&mut display, volume.as_str(), TITLE_TEXT_STYLE);
                     })
                     .await;
-                }
-                States::SetsList(selected) => {
-                    let selected = *selected;
-                    let indicated = self.set_current_index;
-                    self.with_display(|display| {
-                        draw_menu(
-                            display,
-                            &"Load Set",
-                            self.context().set_names(),
-                            selected,
-                            indicated,
-                        );
-                    })
-                    .await;
-
-                    self.context_mut()
-                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::SetPresetsList(selected) => {
-                    let selected = *selected;
-                    let indicated = self.set_preset_loaded_index;
-                    self.with_display(|display| {
-                        draw_menu(
-                            display,
-                            &"Load Set Preset",
-                            self.context().set_preset_names(),
-                            selected,
-                            indicated,
-                        );
-                    })
-                    .await;
-
-                    self.context_mut()
-                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::PatcherInstances(selected) => {
-                    let selected = *selected;
-                    self.with_display(|display| {
-                        draw_menu(
-                            display,
-                            &"Patcher Instances",
-                            self.context().patcher_instance_names(),
-                            selected,
-                            None,
-                        );
-                    })
-                    .await;
-
-                    self.context_mut()
-                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::PatcherParams(state) => {
-                    let index = state.index;
-                    let page = state.page;
-                    let focus = state.focused.clone();
-                    {
-                        let pages = self.context().patcher_instance_param_pages(index);
-
-                        //focused valaue
-                        let focus = if let Some(focus) = focus {
-                            if let Some(param) =
-                                self.context().param(index, focus + page * PARAM_PAGE_SIZE)
-                            {
-                                Some(format!("{}\n{}", param.name(), param.render_value()))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-
-                        let text_style =
-                            MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-                        let name = self.context().patcher_instance_names.get(index).unwrap();
-
-                        let mut title = format!("{} Params", name);
-                        if title.len() > 16 {
-                            title.truncate(14);
-                            title.push_str("..");
-                        }
-
-                        self.with_display(|mut display| {
-                            display.clear(BinaryColor::Off).unwrap();
-
-                            draw_title(&mut display, title.as_str());
-
-                            //draw pager
-                            if pages > 1 {
-                                let style = PrimitiveStyleBuilder::new()
-                                    .stroke_color(BinaryColor::On)
-                                    .stroke_width(1)
-                                    .fill_color(BinaryColor::On)
-                                    .build();
-
-                                let step = DISPLAY_WIDTH / pages as u32;
-                                let width = step - 4;
-
-                                let y = (DISPLAY_HEIGHT - 3) as i32;
-                                let mut x = (step / 2) as i32;
-
-                                //TODO assert that we can actually draw these
-
-                                for p in 0..pages {
-                                    let height = if p == page { 3 } else { 1 };
-                                    Rectangle::with_center(
-                                        Point::new(x, y),
-                                        Size::new(width, height),
-                                    )
-                                    .into_styled(style)
-                                    .draw(display.deref_mut())
-                                    .unwrap();
-                                    x = x + (step as i32);
-                                }
-                            }
-
-                            if let Some(focus) = &focus {
-                                Text::with_alignment(
-                                    focus.as_str(),
-                                    Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
-                                    text_style,
-                                    Alignment::Center,
-                                )
-                                .draw(display.deref_mut())
-                                .unwrap();
-                            }
-                        })
-                        .await;
-                    }
-                    let ctx = self.context_mut();
-                    ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
                 _ => (),
             }
+        }
 
-            //self.context_mut().light_button(MENU_MIDI, MoveColor::LightGray as _);
+        //println!("top state {:?}", self.topsm.state());
+        let mut render: bool;
+
+        match self.topsm.state() {
+            top::States::Main(_) => {
+                render = !was_main;
+            }
+            _ => {
+                //pass thru  pending changes like sets names changed etc even if
+                let _ = match e {
+                    Events::SetNamesChanged
+                    | Events::SetPresetNamesChanged
+                    | Events::SetCurrentChanged
+                    | Events::SetPresetLoadedChanged => self.sm.process_event(e).await,
+                    _ => None,
+                };
+
+                return;
+            }
+        }
+
+        let ns = self.sm.process_event(e).await;
+        render = render || ns.is_some();
+        if render {
+            let s = self.sm.state().clone();
+
+            self.render_state(&s).await;
         }
     }
 
