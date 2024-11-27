@@ -12,22 +12,21 @@ use {
         prelude::*,
         text::{Alignment, Text},
     },
-    futures_util::{stream::SplitSink, SinkExt, StreamExt, TryStreamExt},
+    futures_util::{StreamExt, TryStreamExt},
     jack::{
         AudioIn, AudioOut, Client, ClientOptions, Control, MidiIn, MidiOut, Port, PortId,
         ProcessScope, RawMidi, Unowned,
     },
-    param::Param,
     patcher::PatcherInst,
     regex::Regex,
-    reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
-    rosc::{OscMessage, OscPacket, OscType},
+    reqwest_websocket::{Message, RequestBuilderExt},
+    rosc::OscPacket,
     serde::{Deserialize, Serialize},
     std::process::{Child, Command, Stdio},
     std::{
         collections::HashMap,
         error::Error,
-        ops::{Deref, DerefMut},
+        ops::Deref,
         path::PathBuf,
         rc::Rc,
         sync::{
@@ -214,7 +213,7 @@ async fn with_client(
 
     //volume control
     let volume = Arc::new(AtomicU8::new(0));
-    let volumeclient = {
+    let _volumeclient = {
         let volume = volume.clone();
         let (volumeclient, _status) =
             jack::Client::new("move-volume", jack::ClientOptions::empty()).unwrap();

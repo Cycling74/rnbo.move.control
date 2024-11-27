@@ -239,7 +239,7 @@ impl Param {
 
     //recursively parse for params
     fn get_all(json: &serde_json::Value, values: &mut Vec<Param>) -> Option<()> {
-        for (k, v) in json.get("CONTENTS")?.as_object()?.iter() {
+        for (_k, v) in json.get("CONTENTS")?.as_object()?.iter() {
             let c = v.get("CONTENTS")?.as_object()?;
             if c.contains_key("normalized") {
                 values.push(Self::parse(v)?);
