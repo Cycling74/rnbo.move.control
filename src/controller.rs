@@ -13,25 +13,23 @@ use {
         primitives::{PrimitiveStyleBuilder, Rectangle},
         text::{Alignment, Text},
     },
-    futures_util::{stream::SplitSink, SinkExt, StreamExt, TryStreamExt},
+    futures_util::{stream::SplitSink, SinkExt},
     palette::{Darken, Srgb},
-    reqwest_websocket::{Message, RequestBuilderExt, WebSocket},
+    reqwest_websocket::{Message, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
     std::{
-        cmp::{Ordering, PartialEq, PartialOrd},
+        cmp::PartialEq,
         collections::HashMap,
-        error::Error,
         fs::File,
         io::BufReader,
-        ops::{Deref, DerefMut},
+        ops::DerefMut,
         path::PathBuf,
         rc::Rc,
         sync::{
             atomic::{AtomicU8, Ordering as AtomicOrdering},
             mpsc as sync_mpsc, Arc,
         },
-        thread,
-        time::{Duration, Instant},
+        time::Duration,
     },
     tokio::sync::{Mutex, MutexGuard},
 };
@@ -133,12 +131,10 @@ fn led_color(index: u8, color: &Srgb<u8>) -> [Midi; 6] {
 enum Button {
     JogWheel,
     Back,
-    Shift,
     PowerLong,
     PowerShort,
     Menu,
     Play,
-    EncoderTouch(usize),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -178,6 +174,55 @@ const SET_PRESETS_INDEX: usize = 0;
 const SETS_INDEX: usize = 1;
 const PATCHER_INSTANCES_INDEX: usize = 2;
 const TEMPO_INDEX: usize = 3;
+
+mod top {
+    use super::{Button, Events, PowerCommand, VOLUME_WHEEL_ENCODER};
+
+    struct Context {
+        shared: std::rc::Rc<std::sync::Mutex<super::SharedContext>>,
+    }
+
+    smlang::statemachine! {
+        states_attr: #[derive(Clone)],
+        transitions: {
+            *Init + BtnDown(Button::Back) = Init,
+
+            Main(super::States) + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower(state.clone()),
+
+            Main(super::States) + EncTouch(VOLUME_WHEEL_ENCODER) = VolumeEditor(state.clone()),
+            Main(super::States) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1); = VolumeEditor(state.clone()),
+            Main(super::States) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1); = VolumeEditor(state.clone()),
+
+            VolumeEditor(super::States) + BtnDown(Button::Back) = Main(state.clone()),
+            VolumeEditor(super::States) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
+            VolumeEditor(super::States) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
+
+            PromptPower(super::States) + BtnDown(Button::JogWheel) = PowerOff,
+            PromptPower(super::States) + BtnDown(Button::Back) = Main(state.clone()),
+            PromptPower(super::States) + BtnDown(Button::Menu) = Main(state.clone()),
+
+            _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
+
+        }
+    }
+
+    impl Context {
+        fn with_shared<T, F: Fn(std::sync::MutexGuard<super::SharedContext>) -> T>(
+            &self,
+            f: F,
+        ) -> T {
+            let g = self.shared.lock().expect("no poison");
+            f(g)
+        }
+        fn send_power_cmd(&mut self, cmd: PowerCommand) {
+            self.with_shared(|mut s| s.send_power_cmd(cmd))
+        }
+
+        fn offset_volume(&mut self, amt: isize) {
+            self.with_shared(|mut s| s.offset_volume(amt))
+        }
+    }
+}
 
 smlang::statemachine! {
     states_attr: #[derive(Clone)],
@@ -242,13 +287,13 @@ smlang::statemachine! {
         TempoEditor + BtnUp(Button::JogWheel) / ctx.set_tempo_offset_mul(1.0); = TempoEditor,
         TempoEditor + Tempo(_) / ctx.update_tempo(*event); = TempoEditor,
 
-        _ + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
-        _ + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
+        //_ + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
+        //_ + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
 
         _ + BtnDown(Button::Menu) / ctx.clear_params(); = Menu(0),
 
-        _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
-        _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
+        //_ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
+        //_ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
         _ + Tempo(_) / ctx.update_tempo(*event);,
         _ + Transport(_) / ctx.update_transport(*event);,
         _ + BtnDown(Button::Play) / ctx.toggle_transport().await;,
@@ -269,9 +314,17 @@ pub struct StateController {
     statemachine: StateMachine,
 }
 
-struct Context {
+struct SharedContext {
     display: Rc<Mutex<MoveDisplay>>,
     midi_out_queue: sync_mpsc::SyncSender<Midi>,
+    volume: Arc<AtomicU8>,
+    config: Config,
+    config_path: PathBuf,
+}
+
+struct Context {
+    shared: std::rc::Rc<std::sync::Mutex<SharedContext>>,
+
     bpm: f32,
     tempo_offset_mul: f32,
     rolling: bool,
@@ -282,12 +335,9 @@ struct Context {
     patcher_instance_to_index: HashMap<usize, usize>,
     patcher_params: HashMap<usize, Vec<Param>>,
     set_selected: Option<String>,
-    volume: Arc<AtomicU8>,
-    config: Config,
-    config_path: PathBuf,
 }
 
-impl Context {
+impl SharedContext {
     fn new(
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
         display: &mut Rc<Mutex<MoveDisplay>>,
@@ -318,6 +368,41 @@ impl Context {
         Self {
             display: display.clone(),
             midi_out_queue,
+            volume,
+            config,
+            config_path,
+        }
+    }
+
+    fn send_power_cmd(&mut self, cmd: PowerCommand) {
+        for m in power_sysex(cmd).into_iter() {
+            let _ = self.midi_out_queue.send(m);
+        }
+    }
+
+    fn offset_volume(&mut self, amt: isize) {
+        let cur = self.config.volume as isize;
+        let next = (cur + amt).clamp(0, 255);
+        if next != cur {
+            self.config.volume = next as u8;
+            self.volume
+                .store(self.config.volume, AtomicOrdering::SeqCst);
+        }
+    }
+
+    async fn locked_display(&self) -> MutexGuard<MoveDisplay> {
+        self.display.lock().await
+    }
+
+    async fn with_display<T, F: Fn(MutexGuard<'_, MoveDisplay>) -> T>(&self, f: F) -> T {
+        let g = self.display.lock().await;
+        f(g)
+    }
+}
+
+impl Context {
+    fn new(shared: std::rc::Rc<std::sync::Mutex<SharedContext>>) -> Self {
+        Self {
             bpm: 0f32,
             tempo_offset_mul: 1.0,
             rolling: false,
@@ -328,15 +413,7 @@ impl Context {
             patcher_instance_names: Vec::new(),
             patcher_instance_to_index: HashMap::new(),
             patcher_params: HashMap::new(),
-            volume,
-            config,
-            config_path,
-        }
-    }
-
-    fn send_power_cmd(&mut self, cmd: PowerCommand) {
-        for m in power_sysex(cmd).into_iter() {
-            let _ = self.midi_out_queue.send(m);
+            shared,
         }
     }
 
@@ -446,17 +523,9 @@ impl Context {
     }
 
     fn light_button(&mut self, btn: u8, val: u8) {
-        let _ = self.midi_out_queue.send(Midi::cc(btn, val, 0));
-    }
-
-    fn offset_volume(&mut self, amt: isize) {
-        let cur = self.config.volume as isize;
-        let next = (cur + amt).clamp(0, 255);
-        if next != cur {
-            self.config.volume = next as u8;
-            self.volume
-                .store(self.config.volume, AtomicOrdering::SeqCst);
-        }
+        self.with_shared(|shared| {
+            let _ = shared.midi_out_queue.send(Midi::cc(btn, val, 0));
+        })
     }
 
     fn param_visible(&self, update: &ParamUpdate, state: &PatcherParams) -> bool {
@@ -559,9 +628,10 @@ impl Context {
     }
 
     fn clear_params(&mut self) {
+        let shared = self.shared.lock().expect("no poison");
         for index in 0..PARAM_PAGE_SIZE {
             let num = index + 71;
-            let _ = self
+            let _ = shared
                 .midi_out_queue
                 .send(Midi::cc(num as u8, MoveColor::Black as _, 0));
         }
@@ -577,8 +647,9 @@ impl Context {
             //TODO get from metdata?
             let color = Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap).into_format();
 
+            let shared = self.shared.lock().expect("no poison");
             for m in led_color(num, &color) {
-                let _ = self.midi_out_queue.send(m);
+                let _ = shared.midi_out_queue.send(m);
             }
         }
     }
@@ -639,6 +710,16 @@ impl Context {
             }
         }
     }
+
+    async fn with_display<T, F: Fn(MutexGuard<'_, MoveDisplay>) -> T>(&self, f: F) -> T {
+        let shared = self.shared.lock().expect("no poison");
+        shared.with_display(f).await
+    }
+
+    fn with_shared<T, F: Fn(std::sync::MutexGuard<SharedContext>) -> T>(&self, f: F) -> T {
+        let g = self.shared.lock().expect("no poison");
+        f(g)
+    }
 }
 
 impl StateController {
@@ -648,7 +729,13 @@ impl StateController {
         volume: Arc<AtomicU8>,
         config_path: PathBuf,
     ) -> Self {
-        let mut context = Context::new(midi_out_queue, display, volume, config_path);
+        let shared = std::rc::Rc::new(std::sync::Mutex::new(SharedContext::new(
+            midi_out_queue,
+            display,
+            volume,
+            config_path,
+        )));
+        let mut context = Context::new(shared.clone());
 
         context.light_button(MENU_MIDI, MoveColor::LightGray as _);
         context.light_button(PLAY_MIDI, MoveColor::LightGray as _);
@@ -933,11 +1020,13 @@ impl StateController {
     }
 
     async fn display_centered(&mut self, text: &str) {
-        let mut display = self.locked_display().await;
-        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-        display.clear(BinaryColor::Off).unwrap();
+        self.with_display(|mut display| {
+            let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+            display.clear(BinaryColor::Off).unwrap();
 
-        draw_centered(&mut display, text, style);
+            draw_centered(&mut display, text, style);
+        })
+        .await;
     }
 
     async fn handle_event(&mut self, e: Events) {
@@ -949,7 +1038,7 @@ impl StateController {
                     self.context_mut().light_button(BACK_MIDI, 0);
                     //leave some time for it do draw
                     tokio::time::sleep(Duration::from_millis(500)).await;
-                    self.context_mut().send_power_cmd(PowerCommand::PowerOff);
+                    //self.context_mut().send_power_cmd(PowerCommand::PowerOff);
                 }
                 States::PromptPower => {
                     self.context_mut().light_button(BACK_MIDI, 127);
@@ -957,10 +1046,10 @@ impl StateController {
                 }
                 States::Menu(selected) => {
                     let selected: usize = *selected;
-                    {
-                        let display = self.locked_display().await;
+                    self.with_display(|display| {
                         draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
-                    }
+                    })
+                    .await;
                     let ctx = self.context_mut();
                     ctx.light_button(BACK_MIDI, 0);
                 }
@@ -970,20 +1059,18 @@ impl StateController {
                         ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
                         ctx.bpm
                     };
-                    {
-                        let mut display = self.locked_display().await;
-
+                    self.with_display(|mut display| {
                         display.clear(BinaryColor::Off).unwrap();
                         draw_title(&mut display, &"Tempo (bpm)");
                         let bpm = format!("{:.1}", bpm);
                         draw_centered(&mut display, bpm.as_str(), TITLE_TEXT_STYLE);
-                    }
+                    })
+                    .await;
                 }
                 States::SetsList(selected) => {
                     let selected = *selected;
-                    {
-                        let display = self.locked_display().await;
-                        let indicated = self.set_current_index;
+                    let indicated = self.set_current_index;
+                    self.with_display(|display| {
                         draw_menu(
                             display,
                             &"Load Set",
@@ -991,16 +1078,16 @@ impl StateController {
                             selected,
                             indicated,
                         );
-                    }
+                    })
+                    .await;
 
                     self.context_mut()
                         .light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
                 States::SetPresetsList(selected) => {
                     let selected = *selected;
-                    {
-                        let display = self.locked_display().await;
-                        let indicated = self.set_preset_loaded_index;
+                    let indicated = self.set_preset_loaded_index;
+                    self.with_display(|display| {
                         draw_menu(
                             display,
                             &"Load Set Preset",
@@ -1008,15 +1095,15 @@ impl StateController {
                             selected,
                             indicated,
                         );
-                    }
+                    })
+                    .await;
 
                     self.context_mut()
                         .light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
                 States::PatcherInstances(selected) => {
                     let selected = *selected;
-                    {
-                        let display = self.locked_display().await;
+                    self.with_display(|display| {
                         draw_menu(
                             display,
                             &"Patcher Instances",
@@ -1024,7 +1111,8 @@ impl StateController {
                             selected,
                             None,
                         );
-                    }
+                    })
+                    .await;
 
                     self.context_mut()
                         .light_button(BACK_MIDI, MoveColor::LightGray as _);
@@ -1059,47 +1147,52 @@ impl StateController {
                             title.push_str("..");
                         }
 
-                        let mut display = self.locked_display().await;
-                        display.clear(BinaryColor::Off).unwrap();
+                        self.with_display(|mut display| {
+                            display.clear(BinaryColor::Off).unwrap();
 
-                        draw_title(&mut display, title.as_str());
+                            draw_title(&mut display, title.as_str());
 
-                        //draw pager
-                        if pages > 1 {
-                            let style = PrimitiveStyleBuilder::new()
-                                .stroke_color(BinaryColor::On)
-                                .stroke_width(1)
-                                .fill_color(BinaryColor::On)
-                                .build();
+                            //draw pager
+                            if pages > 1 {
+                                let style = PrimitiveStyleBuilder::new()
+                                    .stroke_color(BinaryColor::On)
+                                    .stroke_width(1)
+                                    .fill_color(BinaryColor::On)
+                                    .build();
 
-                            let step = DISPLAY_WIDTH / pages as u32;
-                            let width = step - 4;
+                                let step = DISPLAY_WIDTH / pages as u32;
+                                let width = step - 4;
 
-                            let y = (DISPLAY_HEIGHT - 3) as i32;
-                            let mut x = (step / 2) as i32;
+                                let y = (DISPLAY_HEIGHT - 3) as i32;
+                                let mut x = (step / 2) as i32;
 
-                            //TODO assert that we can actually draw these
+                                //TODO assert that we can actually draw these
 
-                            for p in 0..pages {
-                                let height = if p == page { 3 } else { 1 };
-                                Rectangle::with_center(Point::new(x, y), Size::new(width, height))
+                                for p in 0..pages {
+                                    let height = if p == page { 3 } else { 1 };
+                                    Rectangle::with_center(
+                                        Point::new(x, y),
+                                        Size::new(width, height),
+                                    )
                                     .into_styled(style)
                                     .draw(display.deref_mut())
                                     .unwrap();
-                                x = x + (step as i32);
+                                    x = x + (step as i32);
+                                }
                             }
-                        }
 
-                        if let Some(focus) = focus {
-                            Text::with_alignment(
-                                focus.as_str(),
-                                Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
-                                text_style,
-                                Alignment::Center,
-                            )
-                            .draw(display.deref_mut())
-                            .unwrap();
-                        }
+                            if let Some(focus) = &focus {
+                                Text::with_alignment(
+                                    focus.as_str(),
+                                    Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
+                                    text_style,
+                                    Alignment::Center,
+                                )
+                                .draw(display.deref_mut())
+                                .unwrap();
+                            }
+                        })
+                        .await;
                     }
                     let ctx = self.context_mut();
                     ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
@@ -1111,13 +1204,15 @@ impl StateController {
         }
     }
 
-    async fn locked_display(&self) -> MutexGuard<MoveDisplay> {
-        self.context().display.lock().await
+    async fn with_display<T, F: Fn(MutexGuard<'_, MoveDisplay>) -> T>(&self, f: F) -> T {
+        self.context().with_display(f).await
     }
 
+    /*
     fn send_midi(&mut self, midi: Midi) {
         let _ = self.context_mut().midi_out_queue.send(midi);
     }
+    */
 
     fn context(&self) -> &Context {
         self.statemachine.context()
@@ -1222,7 +1317,7 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     .unwrap();
 }
 
-impl Drop for Context {
+impl Drop for SharedContext {
     fn drop(&mut self) {
         if let Ok(file) = std::fs::File::create(&self.config_path) {
             let _ = serde_json::to_writer_pretty(file, &self.config);
