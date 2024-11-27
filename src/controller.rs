@@ -188,26 +188,26 @@ mod top {
     smlang::statemachine! {
         states_attr: #[derive(Clone, Debug)],
         transitions: {
-            *Init + BtnDown(Button::Menu) = Main(super::States::Menu(0)),
-            Init + BtnDown(Button::JogWheel) = Main(super::States::Menu(0)),
-            Init + BtnDown(Button::Back) = Main(super::States::Menu(0)),
+            *Init + BtnDown(Button::Menu) = Main,
+            Init + BtnDown(Button::JogWheel) = Main,
+            Init + BtnDown(Button::Back) = Main,
 
-            Main(super::States) + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower(state.clone()),
-            VolumeEditor(super::States) + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower(state.clone()),
+            Main + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
+            VolumeEditor + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
 
-            Main(super::States) + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor(state.clone()),
-            Main(super::States) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1); = VolumeEditor(state.clone()),
-            Main(super::States) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1); = VolumeEditor(state.clone()),
+            Main + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor,
+            Main + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1); = VolumeEditor,
+            Main + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1); = VolumeEditor,
 
-            VolumeEditor(super::States) + BtnDown(Button::Back) = Main(state.clone()),
-            VolumeEditor(super::States) + BtnDown(Button::Menu) = Main(state.clone()),
-            VolumeEditor(super::States) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1); = VolumeEditor(state.clone()),
-            VolumeEditor(super::States) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1); = VolumeEditor(state.clone()),
-            VolumeEditor(super::States) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON] = Main(state.clone()),
+            VolumeEditor + BtnDown(Button::Back) = Main,
+            VolumeEditor + BtnDown(Button::Menu) = Main,
+            VolumeEditor + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1); = VolumeEditor,
+            VolumeEditor + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1); = VolumeEditor,
+            VolumeEditor + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON] = Main,
 
-            PromptPower(super::States) + BtnDown(Button::JogWheel) = PowerOff,
-            PromptPower(super::States) + BtnDown(Button::Back) = Main(state.clone()),
-            PromptPower(super::States) + BtnDown(Button::Menu) = Main(state.clone()),
+            PromptPower + BtnDown(Button::JogWheel) = PowerOff,
+            PromptPower + BtnDown(Button::Back) = Main,
+            PromptPower + BtnDown(Button::Menu) = Main,
 
             _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
 
@@ -750,7 +750,7 @@ impl StateController {
         let mut context = Context::new(shared.clone());
         context.light_button(MENU_MIDI, MoveColor::LightGray as _);
         context.light_button(PLAY_MIDI, MoveColor::LightGray as _);
-        let sm = StateMachine::new(context);
+        let sm = StateMachine::new_with_state(context, States::Menu(0));
 
         let context = top::Context::new(shared);
         let topsm = top::StateMachine::new(context);
@@ -1205,7 +1205,7 @@ impl StateController {
 
     async fn handle_event(&mut self, e: Events) {
         let was_main = match self.topsm.state() {
-            top::States::Main(_) => true,
+            top::States::Main => true,
             _ => false,
         };
 
@@ -1228,12 +1228,12 @@ impl StateController {
                         .context_mut()
                         .send_power_cmd(PowerCommand::PowerOff);
                 }
-                States::PromptPower(_) => {
+                States::PromptPower => {
                     self.context_mut()
                         .light_button(BACK_MIDI, MoveColor::LightGray as _);
                     self.display_centered("Press wheel to\nshut down").await;
                 }
-                States::VolumeEditor(_) => {
+                States::VolumeEditor => {
                     let volume = self.topsm.context().volume();
                     self.context_mut()
                         .light_button(BACK_MIDI, MoveColor::LightGray as _);
@@ -1253,7 +1253,7 @@ impl StateController {
         //println!("top state {:?}", self.topsm.state());
 
         match self.topsm.state() {
-            top::States::Main(_) => {
+            top::States::Main => {
                 let render = if was_main {
                     let ns = self.sm.process_event(e).await;
                     ns.is_some()
@@ -1269,7 +1269,10 @@ impl StateController {
             _ => {
                 //pass thru  pending changes like sets names changed etc even if
                 let _ = match e {
-                    Events::SetNamesChanged
+                    Events::ParamUpdate(_)
+                    | Events::Transport(_)
+                    | Events::Tempo(_)
+                    | Events::SetNamesChanged
                     | Events::SetPresetNamesChanged
                     | Events::SetCurrentChanged
                     | Events::SetPresetLoadedChanged => self.sm.process_event(e).await,
