@@ -49,11 +49,13 @@ pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
 pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
 pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loaded";
 
+const VOLUME_WHEEL_BUTTON: usize = 8;
 const VOLUME_WHEEL_ENCODER: usize = 9;
 const JOG_WHEEL_ENCODER: usize = 10;
 
 const PARAM_PAGE_SIZE: usize = 8;
 
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum MoveColor {
@@ -70,6 +72,7 @@ enum MoveColor {
     Red = 127,
 }
 
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 enum PowerCommand {
@@ -143,7 +146,7 @@ struct ParamUpdate {
     index: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Events {
     BtnDown(Button),
     BtnUp(Button),
@@ -176,26 +179,31 @@ const PATCHER_INSTANCES_INDEX: usize = 2;
 const TEMPO_INDEX: usize = 3;
 
 mod top {
-    use super::{Button, Events, PowerCommand, VOLUME_WHEEL_ENCODER};
+    use super::{Button, Events, PowerCommand, VOLUME_WHEEL_BUTTON, VOLUME_WHEEL_ENCODER};
 
-    struct Context {
+    pub struct Context {
         shared: std::rc::Rc<std::sync::Mutex<super::SharedContext>>,
     }
 
     smlang::statemachine! {
-        states_attr: #[derive(Clone)],
+        states_attr: #[derive(Clone, Debug)],
         transitions: {
-            *Init + BtnDown(Button::Back) = Init,
+            *Init + BtnDown(Button::Menu) = Main(super::States::Menu(0)),
+            Init + BtnDown(Button::JogWheel) = Main(super::States::Menu(0)),
+            Init + BtnDown(Button::Back) = Main(super::States::Menu(0)),
 
             Main(super::States) + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower(state.clone()),
+            VolumeEditor(super::States) + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower(state.clone()),
 
-            Main(super::States) + EncTouch(VOLUME_WHEEL_ENCODER) = VolumeEditor(state.clone()),
+            Main(super::States) + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor(state.clone()),
             Main(super::States) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1); = VolumeEditor(state.clone()),
             Main(super::States) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1); = VolumeEditor(state.clone()),
 
             VolumeEditor(super::States) + BtnDown(Button::Back) = Main(state.clone()),
+            VolumeEditor(super::States) + BtnDown(Button::Menu) = Main(state.clone()),
             VolumeEditor(super::States) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
             VolumeEditor(super::States) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
+            VolumeEditor(super::States) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON] = Main(state.clone()),
 
             PromptPower(super::States) + BtnDown(Button::JogWheel) = PowerOff,
             PromptPower(super::States) + BtnDown(Button::Back) = Main(state.clone()),
@@ -207,6 +215,10 @@ mod top {
     }
 
     impl Context {
+        pub fn new(shared: std::rc::Rc<std::sync::Mutex<super::SharedContext>>) -> Self {
+            Self { shared }
+        }
+
         fn with_shared<T, F: Fn(std::sync::MutexGuard<super::SharedContext>) -> T>(
             &self,
             f: F,
@@ -214,23 +226,21 @@ mod top {
             let g = self.shared.lock().expect("no poison");
             f(g)
         }
-        fn send_power_cmd(&mut self, cmd: PowerCommand) {
+
+        pub fn send_power_cmd(&mut self, cmd: PowerCommand) {
             self.with_shared(|mut s| s.send_power_cmd(cmd))
         }
 
-        fn offset_volume(&mut self, amt: isize) {
+        pub fn offset_volume(&mut self, amt: isize) {
             self.with_shared(|mut s| s.offset_volume(amt))
         }
     }
 }
 
 smlang::statemachine! {
-    states_attr: #[derive(Clone)],
+    states_attr: #[derive(Clone, Debug)],
     transitions: {
         *Init + BtnDown(Button::Back) = Init, //dummy
-                          //
-        PromptPower + BtnDown(Button::JogWheel) = PowerOff,
-        PromptPower + BtnDown(Button::Back) = Menu(0),
 
         //nav
         Menu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < MENU_ITEMS.len()] = Menu(*state + 1),
@@ -287,13 +297,8 @@ smlang::statemachine! {
         TempoEditor + BtnUp(Button::JogWheel) / ctx.set_tempo_offset_mul(1.0); = TempoEditor,
         TempoEditor + Tempo(_) / ctx.update_tempo(*event); = TempoEditor,
 
-        //_ + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1);,
-        //_ + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1);,
-
         _ + BtnDown(Button::Menu) / ctx.clear_params(); = Menu(0),
 
-        //_ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
-        //_ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
         _ + Tempo(_) / ctx.update_tempo(*event);,
         _ + Transport(_) / ctx.update_transport(*event);,
         _ + BtnDown(Button::Play) / ctx.toggle_transport().await;,
@@ -311,7 +316,9 @@ pub struct StateController {
     set_preset_loaded_index: Option<usize>,
 
     sysex: Vec<u8>,
-    statemachine: StateMachine,
+
+    topsm: top::StateMachine,
+    sm: StateMachine,
 }
 
 struct SharedContext {
@@ -735,16 +742,23 @@ impl StateController {
             volume,
             config_path,
         )));
-        let mut context = Context::new(shared.clone());
 
+        let mut context = Context::new(shared.clone());
         context.light_button(MENU_MIDI, MoveColor::LightGray as _);
         context.light_button(PLAY_MIDI, MoveColor::LightGray as _);
+        let sm = StateMachine::new(context);
+
+        let context = top::Context::new(shared);
+        let topsm = top::StateMachine::new(context);
 
         Self {
             params: HashMap::new(),
             params_norm: HashMap::new(),
             sysex: Vec::new(),
-            statemachine: StateMachine::new(context),
+
+            sm,
+            topsm,
+
             set_current_name: None,
             set_preset_loaded_name: None,
 
@@ -1030,20 +1044,51 @@ impl StateController {
     }
 
     async fn handle_event(&mut self, e: Events) {
-        if let Some(ns) = self.statemachine.process_event(e).await {
-            //got new state
+        println!("handle_event {:?}", e);
+        if let Some(ns) = self.topsm.process_event(e) {
+            use top::States;
             match ns {
                 States::PowerOff => {
                     self.display_centered("Powering Down").await;
-                    self.context_mut().light_button(BACK_MIDI, 0);
+
+                    {
+                        let ctx = self.context_mut();
+
+                        ctx.light_button(BACK_MIDI, 0);
+                        ctx.light_button(MENU_MIDI, 0);
+                    }
+
                     //leave some time for it do draw
                     tokio::time::sleep(Duration::from_millis(500)).await;
-                    //self.context_mut().send_power_cmd(PowerCommand::PowerOff);
+                    self.topsm
+                        .context_mut()
+                        .send_power_cmd(PowerCommand::PowerOff);
                 }
-                States::PromptPower => {
+                States::PromptPower(_) => {
                     self.context_mut().light_button(BACK_MIDI, 127);
                     self.display_centered("Press wheel to\nshut down").await;
                 }
+                States::VolumeEditor(_) => {
+                    //TODO
+                }
+                _ => (),
+            }
+        }
+
+        println!("top state {:?}", self.topsm.state());
+
+        //only pass through if top state is Main
+        //TODO manage pending chnages like sets names changed etc
+        match self.topsm.state() {
+            top::States::Main(_) => (),
+            _ => return,
+        }
+
+        println!("thru to main {:?}", e);
+
+        if let Some(ns) = self.sm.process_event(e).await {
+            //got new state
+            match ns {
                 States::Menu(selected) => {
                     let selected: usize = *selected;
                     self.with_display(|display| {
@@ -1215,11 +1260,11 @@ impl StateController {
     */
 
     fn context(&self) -> &Context {
-        self.statemachine.context()
+        self.sm.context()
     }
 
     fn context_mut(&mut self) -> &mut Context {
-        self.statemachine.context_mut()
+        self.sm.context_mut()
     }
 }
 
