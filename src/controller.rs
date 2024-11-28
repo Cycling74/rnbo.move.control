@@ -827,7 +827,7 @@ impl StateController {
 
     pub async fn handle_osc(&mut self, msg: &OscMessage) {
         if msg.args.len() == 1 {
-            println!("got osc {}", msg.addr);
+            //println!("got osc {}", msg.addr);
             //let mut update = None;
             match msg.addr.as_str() {
                 TRANSPORT_ROLLING_ADDR => {

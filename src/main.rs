@@ -429,7 +429,7 @@ async fn with_client(
         if let Ok(res) = reqwest::Client::new().get(path).send().await {
             let res: Result<StringRange, _> = res.json().await;
             if let Ok(res) = res {
-                return Some(res.range[0].vals.clone());
+                return Some(res.range());
             }
         }
         None
@@ -451,6 +451,7 @@ async fn with_client(
                             let mut g = state.lock().await;
                             g.set_set_names(&names).await;
                         }
+
                         if let Some(names) = get_string_range(
                             "http://127.0.0.1:5678/rnbo/inst/control/sets/presets/load?RANGE",
                         )
@@ -480,16 +481,26 @@ async fn with_client(
         }
     };
 
-    #[derive(Serialize, Deserialize, Debug)]
+    #[derive(Serialize, Deserialize, Debug, Default)]
     struct StringRangeItem {
         #[serde(rename = "VALS")]
         vals: Vec<String>,
     }
 
-    #[derive(Serialize, Deserialize, Debug)]
+    #[derive(Serialize, Deserialize, Debug, Default)]
     struct StringRange {
         #[serde(rename = "RANGE")]
-        range: [StringRangeItem; 1],
+        range: Option<[StringRangeItem; 1]>,
+    }
+
+    impl StringRange {
+        fn range(&self) -> Vec<String> {
+            if let Some(range) = &self.range {
+                range[0].vals.clone()
+            } else {
+                Vec::new()
+            }
+        }
     }
 
     let web_future = async {
@@ -552,10 +563,8 @@ async fn with_client(
                                                                     );
                                                                 if let Ok(range) = range {
                                                                     let mut g = state.lock().await;
-                                                                    g.set_set_names(
-                                                                        &range.range[0].vals,
-                                                                    )
-                                                                    .await;
+                                                                    let range = range.range();
+                                                                    g.set_set_names(&range).await;
                                                                 }
                                                             }
                                                             Some(
@@ -567,10 +576,9 @@ async fn with_client(
                                                                     );
                                                                 if let Ok(range) = range {
                                                                     let mut g = state.lock().await;
-                                                                    g.set_set_preset_names(
-                                                                        &range.range[0].vals,
-                                                                    )
-                                                                    .await;
+                                                                    let range = range.range();
+                                                                    g.set_set_preset_names(&range)
+                                                                        .await;
                                                                 }
                                                             }
                                                             _ => (),
@@ -661,8 +669,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let startup = PathBuf::from(startup)
             .canonicalize()
             .expect("to parse startup file path");
-
-        println!("got here {:?}", startup);
 
         let startup = std::fs::read_to_string(startup).expect("Unable to read startup file");
         let startup: StartupConfig = serde_json::from_str(&startup)?;
