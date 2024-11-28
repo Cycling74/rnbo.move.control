@@ -254,7 +254,11 @@ smlang::statemachine! {
         //select
         Menu(usize) + BtnDown(Button::JogWheel) [*state == SETS_INDEX && ctx.sets_len() > 0] = SetsList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == SET_PRESETS_INDEX && ctx.set_presets_len() > 0] = SetPresetsList(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.patcher_instances_len() > 0] = PatcherInstances(0),
+        //skip patcher instances menu if there is only 1 instance
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.patcher_instances_len() > 1] = PatcherInstances(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.patcher_instances_len() == 1] / ctx.render_param_page(0, 0);
+            = PatcherParams(PatcherParams { index: 0, page: 0, focused: None }),
+
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
 
         SetsList(usize) + BtnDown(Button::Back) = Menu(SETS_INDEX),
@@ -277,7 +281,10 @@ smlang::statemachine! {
         PatcherInstances(usize) + BtnDown(Button::JogWheel) / ctx.render_param_page(*state, 0);
             = PatcherParams(PatcherParams { index: *state, page: 0, focused: None }),
 
-        PatcherParams(PatcherParams) + BtnDown(Button::Back) / ctx.clear_params(); = PatcherInstances(state.index),
+        //skip patcher instances menu if there is only 1 instance
+        PatcherParams(PatcherParams) + BtnDown(Button::Back) [ctx.patcher_instances_len() > 1] / ctx.clear_params(); = PatcherInstances(state.index),
+        PatcherParams(PatcherParams) + BtnDown(Button::Back) [ctx.patcher_instances_len() == 1] / ctx.clear_params(); = Menu(PATCHER_INSTANCES_INDEX),
+
         PatcherParams(PatcherParams) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.index) > state.page + 1] / ctx.render_param_page(state.index, state.page + 1);
             = PatcherParams(PatcherParams { index: state.index, page: state.page + 1, focused: state.focused }),
         PatcherParams(PatcherParams) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.render_param_page(state.index, state.page - 1);
