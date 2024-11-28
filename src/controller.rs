@@ -193,7 +193,6 @@ mod top {
             Init + BtnDown(Button::JogWheel) = Main,
             Init + BtnDown(Button::Back) = Main,
 
-            Main + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
             VolumeEditor + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
 
             Main + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor,
@@ -210,6 +209,7 @@ mod top {
             PromptPower + BtnDown(Button::Back) = Main,
             PromptPower + BtnDown(Button::Menu) = Main,
 
+            _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
             _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
 
         }
