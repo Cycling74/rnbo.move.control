@@ -662,8 +662,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         PathBuf::from(config)
     };
 
-    let mut jack: Option<Child> = None;
     let mut tostartup: Vec<StartupProcess> = Vec::new();
+    let mut jackstartup: Option<StartupProcess> = None;
 
     if let Some(startup) = args.startup {
         let startup = PathBuf::from(startup)
@@ -672,21 +672,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let startup = std::fs::read_to_string(startup).expect("Unable to read startup file");
         let startup: StartupConfig = serde_json::from_str(&startup)?;
-
-        if let Some(j) = startup.jack {
-            let mut cmd = Command::new(j.cmd);
-
-            jack = Some(
-                if let Some(args) = j.args {
-                    cmd.args(args)
-                } else {
-                    &mut cmd
-                }
-                .stdin(Stdio::null())
-                .stdout(Stdio::inherit())
-                .spawn()?,
-            )
-        }
+        jackstartup = startup.jack.clone();
 
         if let Some(s) = startup.apps {
             tostartup = s.clone();
@@ -695,9 +681,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let name = "move-control";
     let pollms = 500;
+    let mut jack: Option<Child> = None;
 
-    //wait until jack exists
     loop {
+        if let Some(j) = jackstartup.clone() {
+            let mut start = true;
+            if let Some(jack) = jack.as_mut() {
+                match jack.try_wait() {
+                    Ok(None) => start = false, //hasn't exited
+                    _ => start = true,
+                }
+            }
+
+            if start {
+                let mut cmd = Command::new(j.cmd);
+
+                jack = Some(
+                    if let Some(args) = j.args {
+                        cmd.args(args)
+                    } else {
+                        &mut cmd
+                    }
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::inherit())
+                    .spawn()?,
+                )
+            }
+        }
+
+        //wait until jack exists
         if let Ok((c, _status)) = Client::new(name, ClientOptions::empty()) {
             let res = with_client(c, &tostartup, &config).await;
             match res {
