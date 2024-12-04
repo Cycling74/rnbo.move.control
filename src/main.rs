@@ -172,6 +172,28 @@ impl jack::NotificationHandler for ConnectionControl {
     }
 }
 
+fn port_uuid<PS: jack::PortSpec + Send>(port: &Port<PS>) -> Option<jack::jack_sys::jack_uuid_t> {
+    unsafe {
+        let uuid = jack::jack_sys::jack_port_uuid(port.raw());
+        if jack::jack_sys::jack_uuid_empty(uuid) == 0 {
+            Some(uuid)
+        } else {
+            None
+        }
+    }
+}
+
+fn port_set_group<PS: jack::PortSpec + Send>(
+    client: &Client,
+    port: &Port<PS>,
+    property: &jack::Property,
+) {
+    const PORTGROUP: &str = "http://jackaudio.org/metadata/port-group";
+    if let Some(uuid) = port_uuid(port) {
+        let _ = client.property_set(uuid, PORTGROUP, property);
+    }
+}
+
 async fn with_client(
     c: Client,
     startup: &Vec<StartupProcess>,
@@ -185,7 +207,7 @@ async fn with_client(
     let display_port = c
         .register_port("display", MidiOut)
         .expect("error creating display port");
-    let midi_thru = c
+    let mut midi_thru = c
         .register_port("midi_out", MidiOut)
         .expect("error creating midi_out");
     let midi_control_out = c
@@ -201,6 +223,47 @@ async fn with_client(
     let system_midi_out_port = c
         .port_by_name("system:midi_capture")
         .expect("error getting system:midi_capture");
+
+    //add properties
+
+    let hidden = jack::Property::new("rnbo-graph-hidden", Some("text/plain".to_string()));
+    let graphio = jack::Property::new("rnbo-graph-user-io", Some("text/plain".to_string()));
+
+    port_set_group(&c, &display_port, &hidden);
+    port_set_group(&c, &midi_control_out, &hidden);
+    port_set_group(&c, &midi_in, &hidden);
+    port_set_group(&c, &system_display_port, &hidden);
+    port_set_group(&c, &system_midi_out_port, &hidden);
+
+    port_set_group(&c, &midi_thru, &graphio);
+
+    let _ = midi_thru.set_alias(&"move:midi_capture");
+
+    {
+        let in0 = c
+            .port_by_name("system:capture_1")
+            .expect("error getting system:capture_1");
+        let in1 = c
+            .port_by_name("system:capture_2")
+            .expect("error getting system:capture_2");
+        let midi = c
+            .port_by_name("system:midi_playback")
+            .expect("error getting system:midi_playback");
+
+        port_set_group(&c, &in0, &graphio);
+        port_set_group(&c, &in1, &graphio);
+        port_set_group(&c, &midi, &graphio);
+
+        let out0 = c
+            .port_by_name("system:playback_1")
+            .expect("error getting system:playback_1");
+        let out1 = c
+            .port_by_name("system:playback_2")
+            .expect("error getting system:playback_2");
+
+        port_set_group(&c, &out0, &hidden);
+        port_set_group(&c, &out1, &hidden);
+    }
 
     let mut display = MoveDisplay::new();
     let control = ConnectionControl {
@@ -230,6 +293,12 @@ async fn with_client(
         let mut out1 = volumeclient
             .register_port("out1", AudioOut)
             .expect("error creating out1");
+
+        port_set_group(&c, &in0, &graphio);
+        port_set_group(&c, &in1, &graphio);
+
+        port_set_group(&c, &out0, &hidden);
+        port_set_group(&c, &out1, &hidden);
 
         let mut volume_last: u8 = 255;
         let mut volume_last_f: f32 = 1.0;
