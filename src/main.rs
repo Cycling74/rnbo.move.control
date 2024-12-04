@@ -194,6 +194,17 @@ fn port_set_group<PS: jack::PortSpec + Send>(
     }
 }
 
+fn port_set_pretty<PS: jack::PortSpec + Send>(
+    client: &Client,
+    port: &Port<PS>,
+    property: &jack::Property,
+) {
+    const PORTGROUP: &str = "http://jackaudio.org/metadata/pretty-name";
+    if let Some(uuid) = port_uuid(port) {
+        let _ = client.property_set(uuid, PORTGROUP, property);
+    }
+}
+
 async fn with_client(
     c: Client,
     startup: &Vec<StartupProcess>,
@@ -233,36 +244,45 @@ async fn with_client(
     port_set_group(&c, &midi_control_out, &hidden);
     port_set_group(&c, &midi_in, &hidden);
     port_set_group(&c, &system_display_port, &hidden);
-    port_set_group(&c, &system_midi_out_port, &hidden);
 
+    port_set_group(&c, &system_midi_out_port, &graphio);
     port_set_group(&c, &midi_thru, &graphio);
 
-    let _ = midi_thru.set_alias(&"move:midi_capture");
+    let pretty = jack::Property::new("Move MIDI Out", Some("text/plain".to_string()));
+    port_set_pretty(&c, &system_midi_out_port, &pretty);
+
+    let pretty = jack::Property::new("Move MIDI In", Some("text/plain".to_string()));
+    port_set_pretty(&c, &midi_thru, &pretty);
 
     {
-        let in0 = c
+        let in1 = c
             .port_by_name("system:capture_1")
             .expect("error getting system:capture_1");
-        let in1 = c
+        let in2 = c
             .port_by_name("system:capture_2")
             .expect("error getting system:capture_2");
         let midi = c
             .port_by_name("system:midi_playback")
             .expect("error getting system:midi_playback");
 
-        port_set_group(&c, &in0, &graphio);
         port_set_group(&c, &in1, &graphio);
+        port_set_group(&c, &in2, &graphio);
         port_set_group(&c, &midi, &graphio);
 
-        let out0 = c
+        let pretty = jack::Property::new("Move In Left", Some("text/plain".to_string()));
+        port_set_pretty(&c, &in1, &pretty);
+        let pretty = jack::Property::new("Move In Right", Some("text/plain".to_string()));
+        port_set_pretty(&c, &in2, &pretty);
+
+        let out1 = c
             .port_by_name("system:playback_1")
             .expect("error getting system:playback_1");
-        let out1 = c
+        let out2 = c
             .port_by_name("system:playback_2")
             .expect("error getting system:playback_2");
 
-        port_set_group(&c, &out0, &hidden);
         port_set_group(&c, &out1, &hidden);
+        port_set_group(&c, &out2, &hidden);
     }
 
     let mut display = MoveDisplay::new();
@@ -280,43 +300,48 @@ async fn with_client(
         let volume = volume.clone();
         let (volumeclient, _status) =
             jack::Client::new("move-volume", jack::ClientOptions::empty()).unwrap();
-        let in0 = volumeclient
-            .register_port("in0", AudioIn)
-            .expect("error creating in0");
         let in1 = volumeclient
             .register_port("in1", AudioIn)
             .expect("error creating in1");
+        let in2 = volumeclient
+            .register_port("in2", AudioIn)
+            .expect("error creating in2");
 
-        let mut out0 = volumeclient
-            .register_port("out0", AudioOut)
-            .expect("error creating out0");
         let mut out1 = volumeclient
             .register_port("out1", AudioOut)
             .expect("error creating out1");
+        let mut out2 = volumeclient
+            .register_port("out2", AudioOut)
+            .expect("error creating out2");
 
-        port_set_group(&c, &in0, &graphio);
         port_set_group(&c, &in1, &graphio);
+        port_set_group(&c, &in2, &graphio);
 
-        port_set_group(&c, &out0, &hidden);
+        let pretty = jack::Property::new("Move Out Left", Some("text/plain".to_string()));
+        port_set_pretty(&c, &in1, &pretty);
+        let pretty = jack::Property::new("Move Out Right", Some("text/plain".to_string()));
+        port_set_pretty(&c, &in2, &pretty);
+
         port_set_group(&c, &out1, &hidden);
+        port_set_group(&c, &out2, &hidden);
 
         let mut volume_last: u8 = 255;
         let mut volume_last_f: f32 = 1.0;
 
         let process_callback = move |_: &jack::Client, ps: &jack::ProcessScope| -> jack::Control {
-            let out0 = out0.as_mut_slice(ps);
             let out1 = out1.as_mut_slice(ps);
-            let in0 = in0.as_slice(ps);
+            let out2 = out2.as_mut_slice(ps);
             let in1 = in1.as_slice(ps);
+            let in2 = in2.as_slice(ps);
 
             let volume = volume.load(Ordering::SeqCst);
             if volume == volume_last {
                 if volume == 0xFF {
-                    out0.clone_from_slice(in0);
                     out1.clone_from_slice(in1);
+                    out2.clone_from_slice(in2);
                 } else {
                     for (o0, o1, i0, i1) in
-                        itertools::izip!(out0.iter_mut(), out1.iter_mut(), in0.iter(), in1.iter())
+                        itertools::izip!(out1.iter_mut(), out2.iter_mut(), in1.iter(), in2.iter())
                     {
                         *o0 = *i0 * volume_last_f;
                         *o1 = *i1 * volume_last_f;
@@ -330,7 +355,7 @@ async fn with_client(
                 let step = (volume as f32 - cur) / (frames as f32);
 
                 for (o0, o1, i0, i1) in
-                    itertools::izip!(out0.iter_mut(), out1.iter_mut(), in0.iter(), in1.iter())
+                    itertools::izip!(out1.iter_mut(), out2.iter_mut(), in1.iter(), in2.iter())
                 {
                     volume_last_f = (cur / 255.0).powf(4.0).clamp(0.0, 1.0);
                     *o0 = *i0 * volume_last_f;
@@ -348,11 +373,11 @@ async fn with_client(
 
         volumeclient
             .as_client()
-            .connect_ports_by_name("move-volume:out0", "system:playback_1")
+            .connect_ports_by_name("move-volume:out1", "system:playback_1")
             .unwrap();
         volumeclient
             .as_client()
-            .connect_ports_by_name("move-volume:out1", "system:playback_2")
+            .connect_ports_by_name("move-volume:out2", "system:playback_2")
             .unwrap();
 
         volumeclient
