@@ -494,6 +494,7 @@ async fn with_client(
 
     let inst_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
     let sets_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
+    let set_current_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
 
     let inst_path_regex = Regex::new(r"^/rnbo/inst/\d+$").expect("to create instance regex");
 
@@ -515,6 +516,23 @@ async fn with_client(
             }
         } else {
             eprintln!("err getting instances");
+            Err(())
+        }
+    }
+
+    async fn get_current_set_name() -> Result<Option<String>, ()> {
+        if let Ok(res) = reqwest::Client::new()
+            .get("http://127.0.0.1:5678/rnbo/inst/control/sets/current/name")
+            .send()
+            .await
+        {
+            let json: serde_json::Value = res.json().await.map_err(|_| ())?;
+            Ok(match json.get("VALUE") {
+                Some(serde_json::Value::String(s)) => Some(s.clone()),
+                _ => None,
+            })
+        } else {
+            eprintln!("err getting current set name");
             Err(())
         }
     }
@@ -568,6 +586,18 @@ async fn with_client(
                             *g = None;
                             let mut g = state.lock().await;
                             g.set_state(inst);
+                        }
+                    }
+                }
+            }
+            {
+                let mut g = set_current_query.lock().await;
+                if let Some(v) = g.deref() {
+                    if *v <= Instant::now() {
+                        if let Ok(name) = get_current_set_name().await {
+                            *g = None;
+                            let mut g = state.lock().await;
+                            g.set_set_current_name(name).await;
                         }
                     }
                 }
@@ -629,6 +659,12 @@ async fn with_client(
                         //do sets query
                         {
                             let mut g = sets_query.lock().await;
+                            *g = Some(Instant::now() + HTTP_QUERY_DELAY);
+                        }
+
+                        //do set current query
+                        {
+                            let mut g = set_current_query.lock().await;
                             *g = Some(Instant::now() + HTTP_QUERY_DELAY);
                         }
 
