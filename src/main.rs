@@ -218,7 +218,7 @@ async fn with_client(
     let display_port = c
         .register_port("display", MidiOut)
         .expect("error creating display port");
-    let mut midi_thru = c
+    let midi_thru = c
         .register_port("midi_out", MidiOut)
         .expect("error creating midi_out");
     let midi_control_out = c
