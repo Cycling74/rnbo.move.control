@@ -180,10 +180,14 @@ const PATCHER_INSTANCES_INDEX: usize = 2;
 const TEMPO_INDEX: usize = 3;
 
 mod top {
-    use super::{Button, Events, PowerCommand, VOLUME_WHEEL_BUTTON, VOLUME_WHEEL_ENCODER};
+    use super::{
+        Button, Events, MoveColor, OscMessage, PowerCommand, PLAY_MIDI, VOLUME_WHEEL_BUTTON,
+        VOLUME_WHEEL_ENCODER,
+    };
 
     pub struct Context {
         shared: std::rc::Rc<std::sync::Mutex<super::SharedContext>>,
+        rolling: bool,
     }
 
     smlang::statemachine! {
@@ -212,12 +216,19 @@ mod top {
             _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptPower,
             _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
 
+            _ + Tempo(_) / ctx.update_tempo(*event);,
+            _ + Transport(_) / ctx.update_transport(*event);,
+            _ + BtnDown(Button::Play) / ctx.toggle_transport().await;,
+
         }
     }
 
     impl Context {
         pub fn new(shared: std::rc::Rc<std::sync::Mutex<super::SharedContext>>) -> Self {
-            Self { shared }
+            Self {
+                shared,
+                rolling: false,
+            }
         }
 
         fn with_shared<T, F: Fn(std::sync::MutexGuard<super::SharedContext>) -> T>(
@@ -238,6 +249,41 @@ mod top {
 
         pub fn volume(&self) -> f32 {
             self.with_shared(|s| s.config.volume as f32 / 255.0)
+        }
+
+        fn update_tempo(&mut self, v: f32) {
+            self.with_shared(|mut s| s.update_tempo(v))
+        }
+
+        fn update_transport(&mut self, on: bool) {
+            self.rolling = on;
+            self.light_button(
+                PLAY_MIDI,
+                if on {
+                    MoveColor::Green
+                } else {
+                    MoveColor::LightGray
+                } as u8,
+            );
+        }
+
+        async fn toggle_transport(&mut self) {
+            let msg = OscMessage {
+                addr: super::TRANSPORT_ROLLING_ADDR.to_string(),
+                args: vec![super::OscType::Bool(!self.rolling)],
+            };
+            self.send_osc(msg).await;
+        }
+
+        fn light_button(&mut self, btn: u8, val: u8) {
+            self.with_shared(|shared| {
+                let _ = shared.midi_out_queue.send(super::Midi::cc(btn, val, 0));
+            })
+        }
+
+        async fn send_osc(&mut self, msg: OscMessage) {
+            let mut g = self.shared.lock().expect("no poison");
+            g.send_osc(msg).await;
         }
     }
 }
@@ -310,10 +356,6 @@ smlang::statemachine! {
         TempoEditor + Tempo(_) / ctx.update_tempo(*event); = TempoEditor,
 
         _ + BtnDown(Button::Menu) / ctx.clear_params(); = Menu(0),
-
-        _ + Tempo(_) / ctx.update_tempo(*event);,
-        _ + Transport(_) / ctx.update_transport(*event);,
-        _ + BtnDown(Button::Play) / ctx.toggle_transport().await;,
     }
 }
 
@@ -339,15 +381,14 @@ struct SharedContext {
     volume: Arc<AtomicU8>,
     config: Config,
     config_path: PathBuf,
+    bpm: f32,
+    ws_tx: Option<SplitSink<WebSocket, Message>>,
 }
 
 struct Context {
     shared: std::rc::Rc<std::sync::Mutex<SharedContext>>,
 
-    bpm: f32,
     tempo_offset_mul: f32,
-    rolling: bool,
-    ws_tx: Option<SplitSink<WebSocket, Message>>,
     set_names: Vec<String>,
     set_preset_names: Vec<String>,
     patcher_instance_names: Vec<String>,
@@ -390,6 +431,21 @@ impl SharedContext {
             volume,
             config,
             config_path,
+            bpm: 0.0,
+            ws_tx: None,
+        }
+    }
+
+    fn set_ws(&mut self, ws_tx: SplitSink<WebSocket, Message>) {
+        self.ws_tx = Some(ws_tx);
+    }
+
+    async fn send_osc(&mut self, msg: OscMessage) {
+        if let Some(ws) = self.ws_tx.as_mut() {
+            let packet = OscPacket::Message(msg);
+            if let Ok(msg) = rosc::encoder::encode(&packet) {
+                let _ = ws.send(Message::Binary(msg)).await;
+            }
         }
     }
 
@@ -409,6 +465,14 @@ impl SharedContext {
         }
     }
 
+    fn update_tempo(&mut self, v: f32) {
+        self.bpm = v;
+    }
+
+    fn bpm(&self) -> f32 {
+        self.bpm
+    }
+
     async fn locked_display(&self) -> MutexGuard<MoveDisplay> {
         self.display.lock().await
     }
@@ -422,10 +486,7 @@ impl SharedContext {
 impl Context {
     fn new(shared: std::rc::Rc<std::sync::Mutex<SharedContext>>) -> Self {
         Self {
-            bpm: 0f32,
             tempo_offset_mul: 1.0,
-            rolling: false,
-            ws_tx: None,
             set_names: Vec::new(),
             set_preset_names: Vec::new(),
             set_selected: None,
@@ -434,6 +495,11 @@ impl Context {
             patcher_params: HashMap::new(),
             shared,
         }
+    }
+
+    fn set_ws(&mut self, ws_tx: SplitSink<WebSocket, Message>) {
+        let mut g = self.shared.lock().expect("no poison");
+        g.set_ws(ws_tx);
     }
 
     fn sets_len(&self) -> usize {
@@ -694,13 +760,18 @@ impl Context {
     }
 
     fn update_tempo(&mut self, v: f32) {
-        self.bpm = v;
+        self.with_shared(|mut s| s.update_tempo(v))
+    }
+
+    fn bpm(&self) -> f32 {
+        self.with_shared(|s| s.bpm())
     }
 
     async fn offset_tempo(&mut self, offset: f32) {
-        let v = (self.bpm + offset * self.tempo_offset_mul).clamp(0.5, 500.0); //XXX range?
-        if v != self.bpm {
-            self.bpm = v;
+        let bpm = self.with_shared(|s| s.bpm());
+        let v = (bpm + offset * self.tempo_offset_mul).clamp(0.5, 500.0); //XXX range?
+        if v != bpm {
+            self.update_tempo(v);
             let msg = OscMessage {
                 addr: TRANSPORT_BPM_ADDR.to_string(),
                 args: vec![OscType::Float(v)],
@@ -713,33 +784,9 @@ impl Context {
         self.tempo_offset_mul = mul;
     }
 
-    fn update_transport(&mut self, on: bool) {
-        self.rolling = on;
-        self.light_button(
-            PLAY_MIDI,
-            if on {
-                MoveColor::Green
-            } else {
-                MoveColor::LightGray
-            } as u8,
-        );
-    }
-
-    async fn toggle_transport(&mut self) {
-        let msg = OscMessage {
-            addr: TRANSPORT_ROLLING_ADDR.to_string(),
-            args: vec![OscType::Bool(!self.rolling)],
-        };
-        self.send_osc(msg).await;
-    }
-
     async fn send_osc(&mut self, msg: OscMessage) {
-        let packet = OscPacket::Message(msg);
-        if let Ok(msg) = rosc::encoder::encode(&packet) {
-            if let Some(ws) = self.ws_tx.as_mut() {
-                let _ = ws.send(Message::Binary(msg)).await;
-            }
-        }
+        let mut g = self.shared.lock().expect("no poison");
+        g.send_osc(msg).await;
     }
 
     async fn with_display<T, F: Fn(MutexGuard<'_, MoveDisplay>) -> T>(&self, f: F) -> T {
@@ -803,7 +850,7 @@ impl StateController {
                 let _ = ws.send(Message::Binary(msg)).await;
             }
         }
-        self.context_mut().ws_tx = Some(ws);
+        self.context_mut().set_ws(ws);
     }
 
     pub fn set_state(&mut self, instances: HashMap<usize, PatcherInst>) {
@@ -1082,7 +1129,7 @@ impl StateController {
                 let bpm = {
                     let ctx = self.context_mut();
                     ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                    ctx.bpm
+                    ctx.bpm()
                 };
                 self.with_display(|mut display| {
                     display.clear(BinaryColor::Off).unwrap();
@@ -1229,7 +1276,7 @@ impl StateController {
             _ => false,
         };
 
-        if let Some(ns) = self.topsm.process_event(e) {
+        if let Some(ns) = self.topsm.process_event(e).await {
             use top::States;
             match ns {
                 States::PowerOff => {
