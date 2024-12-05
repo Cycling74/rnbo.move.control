@@ -840,7 +840,7 @@ impl StateController {
 
     pub async fn set_ws(&mut self, mut ws: SplitSink<WebSocket, Message>) {
         //query values
-        for addr in [TRANSPORT_ROLLING_ADDR, TRANSPORT_BPM_ADDR] {
+        for addr in [TRANSPORT_ROLLING_ADDR, TRANSPORT_BPM_ADDR, SET_CURRENT_ADDR] {
             let msg = OscMessage {
                 addr: addr.to_string(),
                 args: Vec::new(),
@@ -867,6 +867,16 @@ impl StateController {
         }
         self.params = params;
         self.params_norm = params_norm;
+    }
+
+    pub async fn set_set_current_name(&mut self, name: Option<String>) {
+        self.set_current_name = name;
+        self.set_current_index = if let Some(name) = &self.set_current_name {
+            self.context().set_names().iter().position(|r| r == name)
+        } else {
+            None
+        };
+        self.handle_event(Events::SetCurrentChanged).await;
     }
 
     pub async fn set_set_names(&mut self, names: &Vec<String>) {
@@ -899,16 +909,11 @@ impl StateController {
                     }
                 }
                 SET_CURRENT_ADDR => {
-                    self.set_current_name = match &msg.args[0] {
+                    let name = match &msg.args[0] {
                         OscType::String(name) => Some(name.clone()),
                         _ => None,
                     };
-                    self.set_current_index = if let Some(name) = &self.set_current_name {
-                        self.context().set_names().iter().position(|r| r == name)
-                    } else {
-                        None
-                    };
-                    self.handle_event(Events::SetCurrentChanged).await;
+                    self.set_set_current_name(name).await;
                 }
                 SET_PRESETS_LOADED_ADDR => {
                     self.set_preset_loaded_name = match &msg.args[0] {
