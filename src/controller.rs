@@ -38,6 +38,8 @@ const MENU_MIDI: u8 = 0x32;
 const BACK_MIDI: u8 = 0x33;
 const PLAY_MIDI: u8 = 0x55;
 
+const MOVE_CTL_MIDI_CHAN: u8 = 15;
+
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 
@@ -277,7 +279,11 @@ mod top {
 
         fn light_button(&mut self, btn: u8, val: u8) {
             self.with_shared(|shared| {
-                let _ = shared.midi_out_queue.send(super::Midi::cc(btn, val, 0));
+                let _ = shared.midi_out_queue.send(super::Midi::cc(
+                    btn,
+                    val,
+                    super::MOVE_CTL_MIDI_CHAN,
+                ));
             })
         }
 
@@ -621,7 +627,9 @@ impl Context {
 
     fn light_button(&mut self, btn: u8, val: u8) {
         self.with_shared(|shared| {
-            let _ = shared.midi_out_queue.send(Midi::cc(btn, val, 0));
+            let _ = shared
+                .midi_out_queue
+                .send(Midi::cc(btn, val, MOVE_CTL_MIDI_CHAN));
         })
     }
 
@@ -728,9 +736,11 @@ impl Context {
         let shared = self.shared.lock().expect("no poison");
         for index in 0..PARAM_PAGE_SIZE {
             let num = index + 71;
-            let _ = shared
-                .midi_out_queue
-                .send(Midi::cc(num as u8, MoveColor::Black as _, 0));
+            let _ = shared.midi_out_queue.send(Midi::cc(
+                num as u8,
+                MoveColor::Black as _,
+                MOVE_CTL_MIDI_CHAN,
+            ));
         }
     }
 
@@ -1001,7 +1011,7 @@ impl StateController {
                 }
             }
             3 => match bytes[0] {
-                0x90 => {
+                0x9F => {
                     self.sysex.clear();
                     if bytes[1] < 10 && bytes[2] != 0 {
                         self.handle_event(Events::EncTouch(bytes[1] as usize)).await;
@@ -1018,7 +1028,7 @@ impl StateController {
                         */
                     }
                 }
-                0xB0 => {
+                0xBF => {
                     self.sysex.clear();
                     match bytes[1] {
                         //jog wheel btn
