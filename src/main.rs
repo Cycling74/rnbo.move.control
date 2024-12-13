@@ -1,7 +1,7 @@
 use {
     crate::{
         config::*,
-        controller::StateController,
+        controller::{ExitCmd, StateController},
         display::{DrawCommand, MoveDisplay},
         midi::Midi,
     },
@@ -210,7 +210,7 @@ async fn with_client(
     c: Client,
     startup: &Vec<StartupProcess>,
     config: &PathBuf,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<ExitCmd, Box<dyn Error>> {
     let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
     let (midi_out_tx, midi_out_rx) = sync_mpsc::sync_channel(1024);
     let (midi_in_tx, mut midi_in_rx) = async_mpsc::channel(1024);
@@ -486,10 +486,15 @@ async fn with_client(
         }
     };
 
+    let mut exit_cmd = ExitCmd::Exit;
+
     let process_midi = async {
         while let Some(midi) = midi_in_rx.recv().await {
             let mut c = state.lock().await;
-            c.handle_midi(midi.bytes()).await;
+            if let Some(cmd) = c.handle_midi(midi.bytes()).await {
+                exit_cmd = cmd;
+                break;
+            }
         }
     };
 
@@ -777,7 +782,7 @@ async fn with_client(
         child.kill()?
     }
 
-    Ok(())
+    Ok(exit_cmd)
 }
 
 #[tokio::main]
@@ -814,6 +819,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let pollms = 500;
     let mut jack: Option<Child> = None;
 
+    let exit_cmd;
+
     loop {
         if let Some(j) = jackstartup.clone() {
             let mut start = true;
@@ -844,7 +851,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         if let Ok((c, _status)) = Client::new(name, ClientOptions::empty()) {
             let res = with_client(c, &tostartup, &config).await;
             match res {
-                Ok(()) => break,
+                Ok(cmd) => {
+                    exit_cmd = cmd;
+                    break;
+                }
                 Err(e) => {
                     println!("error {:?}", e);
                     //add a little extra time if there is an error
@@ -857,6 +867,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     if let Some(mut jack) = jack {
         jack.kill()?;
+    }
+
+    if exit_cmd == ExitCmd::LaunchMove {
+        println!("launching move");
+        if unsafe { libc::fork() } == 0 {
+            Command::new("/opt/move/MoveLauncher")
+                .output()
+                .expect("to launch move");
+        }
     }
 
     Ok(())
