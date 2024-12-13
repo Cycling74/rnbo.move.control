@@ -25,3 +25,4 @@ itertools = "0.13.0"
 palette = "0.7.6"
 clap = { version = "4.5.21", features = ["derive"] }
 home = "0.5.9"
+libc = "0.2.168"
