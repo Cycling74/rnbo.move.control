@@ -58,6 +58,12 @@ const JOG_WHEEL_ENCODER: usize = 10;
 
 const PARAM_PAGE_SIZE: usize = 8;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ExitCmd {
+    Exit,
+    LaunchMove,
+}
+
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -217,7 +223,7 @@ mod top {
             VolumeEditor + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON] = Main,
 
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == POWER_DOWN_INDEX] = PowerOff,
-            PromptExit(usize) + BtnDown(Button::JogWheel) [*state == LAUNCH_MOVE_INDEX] / ctx.launch_move();,
+            PromptExit(usize) + BtnDown(Button::JogWheel) [*state == LAUNCH_MOVE_INDEX] = LaunchMove,
             PromptExit(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < EXIT_MENU.len()] = PromptExit(*state + 1),
             PromptExit(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PromptExit(*state - 1),
             PromptExit(usize) + BtnDown(Button::Back) = Main,
@@ -388,6 +394,8 @@ pub struct StateController {
     set_preset_loaded_index: Option<usize>,
 
     sysex: Vec<u8>,
+
+    exit_cmd: Option<ExitCmd>,
 
     topsm: top::StateMachine,
     sm: StateMachine,
@@ -852,6 +860,8 @@ impl StateController {
             sm,
             topsm,
 
+            exit_cmd: None,
+
             set_current_name: None,
             set_preset_loaded_name: None,
 
@@ -993,7 +1003,7 @@ impl StateController {
         }
     }
 
-    pub async fn handle_midi(&mut self, bytes: &[u8]) {
+    pub async fn handle_midi(&mut self, bytes: &[u8]) -> Option<ExitCmd> {
         //println!("got midi {:02x?}", bytes);
 
         //volume 0x08
@@ -1128,7 +1138,8 @@ impl StateController {
             _ => {
                 println!("got other byte midi {:?}", bytes);
             }
-        }
+        };
+        self.exit_cmd
     }
 
     async fn display_centered(&mut self, text: &str) {
@@ -1306,6 +1317,11 @@ impl StateController {
         if let Some(ns) = self.topsm.process_event(e).await {
             use top::States;
             match ns {
+                States::LaunchMove => {
+                    self.display_centered("Launching Move").await;
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    self.exit_cmd = Some(ExitCmd::LaunchMove);
+                }
                 States::PowerOff => {
                     self.display_centered("Powering Down").await;
 
@@ -1397,6 +1413,10 @@ impl StateController {
         let _ = self.context_mut().midi_out_queue.send(midi);
     }
     */
+
+    fn exit_cmd(&self) -> &Option<ExitCmd> {
+        &self.exit_cmd
+    }
 
     fn context(&self) -> &Context {
         self.sm.context()
