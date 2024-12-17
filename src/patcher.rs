@@ -78,7 +78,7 @@ impl PatcherInst {
             .get("VALUE")?
             .as_str()?
             .to_string();
-        let params = Param::parse_all(contents.get("params")?).unwrap_or_default();
+        let params = Param::parse_all(index, contents.get("params")?).unwrap_or_default();
         let presets = parse_presets(&contents).unwrap_or_default();
 
         Some(PatcherInst {
