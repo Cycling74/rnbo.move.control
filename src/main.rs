@@ -59,6 +59,7 @@ mod display;
 mod midi;
 mod param;
 mod patcher;
+mod view;
 
 const HTTP_QUERY_DELAY: Duration = Duration::from_millis(200);
 
@@ -465,12 +466,12 @@ async fn with_client(
 
     let children = children?;
 
-    let mut display = Rc::new(tokio::sync::Mutex::new(display));
+    let display = Rc::new(tokio::sync::Mutex::new(display));
 
     let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(StateController::new(
             midi_out_tx,
-            &mut display,
+            display.clone(),
             volume,
             config.clone(),
         )));
@@ -500,6 +501,7 @@ async fn with_client(
 
     let inst_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
     let sets_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
+    let views_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
     let set_current_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
 
     let inst_path_regex = Regex::new(r"^/rnbo/inst/\d+$").expect("to create instance regex");
@@ -582,6 +584,17 @@ async fn with_client(
                     }
                 }
             }
+            {
+                let mut g = views_query.lock().await;
+                if let Some(v) = g.deref() {
+                    if *v <= Instant::now() {
+                        if true {
+                            //TODO
+                            *g = None;
+                        }
+                    }
+                }
+            }
 
             {
                 let mut g = inst_query.lock().await;
@@ -591,7 +604,7 @@ async fn with_client(
                         if let Ok(inst) = get_instances().await {
                             *g = None;
                             let mut g = state.lock().await;
-                            g.set_state(inst);
+                            g.set_instances(inst);
                         }
                     }
                 }
@@ -668,6 +681,11 @@ async fn with_client(
                             *g = Some(Instant::now() + HTTP_QUERY_DELAY);
                         }
 
+                        {
+                            let mut g = views_query.lock().await;
+                            *g = Some(Instant::now() + HTTP_QUERY_DELAY);
+                        }
+
                         //do set current query
                         {
                             let mut g = set_current_query.lock().await;
@@ -733,7 +751,6 @@ async fn with_client(
                                                 } {
                                                     //added or removed
                                                     if inst_path_regex.is_match(path) {
-                                                        println!("update instances");
                                                         let mut g = inst_query.lock().await;
                                                         *g = Some(Instant::now());
                                                     }
