@@ -4,6 +4,7 @@ use {
         controller::{ExitCmd, StateController},
         display::{DrawCommand, MoveDisplay},
         midi::Midi,
+        view::ParamView,
     },
     clap::Parser,
     embedded_graphics::{
@@ -505,6 +506,8 @@ async fn with_client(
     let set_current_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
 
     let inst_path_regex = Regex::new(r"^/rnbo/inst/\d+$").expect("to create instance regex");
+    let set_view_regex =
+        Regex::new(r"^/rnbo/inst/control/sets/views/list/\d+$").expect("to create set view regex");
 
     //http://c74rpi.local:5678
 
@@ -555,6 +558,19 @@ async fn with_client(
         None
     }
 
+    async fn get_views() -> Result<Vec<ParamView>, ()> {
+        let mut views = Vec::new();
+        if let Ok(res) = reqwest::Client::new()
+            .get("http://127.0.0.1:5678/rnbo/inst/control/sets/views/list")
+            .send()
+            .await
+        {
+            let json: serde_json::Value = res.json().await.map_err(|_| ())?;
+            views = ParamView::parse_all(&json);
+        }
+        Ok(views)
+    }
+
     let inst_query_future = async {
         loop {
             tokio::time::sleep(HTTP_QUERY_DELAY).await;
@@ -569,7 +585,7 @@ async fn with_client(
                         {
                             *g = None;
                             let mut g = state.lock().await;
-                            g.set_set_names(&names).await;
+                            g.set_set_names(names).await;
                         }
 
                         if let Some(names) = get_string_range(
@@ -579,7 +595,7 @@ async fn with_client(
                         {
                             *g = None;
                             let mut g = state.lock().await;
-                            g.set_set_preset_names(&names).await;
+                            g.set_set_preset_names(names).await;
                         }
                     }
                 }
@@ -588,9 +604,10 @@ async fn with_client(
                 let mut g = views_query.lock().await;
                 if let Some(v) = g.deref() {
                     if *v <= Instant::now() {
-                        if true {
-                            //TODO
+                        if let Ok(views) = get_views().await {
                             *g = None;
+                            let mut g = state.lock().await;
+                            g.set_param_views(views).await;
                         }
                     }
                 }
@@ -718,7 +735,7 @@ async fn with_client(
                                                                 if let Ok(range) = range {
                                                                     let mut g = state.lock().await;
                                                                     let range = range.range();
-                                                                    g.set_set_names(&range).await;
+                                                                    g.set_set_names(range).await;
                                                                 }
                                                             }
                                                             Some(
@@ -731,13 +748,14 @@ async fn with_client(
                                                                 if let Ok(range) = range {
                                                                     let mut g = state.lock().await;
                                                                     let range = range.range();
-                                                                    g.set_set_preset_names(&range)
+                                                                    g.set_set_preset_names(range)
                                                                         .await;
                                                                 }
                                                             }
-                                                            _ => (),
+                                                            _ => {
+                                                                //println!("data {:?}", cmd);
+                                                            }
                                                         }
-                                                        //println!("data {:?}", cmd);
                                                         None
                                                         /*
                                                         data
@@ -749,9 +767,13 @@ async fn with_client(
                                                     "PATH_ADDED" | "PATH_REMOVED" => data.as_str(),
                                                     _ => None,
                                                 } {
+                                                    println!("path {:?}", path);
                                                     //added or removed
                                                     if inst_path_regex.is_match(path) {
                                                         let mut g = inst_query.lock().await;
+                                                        *g = Some(Instant::now());
+                                                    } else if set_view_regex.is_match(path) {
+                                                        let mut g = views_query.lock().await;
                                                         *g = Some(Instant::now());
                                                     }
                                                 }

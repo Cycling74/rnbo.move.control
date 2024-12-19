@@ -52,6 +52,7 @@ pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
 pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
 pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
 pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loaded";
+pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
 
 const VOLUME_WHEEL_BUTTON: usize = 8;
 const VOLUME_WHEEL_ENCODER: usize = 9;
@@ -173,6 +174,9 @@ enum Events {
 
     SetCurrentChanged,
     SetPresetLoadedChanged,
+
+    SetViewListChanged,
+    SetViewCurrentChanged,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -394,6 +398,8 @@ struct CommonContext {
     //sorted list of instances that have params, and the count of pages
     pub(crate) instance_param_pages: Vec<usize>,
     pub(crate) view_param_pages: Vec<usize>,
+
+    pub(crate) view_current: Option<usize>,
 }
 
 impl Default for CommonContext {
@@ -404,7 +410,9 @@ impl Default for CommonContext {
             instances_count: 0,
 
             instance_param_pages: Vec::new(),
+
             view_param_pages: Vec::new(),
+            view_current: None,
         }
     }
 }
@@ -619,8 +627,8 @@ impl StateController {
         self.handle_event(Events::SetCurrentChanged).await;
     }
 
-    pub async fn set_set_names(&mut self, names: &Vec<String>) {
-        self.set_names = names.clone();
+    pub async fn set_set_names(&mut self, names: Vec<String>) {
+        self.set_names = names;
         self.set_names.sort();
         self.set_names.insert(0, "<empty>".to_string());
 
@@ -633,14 +641,19 @@ impl StateController {
         self.handle_event(Events::SetNamesChanged).await;
     }
 
-    pub async fn set_set_preset_names(&mut self, names: &Vec<String>) {
-        self.set_preset_names = names.clone();
-
+    pub async fn set_set_preset_names(&mut self, names: Vec<String>) {
         let mut common = self.sm.context().common();
         common.set_presets_count = names.len();
         self.update_common(common);
 
+        self.set_preset_names = names;
+
         self.handle_event(Events::SetPresetNamesChanged).await;
+    }
+
+    pub async fn set_param_views(&mut self, views: Vec<ParamView>) {
+        self.param_views = views;
+        //TODO
     }
 
     pub async fn handle_osc(&mut self, msg: &OscMessage) {
