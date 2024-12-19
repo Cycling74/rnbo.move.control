@@ -15,7 +15,7 @@ use {
         text::{Alignment, Text},
     },
     futures_util::{stream::SplitSink, SinkExt},
-    palette::Srgb,
+    palette::{Darken, Srgb},
     reqwest_websocket::{Message, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
     std::{
@@ -152,7 +152,7 @@ enum Button {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 struct ParamUpdate {
-    instance: usize,
+    instance: usize, //local index
     index: usize,
 }
 
@@ -327,10 +327,7 @@ smlang::statemachine! {
         PatcherInstances(usize) + SetCurrentChanged = Menu(PATCHER_INSTANCES_INDEX),
         PatcherParams(PatcherParams) + SetCurrentChanged  / ctx.emit(Cmd::ClearParams); = Menu(PATCHER_INSTANCES_INDEX),
 
-        //draw param and update the LED if it is in view
-        //this actually updates the state and we might not need to, but we do need to render the
-        //param
-        PatcherParams(PatcherParams) + ParamUpdate(_) / ctx.emit(Cmd::RenderParam { instance: event.instance, param: event.index}); = PatcherParams(state.clone()),
+        PatcherParams(PatcherParams) + ParamUpdate(_) [ param_visible(event, state) ] / ctx.emit(Cmd::RenderParam { instance: event.instance, param: event.index }); = PatcherParams(state.clone()),
 
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
         TempoEditor + EncRight(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(1)); = TempoEditor,
@@ -375,6 +372,9 @@ pub struct StateController {
 
     instance_params: Vec<Vec<usize>>,
 
+    //(sparce instance index, param_index) -> (local instance_index, param index)
+    instance_param_map: HashMap<(usize, usize), (usize, usize)>,
+
     param_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
     param_norm_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
 
@@ -413,6 +413,12 @@ impl Default for CommonContext {
 pub struct Context {
     cmd_queue: sync_mpsc::Sender<Cmd>,
     common: CommonContext,
+}
+
+fn param_visible(update: &ParamUpdate, state: &PatcherParams) -> bool {
+    let offset = state.page * PARAM_PAGE_SIZE;
+    let range = offset..(offset + PARAM_PAGE_SIZE);
+    state.index == update.instance && range.contains(&update.index)
 }
 
 impl Context {
@@ -788,11 +794,6 @@ impl StateController {
     ) -> Self {
         let (tx, rx) = sync_mpsc::channel();
 
-        /*
-        let _ = tx.send(Cmd::LightButton { btn: MENU_MIDI, val : MoveColor::LightGray as _});
-        let _ = tx.send(Cmd::LightButton { btn: PLAY_MIDI, val : MoveColor::LightGray as _});
-        */
-
         let context = Context::new(tx.clone());
         let sm = StateMachine::new_with_state(context, States::Menu(0));
 
@@ -814,7 +815,10 @@ impl StateController {
         //init volume
         volume.store(config.volume, AtomicOrdering::SeqCst);
 
-        Self {
+        //reset
+        let _ = midi_out_queue.send(Midi::reset());
+
+        let mut s = Self {
             sysex: Vec::new(),
 
             sm,
@@ -846,6 +850,7 @@ impl StateController {
             params: Vec::new(),
 
             instance_params: Vec::new(),
+            instance_param_map: HashMap::new(),
 
             param_lookup: HashMap::new(),
             param_norm_lookup: HashMap::new(),
@@ -855,7 +860,13 @@ impl StateController {
             set_names: Vec::new(),
             set_preset_names: Vec::new(),
             patcher_instance_names: Vec::new(),
-        }
+        };
+
+        //States::Init not transitioned to so, do setup here
+        s.light_button(MENU_MIDI, MoveColor::LightGray as _);
+        s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
+
+        s
     }
 
     pub async fn set_ws(&mut self, mut ws: SplitSink<WebSocket, Message>) {
@@ -880,13 +891,14 @@ impl StateController {
         self.patcher_instance_names.clear();
         self.params.clear();
         self.instance_params.clear();
+        self.instance_param_map.clear();
         self.param_lookup.clear();
         self.param_norm_lookup.clear();
 
         let mut common = self.sm.context().common();
         common.instance_param_pages.clear();
 
-        for key in indexes.iter() {
+        for (local_instance_index, key) in indexes.iter().enumerate() {
             let inst = instances.get(key).unwrap();
 
             //XXX what if there aren't any params?
@@ -899,6 +911,7 @@ impl StateController {
             let mut instindexes = Vec::new();
             for p in inst.params().iter() {
                 let index = self.params.len();
+                let local_param_index = instindexes.len();
 
                 self.params.push(p.clone());
                 instindexes.push(index);
@@ -907,6 +920,10 @@ impl StateController {
                 self.param_lookup.insert(p.addr().to_string(), index);
                 self.param_norm_lookup
                     .insert(p.addr_norm().to_string(), index);
+                self.instance_param_map.insert(
+                    (p.instance_index(), p.index()),
+                    (local_instance_index, local_param_index),
+                );
             }
             self.instance_params.push(instindexes);
         }
@@ -1025,26 +1042,24 @@ impl StateController {
                             let v = match &msg.args[0] {
                                 OscType::Double(v) => {
                                     param.set_norm_pending(*v);
-                                    Some(*v)
+                                    Some((param.instance_index(), param.index()))
                                 }
                                 OscType::Float(v) => {
                                     let v = *v as f64;
                                     param.set_norm_pending(v);
-                                    Some(v)
+                                    Some((param.instance_index(), param.index()))
                                 }
                                 _ => None,
                             };
-                            if let Some(_v) = v {
-                                //right now it doesn't matter what the index is.. but maybe we
-                                //should have a back lookup for a param and its instance index
-                                //within the instance list and the param index with the instance's
-                                //param list
-                                self.handle_event(Events::ParamUpdate(ParamUpdate {
-                                    instance: 0,
-                                    index: 0,
-                                }))
-                                .await;
-                                //TODO
+                            if let Some(sparce) = v {
+                                //convert to local indexes
+                                if let Some(local) = self.instance_param_map.get(&sparce) {
+                                    self.handle_event(Events::ParamUpdate(ParamUpdate {
+                                        instance: local.0,
+                                        index: local.1,
+                                    }))
+                                    .await;
+                                }
                             }
                         }
                     }
@@ -1474,6 +1489,38 @@ impl StateController {
         self.process_cmds().await;
     }
 
+    fn render_param(&mut self, index: usize, location: usize) {
+        let color = if let Some(param) = self.params.get(index) {
+            let cap = 0.96;
+            let v = param.norm_prefer_pending();
+
+            //TODO get from metdata?
+            Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap)
+        } else {
+            Srgb::new(0., 0., 0.)
+        }
+        .into_format();
+
+        for m in led_color(location as _, &color) {
+            let _ = self.midi_out_queue.send(m);
+        }
+    }
+
+    fn clear_params(&mut self) {
+        for index in 0..PARAM_PAGE_SIZE {
+            self.clear_param(index);
+        }
+    }
+
+    fn clear_param(&mut self, location: usize) {
+        let num = location + 71;
+        let _ = self.midi_out_queue.send(Midi::cc(
+            num as u8,
+            MoveColor::Black as _,
+            MOVE_CTL_MIDI_CHAN,
+        ));
+    }
+
     async fn process_cmds(&mut self) {
         while let Ok(cmd) = self.cmd_queue.try_recv() {
             match cmd {
@@ -1536,9 +1583,33 @@ impl StateController {
 
                 Cmd::LightButton { btn, val } => self.light_button(btn, val),
 
-                Cmd::RenderParamPage { instance, page } => { /*todo*/ }
-                //XXX test to make sure it is visible
-                Cmd::RenderParam { instance, param } => { /*todo*/ }
+                Cmd::RenderParamPage { instance, page } => {
+                    let mut indexes = Vec::new();
+                    if let Some(paramindexes) = self.instance_params.get(instance) {
+                        let offset = page * PARAM_PAGE_SIZE;
+                        indexes = paramindexes
+                            .iter()
+                            .skip(offset)
+                            .take(PARAM_PAGE_SIZE)
+                            .map(|i| *i)
+                            .collect();
+                    }
+                    for i in 0..PARAM_PAGE_SIZE {
+                        if let Some(index) = indexes.get(i) {
+                            self.render_param(*index, i);
+                        } else {
+                            self.clear_param(i);
+                        }
+                    }
+                }
+                Cmd::RenderParam { instance, param } => {
+                    //XXX do we need some sort of throttle?
+                    if let Some(paramindexes) = self.instance_params.get(instance) {
+                        if let Some(index) = paramindexes.get(param) {
+                            self.render_param(*index, param % PARAM_PAGE_SIZE);
+                        }
+                    }
+                }
 
                 Cmd::LoadSet(index) => {
                     if index == 0 {
@@ -1568,16 +1639,7 @@ impl StateController {
                     }
                 }
 
-                Cmd::ClearParams => {
-                    for index in 0..PARAM_PAGE_SIZE {
-                        let num = index + 71;
-                        let _ = self.midi_out_queue.send(Midi::cc(
-                            num as u8,
-                            MoveColor::Black as _,
-                            MOVE_CTL_MIDI_CHAN,
-                        ));
-                    }
-                }
+                Cmd::ClearParams => self.clear_params(),
             }
         }
     }
