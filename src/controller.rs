@@ -1022,17 +1022,31 @@ impl StateController {
                         }
                     } else if let Some(index) = self.param_norm_lookup.get(&msg.addr) {
                         if let Some(param) = self.params.get_mut(*index) {
-                            match &msg.args[0] {
-                                OscType::Double(v) => param.set_norm(*v),
-                                OscType::Float(v) => param.set_norm(*v as f64),
-                                _ => (),
+                            let v = match &msg.args[0] {
+                                OscType::Double(v) => {
+                                    param.set_norm_pending(*v);
+                                    Some(*v)
+                                }
+                                OscType::Float(v) => {
+                                    let v = *v as f64;
+                                    param.set_norm_pending(v);
+                                    Some(v)
+                                }
+                                _ => None,
                             };
+                            if let Some(_v) = v {
+                                //right now it doesn't matter what the index is.. but maybe we
+                                //should have a back lookup for a param and its instance index
+                                //within the instance list and the param index with the instance's
+                                //param list
+                                self.handle_event(Events::ParamUpdate(ParamUpdate {
+                                    instance: 0,
+                                    index: 0,
+                                }))
+                                .await;
+                                //TODO
+                            }
                         }
-                        /*
-                        if let Some(e) = self.context_mut().update_param_norm(*instance, msg) {
-                            self.handle_event(e).await;
-                        }
-                        */
                     }
                 }
             }
