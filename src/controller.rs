@@ -605,26 +605,6 @@ impl StateController {
             self.instance_params.push(instindexes);
         }
 
-        /*
-
-        self.patcher_instance_to_index.clear();
-        self.patcher_params.clear();
-
-        //context addresses instances by index from 0, not by instance index (which could be
-        //sparse)
-        for (index, i) in indexes.iter().enumerate() {
-            self.patcher_instance_to_index.insert(*i, index);
-
-            let inst = instances.get(&i).unwrap();
-            let mut params = inst.params().clone();
-            params.sort_by(|a, b| a.index().cmp(&b.index()));
-
-            self.patcher_params.insert(index, params);
-            self.patcher_instance_names
-                .push(format!("{}: {}", i, inst.name()));
-        }
-        */
-
         common.instances_count = self.patcher_instance_names.len();
         self.update_common(common);
     }
@@ -643,6 +623,8 @@ impl StateController {
         self.set_names = names.clone();
         self.set_names.sort();
         self.set_names.insert(0, "<empty>".to_string());
+
+        //TODO check set_current_name
 
         let mut common = self.sm.context().common();
         common.sets_count = self.set_names.len();
