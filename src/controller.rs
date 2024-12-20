@@ -215,6 +215,11 @@ enum Cmd {
         index: usize,
         offset: isize,
     },
+    OffsetViewParam {
+        view: usize,
+        index: usize,
+        offset: isize,
+    },
     OffsetVolume(isize),
     OffsetTempo(isize),
     MulTempoOffset(bool),
@@ -245,7 +250,7 @@ enum Cmd {
 mod top {
     use super::{
         Button, Cmd, Context, Events, ParamPage, PowerCommand, EXIT_MENU, JOG_WHEEL_ENCODER,
-        VOLUME_WHEEL_BUTTON, VOLUME_WHEEL_ENCODER,
+        PARAM_PAGE_SIZE, VOLUME_WHEEL_BUTTON, VOLUME_WHEEL_ENCODER,
     };
 
     const POWER_DOWN_INDEX: usize = 0;
@@ -274,6 +279,8 @@ mod top {
             ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] = ViewParams(state.offset_page(-1)),
             ViewParams(ParamPage) + BtnDown(Button::Back) = ParamViewMenu(state.index),
             ViewParams(ParamPage) + EncTouch(_) [*event < 8] = ViewParams(state.with_focus(*event)),
+            ViewParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
+            ViewParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
 
             VolumeEditor + BtnDown(Button::Back) = Main,
             VolumeEditor + BtnDown(Button::Menu) = Main,
@@ -291,8 +298,9 @@ mod top {
             _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
             _ + BtnDown(Button::PowerLong) / ctx.emit(Cmd::Power(PowerCommand::ClearLongPress)); = PowerOff,
 
-            _ + Tempo(_),
-            _ + Transport(_),
+            //_ + Tempo(_),
+            //_ + Transport(_),
+
             _ + BtnDown(Button::Play) / ctx.emit(Cmd::ToggleTransport);,
 
         }
@@ -739,8 +747,19 @@ impl StateController {
             match msg.addr.as_str() {
                 TRANSPORT_ROLLING_ADDR => {
                     if let OscType::Bool(rolling) = msg.args[0] {
-                        self.rolling = rolling;
-                        self.handle_event(Events::Transport(rolling)).await;
+                        if self.rolling != rolling {
+                            self.rolling = rolling;
+                            let _ = self.midi_out_queue.send(Midi::cc(
+                                PLAY_MIDI,
+                                if rolling {
+                                    MoveColor::Green
+                                } else {
+                                    MoveColor::LightGray
+                                } as _,
+                                MOVE_CTL_MIDI_CHAN,
+                            ));
+                            self.handle_event(Events::Transport(rolling)).await;
+                        }
                     }
                 }
                 TRANSPORT_BPM_ADDR => {
@@ -1324,6 +1343,22 @@ impl StateController {
         ));
     }
 
+    async fn offset_param(&mut self, index: usize, offset: isize) {
+        if let Some(param) = self.params.get_mut(index) {
+            let mut args = Vec::new();
+            let step = 0.01; //TODO allow for other step sizes
+                             //operate on the normalized value.. TODO, change step
+            let v = (param.norm() + if offset > 0 { step } else { -step }).clamp(0.0, 1.0);
+            param.set_norm(v);
+            args.push(OscType::Double(v));
+            let msg = OscMessage {
+                addr: param.addr_norm().to_string(),
+                args,
+            };
+            self.send_osc(msg).await;
+        }
+    }
+
     async fn process_cmds(&mut self) {
         while let Ok(cmd) = self.cmd_queue.try_recv() {
             match cmd {
@@ -1336,23 +1371,21 @@ impl StateController {
                 } => {
                     if let Some(instance) = self.instance_params.get(instance) {
                         if let Some(index) = instance.get(index) {
-                            if let Some(param) = self.params.get_mut(*index) {
-                                let mut args = Vec::new();
-                                let step = 0.01; //TODO allow for other step sizes
-                                                 //operate on the normalized value.. TODO, change step
-                                let v = (param.norm() + if offset > 0 { step } else { -step })
-                                    .clamp(0.0, 1.0);
-                                param.set_norm(v);
-                                args.push(OscType::Double(v));
-                                let msg = OscMessage {
-                                    addr: param.addr_norm().to_string(),
-                                    args,
-                                };
-                                self.send_osc(msg).await;
-                            }
+                            self.offset_param(*index, offset).await;
                         }
                     }
                     //self.render_param(instance, param);
+                }
+                Cmd::OffsetViewParam {
+                    view,
+                    index,
+                    offset,
+                } => {
+                    if let Some(params) = self.param_view_params.get(view) {
+                        if let Some(index) = params.get(index) {
+                            self.offset_param(*index, offset).await;
+                        }
+                    }
                 }
                 Cmd::OffsetVolume(amt) => {
                     let cur = self.config.volume as isize;
