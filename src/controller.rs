@@ -233,7 +233,6 @@ enum Cmd {
     },
 
     RenderVisibleParams,
-    ClearVisibleParams,
 
     LoadSet(usize),
     LoadSetPreset(usize),
@@ -268,44 +267,28 @@ mod top {
             Main + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::Main),
 
             //toggle
-            Main + BtnDown(Button::Menu) = ParamViews,
-            ParamViews + BtnDown(Button::Menu) = Main,
+            Main + BtnDown(Button::Menu) / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
+            ParamViews + BtnDown(Button::Menu)/ ctx.emit(Cmd::RenderVisibleParams);  = Main,
 
-            ParamViews + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor(LastView::ParamViews),
+            ParamViews + EncTouch(VOLUME_WHEEL_BUTTON)  = VolumeEditor(LastView::ParamViews),
             ParamViews + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::ParamViews),
             ParamViews + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::ParamViews),
 
-            /*
-            Main + BtnDown(Button::Menu) = ParamViewMenu(0),
-            ParamViewMenu(usize) + BtnDown(Button::Menu) = Main, //draw main params
-            ParamViewMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < ctx.param_view_count()] = ParamViewMenu(*state + 1),
-            ParamViewMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = ParamViewMenu(*state - 1),
-            ParamViewMenu(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: *state, page: 0, focused: None }),
-
-            ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(1)),
-            ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(-1)),
-            ViewParams(ParamPage) + BtnDown(Button::Back) / ctx.emit(Cmd::ClearVisibleParams); = ParamViewMenu(state.index),
-            ViewParams(ParamPage) + EncTouch(_) [*event < 8] = ViewParams(state.with_focus(*event)),
-            ViewParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
-            ViewParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
-            ViewParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = ViewParams(state.clone()), //redraw
-            */
-
-            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::Main] = Main,
-            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::ParamViews] = Main,
-            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::ParamViews] = ParamViews,
-            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::Main] = ParamViews,
+            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::ParamViews] / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::ParamViews] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
+            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
             VolumeEditor(LastView) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(*state),
             VolumeEditor(LastView) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(*state),
-            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON && *state == LastView::Main] = Main,
-            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON && *state == LastView::ParamViews] = ParamViews,
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON && *state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON && *state == LastView::ParamViews] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
 
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == POWER_DOWN_INDEX] = PowerOff,
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == LAUNCH_MOVE_INDEX] = LaunchMove,
             PromptExit(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < EXIT_MENU.len()] = PromptExit(*state + 1),
             PromptExit(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PromptExit(*state - 1),
-            PromptExit(usize) + BtnDown(Button::Back) = Main,
-            PromptExit(usize) + BtnDown(Button::Menu) = Main,
+            PromptExit(usize) + BtnDown(Button::Back) / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            PromptExit(usize) + BtnDown(Button::Menu) / ctx.emit(Cmd::RenderVisibleParams); = Main,
 
             _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
             _ + BtnDown(Button::PowerLong) / ctx.emit(Cmd::Power(PowerCommand::ClearLongPress)); = PowerOff,
@@ -328,7 +311,7 @@ mod view {
             ParamViewMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = ParamViewMenu(*state - 1),
             ParamViewMenu(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: *state, page: 0, focused: None }),
 
-            ViewParams(ParamPage) + BtnDown(Button::Back) / ctx.emit(Cmd::ClearVisibleParams); = ParamViewMenu(state.index),
+            ViewParams(ParamPage) + BtnDown(Button::Back) = ParamViewMenu(state.index),
             ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(1)),
             ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(-1)),
             ViewParams(ParamPage) + EncTouch(_) [*event < 8] = ViewParams(state.with_focus(*event)),
@@ -379,8 +362,8 @@ smlang::statemachine! {
             = PatcherParams(ParamPage { index: *state, page: 0, focused: None }),
 
         //skip patcher instances menu if there is only 1 instance
-        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() > 1] / ctx.emit(Cmd::ClearVisibleParams); = PatcherInstances(state.index),
-        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() == 1] / ctx.emit(Cmd::ClearVisibleParams); = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() > 1] = PatcherInstances(state.index),
+        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() == 1] = Menu(PATCHER_INSTANCES_INDEX),
 
         PatcherParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1] / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: state.index, page: state.page + 1, focused: state.focused }),
@@ -391,7 +374,7 @@ smlang::statemachine! {
         PatcherParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
 
         PatcherInstances(usize) + SetCurrentChanged = Menu(PATCHER_INSTANCES_INDEX),
-        PatcherParams(ParamPage) + SetCurrentChanged  / ctx.emit(Cmd::ClearVisibleParams); = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherParams(ParamPage) + SetCurrentChanged  = Menu(PATCHER_INSTANCES_INDEX),
         PatcherParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = PatcherParams(state.clone()), //redraw
 
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
@@ -400,8 +383,6 @@ smlang::statemachine! {
         TempoEditor + BtnDown(Button::JogWheel) / ctx.emit(Cmd::MulTempoOffset(true)); = TempoEditor,
         TempoEditor + BtnUp(Button::JogWheel) / ctx.emit(Cmd::MulTempoOffset(false));  = TempoEditor,
         TempoEditor + Tempo(_) = TempoEditor,
-
-        _ + BtnDown(Button::Menu) / ctx.emit(Cmd::ClearVisibleParams); = Menu(0),
     }
 }
 
@@ -1069,6 +1050,7 @@ impl StateController {
         use view::States;
         match s {
             States::ParamViewMenu(selected) => {
+                self.clear_visible_params();
                 let selected: usize = *selected;
                 self.with_display(|display| {
                     draw_menu(
@@ -1154,6 +1136,7 @@ impl StateController {
                     })
                     .await;
                 }
+
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 self.light_button(MENU_MIDI, MoveColor::LightGray as _);
             }
@@ -1163,6 +1146,7 @@ impl StateController {
     async fn render_main(&mut self, s: &States) {
         match s {
             States::Menu(selected) => {
+                self.clear_visible_params();
                 let selected: usize = *selected;
                 self.with_display(|display| {
                     draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
@@ -1171,6 +1155,7 @@ impl StateController {
                 self.light_button(BACK_MIDI, 0);
             }
             States::TempoEditor => {
+                self.clear_visible_params();
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 self.with_display(|mut display| {
                     display.clear(BinaryColor::Off).unwrap();
@@ -1181,6 +1166,7 @@ impl StateController {
                 .await;
             }
             States::SetsList(selected) => {
+                self.clear_visible_params();
                 let selected = *selected;
                 let indicated = self.set_current_index;
                 self.with_display(|display| {
@@ -1197,6 +1183,7 @@ impl StateController {
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             States::SetPresetsList(selected) => {
+                self.clear_visible_params();
                 let selected = *selected;
                 let indicated = self.set_preset_loaded_index;
                 self.with_display(|display| {
@@ -1213,6 +1200,7 @@ impl StateController {
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             States::PatcherInstances(selected) => {
+                self.clear_visible_params();
                 let selected = *selected;
                 self.with_display(|display| {
                     draw_menu(
@@ -1293,10 +1281,12 @@ impl StateController {
 
     async fn handle_event(&mut self, e: Events) {
         let top_last = self.topsm.state().clone();
+        let top_trans = self.topsm.process_event(e).is_some();
+        let top_cur = self.topsm.state().clone();
 
-        if let Some(ns) = self.topsm.process_event(e) {
+        if top_trans {
             use top::States;
-            match ns {
+            match top_cur {
                 States::LaunchMove => {
                     self.display_centered("Launching Move").await;
                     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1313,7 +1303,7 @@ impl StateController {
                     self.send_power_cmd(PowerCommand::PowerOff);
                 }
                 States::PromptExit(selected) => {
-                    let selected: usize = *selected;
+                    self.clear_visible_params();
                     self.with_display(|display| {
                         draw_menu(display, &"Exit RNBO", &EXIT_MENU, selected, None);
                     })
@@ -1321,6 +1311,9 @@ impl StateController {
                     self.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
                 States::VolumeEditor(_) => {
+                    if top_last != top_cur {
+                        self.clear_visible_params();
+                    }
                     let volume = self.volume();
                     self.light_button(BACK_MIDI, MoveColor::LightGray as _);
                     self.display_centered("Volume").await;
@@ -1332,6 +1325,8 @@ impl StateController {
                     })
                     .await;
                 }
+                //transitions
+                States::Main | States::ParamViews => self.clear_visible_params(),
                 _ => (),
             }
         }
@@ -1345,9 +1340,9 @@ impl StateController {
 
         //println!("top state {:?}", self.topsm.state());
 
-        match self.topsm.state() {
+        match top_cur {
             top::States::Main => {
-                let render = if top_last == top::States::Main || touch {
+                let render = if touch || !top_trans {
                     let ns = self.sm.process_event(e);
                     ns.is_some()
                 } else {
@@ -1360,7 +1355,7 @@ impl StateController {
                 }
             }
             top::States::ParamViews => {
-                let render = if top_last == top::States::ParamViews || touch {
+                let render = if touch || !top_trans {
                     let ns = self.viewsm.process_event(e);
                     ns.is_some()
                 } else {
@@ -1550,12 +1545,14 @@ impl StateController {
                         self.send_osc(msg).await;
                     }
                 }
-
-                Cmd::ClearVisibleParams => {
-                    self.visible_params.clear();
-                    self.clear_params();
-                }
             }
+        }
+    }
+
+    fn clear_visible_params(&mut self) {
+        if self.visible_params.len() > 0 {
+            self.visible_params.clear();
+            self.clear_params();
         }
     }
 
