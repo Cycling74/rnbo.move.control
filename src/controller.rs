@@ -176,14 +176,26 @@ enum Events {
     SetPresetLoadedChanged,
 
     SetViewListChanged,
-    SetViewCurrentChanged,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PatcherParams {
+pub(crate) struct ParamPage {
     index: usize, //not instance index, index within out list
     page: usize,
     focused: Option<usize>,
+}
+
+impl ParamPage {
+    fn offset_page(&self, offset: isize) -> Self {
+        let mut p = self.clone();
+        p.page = (p.page as isize + offset).max(0) as usize;
+        p
+    }
+    fn with_focus(&self, index: usize) -> Self {
+        let mut p = self.clone();
+        p.focused = Some(index);
+        p
+    }
 }
 
 const MENU_ITEMS: [&'static str; 4] = ["Set Presets", "Sets", "Patcher Instances", "Tempo"];
@@ -232,7 +244,7 @@ enum Cmd {
 
 mod top {
     use super::{
-        Button, Cmd, Context, Events, PowerCommand, EXIT_MENU, JOG_WHEEL_ENCODER,
+        Button, Cmd, Context, Events, ParamPage, PowerCommand, EXIT_MENU, JOG_WHEEL_ENCODER,
         VOLUME_WHEEL_BUTTON, VOLUME_WHEEL_ENCODER,
     };
 
@@ -251,6 +263,17 @@ mod top {
             Main + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor,
             Main + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor,
             Main + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor,
+
+            Main + BtnDown(Button::Menu) = ParamViewMenu(0),
+            ParamViewMenu(usize) + BtnDown(Button::Menu) = Main, //draw main params
+            ParamViewMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < ctx.param_view_count()] = ParamViewMenu(*state + 1),
+            ParamViewMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = ParamViewMenu(*state - 1),
+            ParamViewMenu(usize) + BtnDown(Button::JogWheel) = ViewParams(ParamPage { index: *state, page: 0, focused: None }),
+
+            ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] = ViewParams(state.offset_page(1)),
+            ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] = ViewParams(state.offset_page(-1)),
+            ViewParams(ParamPage) + BtnDown(Button::Back) = ParamViewMenu(state.index),
+            ViewParams(ParamPage) + EncTouch(_) [*event < 8] = ViewParams(state.with_focus(*event)),
 
             VolumeEditor + BtnDown(Button::Back) = Main,
             VolumeEditor + BtnDown(Button::Menu) = Main,
@@ -291,7 +314,7 @@ smlang::statemachine! {
         //skip patcher instances menu if there is only 1 instance
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.instances_count() > 1] = PatcherInstances(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.instances_count() == 1] / ctx.emit(Cmd::RenderParamPage{instance: 0, page: 0});
-            = PatcherParams(PatcherParams { index: 0, page: 0, focused: None }),
+            = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
 
@@ -313,25 +336,24 @@ smlang::statemachine! {
         PatcherInstances(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.instances_count() > *state + 1] = PatcherInstances(*state + 1),
         PatcherInstances(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PatcherInstances(*state - 1),
         PatcherInstances(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderParamPage{ instance: *state, page: 0});
-            = PatcherParams(PatcherParams { index: *state, page: 0, focused: None }),
+            = PatcherParams(ParamPage { index: *state, page: 0, focused: None }),
 
         //skip patcher instances menu if there is only 1 instance
-        PatcherParams(PatcherParams) + BtnDown(Button::Back) [ctx.instances_count() > 1] / ctx.emit(Cmd::ClearParams); = PatcherInstances(state.index),
-        PatcherParams(PatcherParams) + BtnDown(Button::Back) [ctx.instances_count() == 1] / ctx.emit(Cmd::ClearParams); = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() > 1] / ctx.emit(Cmd::ClearParams); = PatcherInstances(state.index),
+        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() == 1] / ctx.emit(Cmd::ClearParams); = Menu(PATCHER_INSTANCES_INDEX),
 
-        PatcherParams(PatcherParams) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1] / ctx.emit(Cmd::RenderParamPage { instance: state.index, page: state.page + 1});
-            = PatcherParams(PatcherParams { index: state.index, page: state.page + 1, focused: state.focused }),
-        PatcherParams(PatcherParams) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderParamPage{ instance: state.index, page: state.page - 1});
-            = PatcherParams(PatcherParams { index: state.index, page: state.page - 1, focused: state.focused }),
-        PatcherParams(PatcherParams) + EncTouch(_) [*event < 8]
-            = PatcherParams(PatcherParams { index: state.index, page: state.page, focused: Some(*event) }),
-        PatcherParams(PatcherParams) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
-        PatcherParams(PatcherParams) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
+        PatcherParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1] / ctx.emit(Cmd::RenderParamPage { instance: state.index, page: state.page + 1});
+            = PatcherParams(ParamPage { index: state.index, page: state.page + 1, focused: state.focused }),
+        PatcherParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderParamPage{ instance: state.index, page: state.page - 1});
+            = PatcherParams(ParamPage { index: state.index, page: state.page - 1, focused: state.focused }),
+        PatcherParams(ParamPage) + EncTouch(_) [*event < 8] = PatcherParams(state.with_focus(*event)),
+        PatcherParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
+        PatcherParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
 
         PatcherInstances(usize) + SetCurrentChanged = Menu(PATCHER_INSTANCES_INDEX),
-        PatcherParams(PatcherParams) + SetCurrentChanged  / ctx.emit(Cmd::ClearParams); = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherParams(ParamPage) + SetCurrentChanged  / ctx.emit(Cmd::ClearParams); = Menu(PATCHER_INSTANCES_INDEX),
 
-        PatcherParams(PatcherParams) + ParamUpdate(_) [ param_visible(event, state) ] / ctx.emit(Cmd::RenderParam { instance: event.instance, param: event.index }); = PatcherParams(state.clone()),
+        PatcherParams(ParamPage) + ParamUpdate(_) [ param_visible(event, state) ] / ctx.emit(Cmd::RenderParam { instance: event.instance, param: event.index }); = PatcherParams(state.clone()),
 
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
         TempoEditor + EncRight(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(1)); = TempoEditor,
@@ -383,6 +405,8 @@ pub struct StateController {
     param_norm_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
 
     param_views: Vec<ParamView>,
+    param_view_names: Vec<String>,
+    param_view_params: Vec<Vec<usize>>,
 
     set_names: Vec<String>,
     set_preset_names: Vec<String>,
@@ -397,9 +421,9 @@ struct CommonContext {
 
     //sorted list of instances that have params, and the count of pages
     pub(crate) instance_param_pages: Vec<usize>,
-    pub(crate) view_param_pages: Vec<usize>,
+    pub(crate) param_view_pages: Vec<usize>,
 
-    pub(crate) view_current: Option<usize>,
+    pub(crate) param_view_current: Option<usize>,
 }
 
 impl Default for CommonContext {
@@ -411,8 +435,8 @@ impl Default for CommonContext {
 
             instance_param_pages: Vec::new(),
 
-            view_param_pages: Vec::new(),
-            view_current: None,
+            param_view_pages: Vec::new(),
+            param_view_current: None,
         }
     }
 }
@@ -423,7 +447,7 @@ pub struct Context {
     common: CommonContext,
 }
 
-fn param_visible(update: &ParamUpdate, state: &PatcherParams) -> bool {
+fn param_visible(update: &ParamUpdate, state: &ParamPage) -> bool {
     let offset = state.page * PARAM_PAGE_SIZE;
     let range = offset..(offset + PARAM_PAGE_SIZE);
     state.index == update.instance && range.contains(&update.index)
@@ -466,7 +490,11 @@ impl Context {
     }
 
     fn view_param_pages(&self, view: usize) -> usize {
-        *self.common.view_param_pages.get(view).unwrap_or(&0)
+        *self.common.param_view_pages.get(view).unwrap_or(&0)
+    }
+
+    fn param_view_count(&self) -> usize {
+        self.common.param_view_pages.len()
     }
 }
 
@@ -541,6 +569,8 @@ impl StateController {
             param_norm_lookup: HashMap::new(),
 
             param_views: Vec::new(),
+            param_view_names: Vec::new(),
+            param_view_params: Vec::new(),
 
             set_names: Vec::new(),
             set_preset_names: Vec::new(),
@@ -569,7 +599,7 @@ impl StateController {
         self.ws_tx = Some(ws);
     }
 
-    pub fn set_instances(&mut self, instances: HashMap<usize, PatcherInst>) {
+    pub async fn set_instances(&mut self, instances: HashMap<usize, PatcherInst>) {
         let mut indexes: Vec<usize> = instances.keys().map(|k| *k).collect();
         indexes.sort();
 
@@ -614,6 +644,7 @@ impl StateController {
         }
 
         common.instances_count = self.patcher_instance_names.len();
+        self.update_views(&mut common).await;
         self.update_common(common);
     }
 
@@ -651,9 +682,54 @@ impl StateController {
         self.handle_event(Events::SetPresetNamesChanged).await;
     }
 
-    pub async fn set_param_views(&mut self, views: Vec<ParamView>) {
+    async fn update_views(&mut self, common: &mut CommonContext) {
+        //if there are no views, add a default that has all the params in it
+        if self.param_views.len() == 0 && self.params.len() > 0 {
+            let params = self
+                .params
+                .iter()
+                .map(|p| (p.instance_index(), p.index()))
+                .collect();
+            self.param_views
+                .push(ParamView::new("Default".to_string(), 0, params, 0));
+        }
+
+        self.param_view_names.clear();
+        self.param_view_params.clear();
+
+        common.param_view_pages.clear();
+
+        for v in self.param_views.iter() {
+            //find the param indexes indicated by the sparse (instance, param) pair
+            let mut params = Vec::new();
+            for sparce in v.params().iter() {
+                if let Some((instance, param)) = self.instance_param_map.get(&sparce) {
+                    if let Some(instance) = self.instance_params.get(*instance) {
+                        if let Some(index) = instance.get(*param) {
+                            params.push(*index);
+                        }
+                    }
+                }
+            }
+            if params.len() > 0 {
+                self.param_view_names
+                    .push(format!("{}: {}", v.index(), v.name()));
+                common
+                    .param_view_pages
+                    .push(1 + params.len() / PARAM_PAGE_SIZE);
+                self.param_view_params.push(params);
+            }
+        }
+        //TODO check that current view is valid?
+    }
+
+    pub async fn set_param_views(&mut self, mut views: Vec<ParamView>) {
+        views.sort_by_key(|v| (v.sort_order(), v.index()));
         self.param_views = views;
-        //TODO
+        let mut common = self.sm.context().common();
+        self.update_views(&mut common).await;
+        self.update_common(common);
+        self.handle_event(Events::SetViewListChanged).await;
     }
 
     pub async fn handle_osc(&mut self, msg: &OscMessage) {
@@ -1027,32 +1103,7 @@ impl StateController {
                         display.clear(BinaryColor::Off).unwrap();
 
                         draw_title(&mut display, title.as_str());
-
-                        //draw pager
-                        if pages > 1 {
-                            let style = PrimitiveStyleBuilder::new()
-                                .stroke_color(BinaryColor::On)
-                                .stroke_width(1)
-                                .fill_color(BinaryColor::On)
-                                .build();
-
-                            let step = DISPLAY_WIDTH / pages as u32;
-                            let width = step - 4;
-
-                            let y = (DISPLAY_HEIGHT - 3) as i32;
-                            let mut x = (step / 2) as i32;
-
-                            //TODO assert that we can actually draw these
-
-                            for p in 0..pages {
-                                let height = if p == page { 3 } else { 1 };
-                                Rectangle::with_center(Point::new(x, y), Size::new(width, height))
-                                    .into_styled(style)
-                                    .draw(display.deref_mut())
-                                    .unwrap();
-                                x = x + (step as i32);
-                            }
-                        }
+                        draw_pager(&mut display, pages, page);
 
                         if let Some(focus) = &focus {
                             Text::with_alignment(
@@ -1116,6 +1167,86 @@ impl StateController {
                         draw_centered(&mut display, volume.as_str(), TITLE_TEXT_STYLE);
                     })
                     .await;
+                }
+                States::ParamViewMenu(selected) => {
+                    let selected: usize = *selected;
+                    self.with_display(|display| {
+                        draw_menu(
+                            display,
+                            &"Param Views",
+                            &self.param_view_names,
+                            selected,
+                            None,
+                        );
+                    })
+                    .await;
+                    self.light_button(BACK_MIDI, MoveColor::Black as _);
+                    self.light_button(MENU_MIDI, MoveColor::LightGray as _);
+                }
+                States::ViewParams(state) => {
+                    let index = state.index;
+                    let page = state.page;
+                    let focused = state.focused.clone();
+
+                    if let Some((name, params)) = self
+                        .param_view_names
+                        .iter()
+                        .zip(self.param_view_params.iter())
+                        .skip(index)
+                        .next()
+                    {
+                        let mut focus: Option<String> = None;
+                        if let Some(focused) = focused {
+                            let pindex = page * PARAM_PAGE_SIZE + focused;
+                            if let Some(pindex) = params.get(pindex) {
+                                if let Some(param) = self.params.get(*pindex) {
+                                    focus = Some(format!(
+                                        "{}: {}\n{}",
+                                        param.instance_index(),
+                                        param.name(),
+                                        param.render_value()
+                                    ))
+                                }
+                            }
+                        }
+
+                        let pages = self.context().view_param_pages(index);
+
+                        let mut title = format!("view: {}", name);
+                        if title.len() > 16 {
+                            title.truncate(14);
+                            title.push_str("..");
+                        }
+
+                        self.with_display(|mut display| {
+                            let text_style =
+                                MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+
+                            display.clear(BinaryColor::Off).unwrap();
+
+                            draw_title(&mut display, title.as_str());
+                            draw_pager(&mut display, pages, page);
+                            if let Some(focus) = &focus {
+                                Text::with_alignment(
+                                    focus.as_str(),
+                                    Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
+                                    text_style,
+                                    Alignment::Center,
+                                )
+                                .draw(display.deref_mut())
+                                .unwrap();
+                            }
+                        })
+                        .await;
+                    } else {
+                        self.with_display(|mut display| {
+                            display.clear(BinaryColor::Off).unwrap();
+                            draw_title(&mut display, "empty view");
+                        })
+                        .await;
+                    }
+                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                    self.light_button(MENU_MIDI, MoveColor::LightGray as _);
                 }
                 _ => (),
             }
@@ -1344,6 +1475,33 @@ fn draw_title(display: &mut MoveDisplay, title: &str) {
     )
     .draw(display)
     .unwrap();
+}
+
+fn draw_pager(display: &mut MoveDisplay, pages: usize, page: usize) {
+    if pages > 1 {
+        let style = PrimitiveStyleBuilder::new()
+            .stroke_color(BinaryColor::On)
+            .stroke_width(1)
+            .fill_color(BinaryColor::On)
+            .build();
+
+        let step = DISPLAY_WIDTH / pages as u32;
+        let width = step - 4;
+
+        let y = (DISPLAY_HEIGHT - 3) as i32;
+        let mut x = (step / 2) as i32;
+
+        //TODO assert that we can actually draw these
+
+        for p in 0..pages {
+            let height = if p == page { 3 } else { 1 };
+            Rectangle::with_center(Point::new(x, y), Size::new(width, height))
+                .into_styled(style)
+                .draw(display)
+                .unwrap();
+            x = x + (step as i32);
+        }
+    }
 }
 
 fn draw_centered(display: &mut MoveDisplay, text: &str, style: MonoTextStyle<BinaryColor>) {

@@ -63,6 +63,7 @@ mod patcher;
 mod view;
 
 const HTTP_QUERY_DELAY: Duration = Duration::from_millis(200);
+const HTTP_INITIAL_QUERY_DELAY: Duration = Duration::from_millis(500);
 
 struct Driver {
     display: Port<MidiOut>,
@@ -621,7 +622,7 @@ async fn with_client(
                         if let Ok(inst) = get_instances().await {
                             *g = None;
                             let mut g = state.lock().await;
-                            g.set_instances(inst);
+                            g.set_instances(inst).await;
                         }
                     }
                 }
@@ -686,27 +687,29 @@ async fn with_client(
                             g.set_ws(tx).await;
                         }
 
+                        let timeout = Instant::now() + HTTP_INITIAL_QUERY_DELAY;
+
                         //do inst query
                         {
                             let mut g = inst_query.lock().await;
-                            *g = Some(Instant::now() + HTTP_QUERY_DELAY);
+                            *g = Some(timeout);
                         }
 
                         //do sets query
                         {
                             let mut g = sets_query.lock().await;
-                            *g = Some(Instant::now() + HTTP_QUERY_DELAY);
+                            *g = Some(timeout);
                         }
 
                         {
                             let mut g = views_query.lock().await;
-                            *g = Some(Instant::now() + HTTP_QUERY_DELAY);
+                            *g = Some(timeout);
                         }
 
                         //do set current query
                         {
                             let mut g = set_current_query.lock().await;
-                            *g = Some(Instant::now() + HTTP_QUERY_DELAY);
+                            *g = Some(timeout);
                         }
 
                         while let Ok(message) = rx.try_next().await {
@@ -767,7 +770,7 @@ async fn with_client(
                                                     "PATH_ADDED" | "PATH_REMOVED" => data.as_str(),
                                                     _ => None,
                                                 } {
-                                                    println!("path {:?}", path);
+                                                    //println!("path {:?}", path);
                                                     //added or removed
                                                     if inst_path_regex.is_match(path) {
                                                         let mut g = inst_query.lock().await;

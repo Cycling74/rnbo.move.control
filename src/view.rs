@@ -29,6 +29,42 @@ struct ParamViewListItem {
 }
 
 impl ParamView {
+    pub fn new(name: String, sort_order: isize, params: Vec<(usize, usize)>, index: usize) -> Self {
+        Self {
+            name,
+            sort_order,
+            params,
+            index,
+        }
+    }
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+
+    pub fn sort_order(&self) -> isize {
+        self.sort_order
+    }
+
+    pub fn set_sort_order(&mut self, sort_order: isize) {
+        self.sort_order = sort_order;
+    }
+
+    pub fn params(&self) -> &Vec<(usize, usize)> {
+        &self.params
+    }
+
+    pub fn set_params(&mut self, params: Vec<(usize, usize)>) {
+        self.params = params;
+    }
+
     pub fn parse_all(json: &serde_json::Value) -> Vec<Self> {
         let mut views = Vec::new();
         let parsed: Result<
