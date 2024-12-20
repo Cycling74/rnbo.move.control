@@ -241,12 +241,18 @@ enum Cmd {
 
 mod top {
     use super::{
-        Button, Cmd, Context, Events, ParamPage, PowerCommand, EXIT_MENU, JOG_WHEEL_ENCODER,
-        PARAM_PAGE_SIZE, VOLUME_WHEEL_BUTTON, VOLUME_WHEEL_ENCODER,
+        Button, Cmd, Context, Events, PowerCommand, EXIT_MENU, JOG_WHEEL_ENCODER,
+        VOLUME_WHEEL_BUTTON, VOLUME_WHEEL_ENCODER,
     };
 
     const POWER_DOWN_INDEX: usize = 0;
     const LAUNCH_MOVE_INDEX: usize = 1;
+
+    #[derive(PartialEq, Eq, Clone, Copy, Debug)]
+    pub(crate) enum LastView {
+        Main,
+        ParamViews,
+    }
 
     smlang::statemachine! {
         states_attr: #[derive(Clone, Debug)],
@@ -255,12 +261,21 @@ mod top {
             Init + BtnDown(Button::JogWheel) = Main,
             Init + BtnDown(Button::Back) = Main,
 
-            VolumeEditor + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
+            VolumeEditor(LastView) + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
 
-            Main + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor,
-            Main + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor,
-            Main + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor,
+            Main + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor(LastView::Main),
+            Main + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::Main),
+            Main + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::Main),
 
+            //toggle
+            Main + BtnDown(Button::Menu) = ParamViews,
+            ParamViews + BtnDown(Button::Menu) = Main,
+
+            ParamViews + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor(LastView::ParamViews),
+            ParamViews + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::ParamViews),
+            ParamViews + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::ParamViews),
+
+            /*
             Main + BtnDown(Button::Menu) = ParamViewMenu(0),
             ParamViewMenu(usize) + BtnDown(Button::Menu) = Main, //draw main params
             ParamViewMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < ctx.param_view_count()] = ParamViewMenu(*state + 1),
@@ -274,12 +289,16 @@ mod top {
             ViewParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
             ViewParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
             ViewParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = ViewParams(state.clone()), //redraw
+            */
 
-            VolumeEditor + BtnDown(Button::Back) = Main,
-            VolumeEditor + BtnDown(Button::Menu) = Main,
-            VolumeEditor + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor,
-            VolumeEditor + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor,
-            VolumeEditor + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON] = Main,
+            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::Main] = Main,
+            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::ParamViews] = Main,
+            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::ParamViews] = ParamViews,
+            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::Main] = ParamViews,
+            VolumeEditor(LastView) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(*state),
+            VolumeEditor(LastView) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(*state),
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON && *state == LastView::Main] = Main,
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON && *state == LastView::ParamViews] = ParamViews,
 
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == POWER_DOWN_INDEX] = PowerOff,
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == LAUNCH_MOVE_INDEX] = LaunchMove,
@@ -296,6 +315,26 @@ mod top {
 
             _ + BtnDown(Button::Play) / ctx.emit(Cmd::ToggleTransport);,
 
+        }
+    }
+}
+
+mod view {
+    use super::{Button, Cmd, Context, Events, ParamPage, JOG_WHEEL_ENCODER, PARAM_PAGE_SIZE};
+    smlang::statemachine! {
+        states_attr: #[derive(Clone, Debug)],
+        transitions: {
+            *ParamViewMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < ctx.param_view_count()] = ParamViewMenu(*state + 1),
+            ParamViewMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = ParamViewMenu(*state - 1),
+            ParamViewMenu(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: *state, page: 0, focused: None }),
+
+            ViewParams(ParamPage) + BtnDown(Button::Back) / ctx.emit(Cmd::ClearVisibleParams); = ParamViewMenu(state.index),
+            ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(1)),
+            ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(-1)),
+            ViewParams(ParamPage) + EncTouch(_) [*event < 8] = ViewParams(state.with_focus(*event)),
+            ViewParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
+            ViewParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
+            ViewParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = ViewParams(state.clone()), //redraw
         }
     }
 }
@@ -377,8 +416,9 @@ pub struct StateController {
 
     exit_cmd: Option<ExitCmd>,
 
-    topsm: top::StateMachine,
     sm: StateMachine,
+    viewsm: view::StateMachine,
+    topsm: top::StateMachine,
 
     cmd_queue: sync_mpsc::Receiver<Cmd>,
 
@@ -424,7 +464,6 @@ struct CommonContext {
     //sorted list of instances that have params, and the count of pages
     pub(crate) instance_param_pages: Vec<usize>,
     pub(crate) param_view_pages: Vec<usize>,
-
     pub(crate) param_view_current: Option<usize>,
 }
 
@@ -504,9 +543,10 @@ impl StateController {
         let (tx, rx) = sync_mpsc::channel();
 
         let context = Context::new(tx.clone());
-        let sm = StateMachine::new_with_state(context, States::Menu(0));
 
-        let context = Context::new(tx.clone());
+        let sm = StateMachine::new_with_state(context.clone(), States::Menu(0));
+        let viewsm =
+            view::StateMachine::new_with_state(context.clone(), view::States::ParamViewMenu(0));
         let topsm = top::StateMachine::new(context);
 
         //do config
@@ -531,6 +571,7 @@ impl StateController {
             sysex: Vec::new(),
 
             sm,
+            viewsm,
             topsm,
 
             midi_out_queue,
@@ -1004,6 +1045,7 @@ impl StateController {
 
     fn update_common(&mut self, common: CommonContext) {
         self.sm.context_mut().update_common(common.clone());
+        self.viewsm.context_mut().update_common(common.clone());
         self.topsm.context_mut().update_common(common);
     }
 
@@ -1023,7 +1065,102 @@ impl StateController {
         self.config.volume as f32 / 255.0
     }
 
-    async fn render_state(&mut self, s: &States) {
+    async fn render_set_views(&mut self, s: &view::States) {
+        use view::States;
+        match s {
+            States::ParamViewMenu(selected) => {
+                let selected: usize = *selected;
+                self.with_display(|display| {
+                    draw_menu(
+                        display,
+                        &"Param Views",
+                        &self.param_view_names,
+                        selected,
+                        None,
+                    );
+                })
+                .await;
+                self.light_button(BACK_MIDI, MoveColor::Black as _);
+                self.light_button(MENU_MIDI, MoveColor::LightGray as _);
+            }
+            States::ViewParams(state) => {
+                let index = state.index;
+                let page = state.page;
+                let focused = state.focused.clone();
+
+                if let Some((name, params)) = self
+                    .param_view_names
+                    .iter()
+                    .zip(self.param_view_params.iter())
+                    .skip(index)
+                    .next()
+                {
+                    let mut focus: Option<String> = None;
+                    let offset = page * PARAM_PAGE_SIZE;
+                    if let Some(focused) = focused {
+                        let pindex = offset + focused;
+                        if let Some(pindex) = params.get(pindex) {
+                            if let Some(param) = self.params.get(*pindex) {
+                                focus = Some(format!(
+                                    "{}: {}\n{}",
+                                    param.instance_index(),
+                                    param.name(),
+                                    param.render_value()
+                                ))
+                            }
+                        }
+                    }
+
+                    self.visible_params = params
+                        .iter()
+                        .skip(offset)
+                        .take(PARAM_PAGE_SIZE)
+                        .map(|i| *i)
+                        .collect();
+
+                    let pages = self.context().view_param_pages(index);
+
+                    let mut title = format!("view: {}", name);
+                    if title.len() > 16 {
+                        title.truncate(14);
+                        title.push_str("..");
+                    }
+
+                    self.with_display(|mut display| {
+                        let text_style =
+                            MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+
+                        display.clear(BinaryColor::Off).unwrap();
+
+                        draw_title(&mut display, title.as_str());
+                        draw_pager(&mut display, pages, page);
+                        if let Some(focus) = &focus {
+                            Text::with_alignment(
+                                focus.as_str(),
+                                Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
+                                text_style,
+                                Alignment::Center,
+                            )
+                            .draw(display.deref_mut())
+                            .unwrap();
+                        }
+                    })
+                    .await;
+                } else {
+                    self.visible_params.clear();
+                    self.with_display(|mut display| {
+                        display.clear(BinaryColor::Off).unwrap();
+                        draw_title(&mut display, "empty view");
+                    })
+                    .await;
+                }
+                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                self.light_button(MENU_MIDI, MoveColor::LightGray as _);
+            }
+        }
+    }
+
+    async fn render_main(&mut self, s: &States) {
         match s {
             States::Menu(selected) => {
                 let selected: usize = *selected;
@@ -1155,10 +1292,7 @@ impl StateController {
     }
 
     async fn handle_event(&mut self, e: Events) {
-        let was_main = match self.topsm.state() {
-            top::States::Main => true,
-            _ => false,
-        };
+        let top_last = self.topsm.state().clone();
 
         if let Some(ns) = self.topsm.process_event(e) {
             use top::States;
@@ -1186,7 +1320,7 @@ impl StateController {
                     .await;
                     self.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
-                States::VolumeEditor => {
+                States::VolumeEditor(_) => {
                     let volume = self.volume();
                     self.light_button(BACK_MIDI, MoveColor::LightGray as _);
                     self.display_centered("Volume").await;
@@ -1198,110 +1332,22 @@ impl StateController {
                     })
                     .await;
                 }
-                States::ParamViewMenu(selected) => {
-                    let selected: usize = *selected;
-                    self.with_display(|display| {
-                        draw_menu(
-                            display,
-                            &"Param Views",
-                            &self.param_view_names,
-                            selected,
-                            None,
-                        );
-                    })
-                    .await;
-                    self.light_button(BACK_MIDI, MoveColor::Black as _);
-                    self.light_button(MENU_MIDI, MoveColor::LightGray as _);
-                }
-                States::ViewParams(state) => {
-                    let index = state.index;
-                    let page = state.page;
-                    let focused = state.focused.clone();
-
-                    if let Some((name, params)) = self
-                        .param_view_names
-                        .iter()
-                        .zip(self.param_view_params.iter())
-                        .skip(index)
-                        .next()
-                    {
-                        let mut focus: Option<String> = None;
-                        let offset = page * PARAM_PAGE_SIZE;
-                        if let Some(focused) = focused {
-                            let pindex = offset + focused;
-                            if let Some(pindex) = params.get(pindex) {
-                                if let Some(param) = self.params.get(*pindex) {
-                                    focus = Some(format!(
-                                        "{}: {}\n{}",
-                                        param.instance_index(),
-                                        param.name(),
-                                        param.render_value()
-                                    ))
-                                }
-                            }
-                        }
-
-                        self.visible_params = params
-                            .iter()
-                            .skip(offset)
-                            .take(PARAM_PAGE_SIZE)
-                            .map(|i| *i)
-                            .collect();
-
-                        let pages = self.context().view_param_pages(index);
-
-                        let mut title = format!("view: {}", name);
-                        if title.len() > 16 {
-                            title.truncate(14);
-                            title.push_str("..");
-                        }
-
-                        self.with_display(|mut display| {
-                            let text_style =
-                                MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-
-                            display.clear(BinaryColor::Off).unwrap();
-
-                            draw_title(&mut display, title.as_str());
-                            draw_pager(&mut display, pages, page);
-                            if let Some(focus) = &focus {
-                                Text::with_alignment(
-                                    focus.as_str(),
-                                    Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
-                                    text_style,
-                                    Alignment::Center,
-                                )
-                                .draw(display.deref_mut())
-                                .unwrap();
-                            }
-                        })
-                        .await;
-                    } else {
-                        self.visible_params.clear();
-                        self.with_display(|mut display| {
-                            display.clear(BinaryColor::Off).unwrap();
-                            draw_title(&mut display, "empty view");
-                        })
-                        .await;
-                    }
-                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                    self.light_button(MENU_MIDI, MoveColor::LightGray as _);
-                }
                 _ => (),
             }
         }
+
+        //if we're coming out of volume into a parameter editor for instance, we want to
+        //know what we've touched
+        let touch = match e {
+            Events::EncTouch(e) => e < 8,
+            _ => false,
+        };
 
         //println!("top state {:?}", self.topsm.state());
 
         match self.topsm.state() {
             top::States::Main => {
-                //if we're coming out of volume into a parameter editor for instance, we want to
-                //know what we've touched
-                let touch = match e {
-                    Events::EncTouch(e) => e < 8,
-                    _ => false,
-                };
-                let render = if was_main || touch {
+                let render = if top_last == top::States::Main || touch {
                     let ns = self.sm.process_event(e);
                     ns.is_some()
                 } else {
@@ -1310,19 +1356,37 @@ impl StateController {
                 };
                 if render {
                     let s = self.sm.state().clone();
-                    self.render_state(&s).await;
+                    self.render_main(&s).await;
+                }
+            }
+            top::States::ParamViews => {
+                let render = if top_last == top::States::ParamViews || touch {
+                    let ns = self.viewsm.process_event(e);
+                    ns.is_some()
+                } else {
+                    //if top transitioned, we don't process an event but we do render
+                    true
+                };
+                if render {
+                    let s = self.viewsm.state().clone();
+                    self.render_set_views(&s).await;
                 }
             }
             _ => {
                 //pass thru  pending changes like sets names changed etc even if
-                let _ = match e {
+                match e {
                     Events::Transport(_)
                     | Events::Tempo(_)
                     | Events::SetNamesChanged
                     | Events::SetPresetNamesChanged
                     | Events::SetCurrentChanged
-                    | Events::SetPresetLoadedChanged => self.sm.process_event(e),
-                    _ => None,
+                    | Events::SetPresetLoadedChanged => {
+                        let _ = self.sm.process_event(e);
+                    }
+                    Events::SetViewListChanged => {
+                        let _ = self.topsm.process_event(e);
+                    }
+                    _ => (),
                 };
             }
         }
