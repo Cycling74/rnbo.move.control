@@ -165,9 +165,10 @@ enum Events {
     EncRight(usize),
     EncTouch(usize),
 
-    ParamUpdate(ParamUpdate),
     Transport(bool),
     Tempo(f32),
+
+    VisibleParamUpdated(usize),
 
     SetNamesChanged,
     SetPresetNamesChanged,
@@ -231,20 +232,11 @@ enum Cmd {
         val: u8,
     },
 
-    RenderParamPage {
-        instance: usize,
-        page: usize,
-    },
-
-    RenderParam {
-        instance: usize,
-        param: usize,
-    },
+    RenderVisibleParams,
+    ClearVisibleParams,
 
     LoadSet(usize),
     LoadSetPreset(usize),
-
-    ClearParams,
 }
 
 mod top {
@@ -273,14 +265,15 @@ mod top {
             ParamViewMenu(usize) + BtnDown(Button::Menu) = Main, //draw main params
             ParamViewMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < ctx.param_view_count()] = ParamViewMenu(*state + 1),
             ParamViewMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = ParamViewMenu(*state - 1),
-            ParamViewMenu(usize) + BtnDown(Button::JogWheel) = ViewParams(ParamPage { index: *state, page: 0, focused: None }),
+            ParamViewMenu(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: *state, page: 0, focused: None }),
 
-            ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] = ViewParams(state.offset_page(1)),
-            ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] = ViewParams(state.offset_page(-1)),
-            ViewParams(ParamPage) + BtnDown(Button::Back) = ParamViewMenu(state.index),
+            ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(1)),
+            ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(-1)),
+            ViewParams(ParamPage) + BtnDown(Button::Back) / ctx.emit(Cmd::ClearVisibleParams); = ParamViewMenu(state.index),
             ViewParams(ParamPage) + EncTouch(_) [*event < 8] = ViewParams(state.with_focus(*event)),
             ViewParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
             ViewParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
+            ViewParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = ViewParams(state.clone()), //redraw
 
             VolumeEditor + BtnDown(Button::Back) = Main,
             VolumeEditor + BtnDown(Button::Menu) = Main,
@@ -321,7 +314,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == SET_PRESETS_INDEX && ctx.set_presets_count() > 0] = SetPresetsList(0),
         //skip patcher instances menu if there is only 1 instance
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.instances_count() > 1] = PatcherInstances(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.instances_count() == 1] / ctx.emit(Cmd::RenderParamPage{instance: 0, page: 0});
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.instances_count() == 1] / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
@@ -343,25 +336,24 @@ smlang::statemachine! {
         PatcherInstances(usize) + BtnDown(Button::Back) = Menu(PATCHER_INSTANCES_INDEX),
         PatcherInstances(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.instances_count() > *state + 1] = PatcherInstances(*state + 1),
         PatcherInstances(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PatcherInstances(*state - 1),
-        PatcherInstances(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderParamPage{ instance: *state, page: 0});
+        PatcherInstances(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: *state, page: 0, focused: None }),
 
         //skip patcher instances menu if there is only 1 instance
-        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() > 1] / ctx.emit(Cmd::ClearParams); = PatcherInstances(state.index),
-        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() == 1] / ctx.emit(Cmd::ClearParams); = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() > 1] / ctx.emit(Cmd::ClearVisibleParams); = PatcherInstances(state.index),
+        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() == 1] / ctx.emit(Cmd::ClearVisibleParams); = Menu(PATCHER_INSTANCES_INDEX),
 
-        PatcherParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1] / ctx.emit(Cmd::RenderParamPage { instance: state.index, page: state.page + 1});
+        PatcherParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1] / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: state.index, page: state.page + 1, focused: state.focused }),
-        PatcherParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderParamPage{ instance: state.index, page: state.page - 1});
+        PatcherParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: state.index, page: state.page - 1, focused: state.focused }),
         PatcherParams(ParamPage) + EncTouch(_) [*event < 8] = PatcherParams(state.with_focus(*event)),
         PatcherParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
         PatcherParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
 
         PatcherInstances(usize) + SetCurrentChanged = Menu(PATCHER_INSTANCES_INDEX),
-        PatcherParams(ParamPage) + SetCurrentChanged  / ctx.emit(Cmd::ClearParams); = Menu(PATCHER_INSTANCES_INDEX),
-
-        PatcherParams(ParamPage) + ParamUpdate(_) [ param_visible(event, state) ] / ctx.emit(Cmd::RenderParam { instance: event.instance, param: event.index }); = PatcherParams(state.clone()),
+        PatcherParams(ParamPage) + SetCurrentChanged  / ctx.emit(Cmd::ClearVisibleParams); = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = PatcherParams(state.clone()), //redraw
 
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
         TempoEditor + EncRight(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(1)); = TempoEditor,
@@ -370,7 +362,7 @@ smlang::statemachine! {
         TempoEditor + BtnUp(Button::JogWheel) / ctx.emit(Cmd::MulTempoOffset(false));  = TempoEditor,
         TempoEditor + Tempo(_) = TempoEditor,
 
-        _ + BtnDown(Button::Menu) / ctx.emit(Cmd::ClearParams); = Menu(0),
+        _ + BtnDown(Button::Menu) / ctx.emit(Cmd::ClearVisibleParams); = Menu(0),
     }
 }
 
@@ -405,6 +397,8 @@ pub struct StateController {
     params: Vec<Param>,
 
     instance_params: Vec<Vec<usize>>,
+
+    visible_params: Vec<usize>,
 
     //(sparce instance index, param_index) -> (local instance_index, param index)
     instance_param_map: HashMap<(usize, usize), (usize, usize)>,
@@ -453,12 +447,6 @@ impl Default for CommonContext {
 pub struct Context {
     cmd_queue: sync_mpsc::Sender<Cmd>,
     common: CommonContext,
-}
-
-fn param_visible(update: &ParamUpdate, state: &ParamPage) -> bool {
-    let offset = state.page * PARAM_PAGE_SIZE;
-    let range = offset..(offset + PARAM_PAGE_SIZE);
-    state.index == update.instance && range.contains(&update.index)
 }
 
 impl Context {
@@ -571,6 +559,8 @@ impl StateController {
             params: Vec::new(),
 
             instance_params: Vec::new(),
+            visible_params: Vec::new(),
+
             instance_param_map: HashMap::new(),
 
             param_lookup: HashMap::new(),
@@ -610,6 +600,8 @@ impl StateController {
     pub async fn set_instances(&mut self, instances: HashMap<usize, PatcherInst>) {
         let mut indexes: Vec<usize> = instances.keys().map(|k| *k).collect();
         indexes.sort();
+
+        //XXX what about visible params?
 
         self.patcher_instance_names.clear();
         self.params.clear();
@@ -819,13 +811,23 @@ impl StateController {
                                 _ => None,
                             };
                             if let Some(sparce) = v {
-                                //convert to local indexes
-                                if let Some(local) = self.instance_param_map.get(&sparce) {
-                                    self.handle_event(Events::ParamUpdate(ParamUpdate {
-                                        instance: local.0,
-                                        index: local.1,
-                                    }))
-                                    .await;
+                                //TODO throttle?
+
+                                let mut updates = Vec::new();
+                                //see if this param is visible, render it if so
+                                for (location, index) in self.visible_params.iter().enumerate() {
+                                    if let Some(param) = self.params.get(*index) {
+                                        if sparce.0 == param.instance_index()
+                                            && sparce.1 == param.index()
+                                        {
+                                            self.render_param(&param, location);
+                                            updates.push(location);
+                                        }
+                                    }
+                                }
+                                for location in updates {
+                                    self.handle_event(Events::VisibleParamUpdated(location))
+                                        .await;
                                 }
                             }
                         }
@@ -1096,9 +1098,16 @@ impl StateController {
                     let pages = self.context().instance_param_pages(index);
 
                     let mut focus: Option<String> = None;
-                    if let Some(focused) = focused {
-                        if let Some(instance) = self.instance_params.get(index) {
-                            let pindex = page * PARAM_PAGE_SIZE + focused;
+                    if let Some(instance) = self.instance_params.get(index) {
+                        let offset = page * PARAM_PAGE_SIZE;
+                        self.visible_params = instance
+                            .iter()
+                            .skip(offset)
+                            .take(PARAM_PAGE_SIZE)
+                            .map(|i| *i)
+                            .collect();
+                        if let Some(focused) = focused {
+                            let pindex = offset + focused;
                             if let Some(pindex) = instance.get(pindex) {
                                 if let Some(param) = self.params.get(*pindex) {
                                     focus =
@@ -1106,6 +1115,8 @@ impl StateController {
                                 }
                             }
                         }
+                    } else {
+                        self.visible_params.clear();
                     }
 
                     let text_style =
@@ -1215,8 +1226,9 @@ impl StateController {
                         .next()
                     {
                         let mut focus: Option<String> = None;
+                        let offset = page * PARAM_PAGE_SIZE;
                         if let Some(focused) = focused {
-                            let pindex = page * PARAM_PAGE_SIZE + focused;
+                            let pindex = offset + focused;
                             if let Some(pindex) = params.get(pindex) {
                                 if let Some(param) = self.params.get(*pindex) {
                                     focus = Some(format!(
@@ -1228,6 +1240,13 @@ impl StateController {
                                 }
                             }
                         }
+
+                        self.visible_params = params
+                            .iter()
+                            .skip(offset)
+                            .take(PARAM_PAGE_SIZE)
+                            .map(|i| *i)
+                            .collect();
 
                         let pages = self.context().view_param_pages(index);
 
@@ -1258,6 +1277,7 @@ impl StateController {
                         })
                         .await;
                     } else {
+                        self.visible_params.clear();
                         self.with_display(|mut display| {
                             display.clear(BinaryColor::Off).unwrap();
                             draw_title(&mut display, "empty view");
@@ -1296,8 +1316,7 @@ impl StateController {
             _ => {
                 //pass thru  pending changes like sets names changed etc even if
                 let _ = match e {
-                    Events::ParamUpdate(_)
-                    | Events::Transport(_)
+                    Events::Transport(_)
                     | Events::Tempo(_)
                     | Events::SetNamesChanged
                     | Events::SetPresetNamesChanged
@@ -1311,7 +1330,19 @@ impl StateController {
         self.process_cmds().await;
     }
 
-    fn render_param(&mut self, index: usize, location: usize) {
+    fn render_param(&self, param: &Param, location: usize) {
+        let cap = 0.96;
+        let v = param.norm_prefer_pending();
+
+        //TODO get from metdata?
+        let color = Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap).into_format();
+
+        for m in led_color(location as _, &color) {
+            let _ = self.midi_out_queue.send(m);
+        }
+    }
+
+    fn render_param_at(&self, index: usize, location: usize) {
         let color = if let Some(param) = self.params.get(index) {
             let cap = 0.96;
             let v = param.norm_prefer_pending();
@@ -1419,34 +1450,15 @@ impl StateController {
 
                 Cmd::LightButton { btn, val } => self.light_button(btn, val),
 
-                Cmd::RenderParamPage { instance, page } => {
-                    let mut indexes = Vec::new();
-                    if let Some(paramindexes) = self.instance_params.get(instance) {
-                        let offset = page * PARAM_PAGE_SIZE;
-                        indexes = paramindexes
-                            .iter()
-                            .skip(offset)
-                            .take(PARAM_PAGE_SIZE)
-                            .map(|i| *i)
-                            .collect();
-                    }
+                Cmd::RenderVisibleParams => {
                     for i in 0..PARAM_PAGE_SIZE {
-                        if let Some(index) = indexes.get(i) {
-                            self.render_param(*index, i);
+                        if let Some(index) = self.visible_params.get(i) {
+                            self.render_param_at(*index, i);
                         } else {
                             self.clear_param(i);
                         }
                     }
                 }
-                Cmd::RenderParam { instance, param } => {
-                    //XXX do we need some sort of throttle?
-                    if let Some(paramindexes) = self.instance_params.get(instance) {
-                        if let Some(index) = paramindexes.get(param) {
-                            self.render_param(*index, param % PARAM_PAGE_SIZE);
-                        }
-                    }
-                }
-
                 Cmd::LoadSet(index) => {
                     if index == 0 {
                         let msg = OscMessage {
@@ -1475,7 +1487,10 @@ impl StateController {
                     }
                 }
 
-                Cmd::ClearParams => self.clear_params(),
+                Cmd::ClearVisibleParams => {
+                    self.visible_params.clear();
+                    self.clear_params();
+                }
             }
         }
     }
