@@ -293,9 +293,6 @@ mod top {
             _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
             _ + BtnDown(Button::PowerLong) / ctx.emit(Cmd::Power(PowerCommand::ClearLongPress)); = PowerOff,
 
-            //_ + Tempo(_),
-            //_ + Transport(_),
-
             _ + BtnDown(Button::Play) / ctx.emit(Cmd::ToggleTransport);,
 
         }
@@ -318,6 +315,8 @@ mod view {
             ViewParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
             ViewParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
             ViewParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = ViewParams(state.clone()), //redraw
+
+            _ + SetViewListChanged = ParamViewMenu(0),
         }
     }
 }
@@ -1333,9 +1332,23 @@ impl StateController {
 
         //if we're coming out of volume into a parameter editor for instance, we want to
         //know what we've touched
-        let touch = match e {
-            Events::EncTouch(e) => e < 8,
-            _ => false,
+        let mut touch = false;
+
+        //pass thru some events that always need to get thru
+        match e {
+            Events::EncTouch(e) if e < 8 => touch = true,
+            Events::SetNamesChanged
+            | Events::SetPresetNamesChanged
+            | Events::SetCurrentChanged
+            | Events::SetPresetLoadedChanged
+                if top_cur != top::States::Main =>
+            {
+                let _ = self.sm.process_event(e);
+            }
+            Events::SetViewListChanged if top_cur != top::States::ParamViews => {
+                let _ = self.viewsm.process_event(e);
+            }
+            _ => (),
         };
 
         //println!("top state {:?}", self.topsm.state());
@@ -1367,24 +1380,8 @@ impl StateController {
                     self.render_set_views(&s).await;
                 }
             }
-            _ => {
-                //pass thru  pending changes like sets names changed etc even if
-                match e {
-                    Events::Transport(_)
-                    | Events::Tempo(_)
-                    | Events::SetNamesChanged
-                    | Events::SetPresetNamesChanged
-                    | Events::SetCurrentChanged
-                    | Events::SetPresetLoadedChanged => {
-                        let _ = self.sm.process_event(e);
-                    }
-                    Events::SetViewListChanged => {
-                        let _ = self.topsm.process_event(e);
-                    }
-                    _ => (),
-                };
-            }
-        }
+            _ => (),
+        };
 
         self.process_cmds().await;
     }
