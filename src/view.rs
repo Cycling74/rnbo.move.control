@@ -65,6 +65,16 @@ impl ParamView {
         self.params = params;
     }
 
+    pub fn parse_param_s(v: &str) -> Result<(usize, usize), ()> {
+        let mut split = v.split(":");
+        if let Some(Ok(instance)) = split.next().map(|p| p.parse::<usize>()) {
+            if let Some(Ok(param)) = split.next().map(|p| p.parse::<usize>()) {
+                return Ok((instance, param));
+            }
+        }
+        Err(())
+    }
+
     pub fn parse_all(json: &serde_json::Value) -> Vec<Self> {
         let mut views = Vec::new();
         let parsed: Result<
@@ -80,18 +90,7 @@ impl ParamView {
                             .params
                             .value
                             .iter()
-                            .map(|s| {
-                                let mut split = s.split(":");
-                                if let Some(Ok(instance)) = split.next().map(|p| p.parse::<usize>())
-                                {
-                                    if let Some(Ok(param)) =
-                                        split.next().map(|p| p.parse::<usize>())
-                                    {
-                                        return Ok((instance, param));
-                                    }
-                                }
-                                Err(())
-                            })
+                            .map(|s| Self::parse_param_s(s))
                             .collect();
                         if let Ok(params) = params {
                             views.push(ParamView {
