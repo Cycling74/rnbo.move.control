@@ -429,6 +429,7 @@ pub struct StateController {
     param_views: Vec<ParamView>,
     param_view_names: Vec<String>,
     param_view_params: Vec<Vec<usize>>,
+    param_view_param_lookup: HashMap<String, usize>, //OSC addr -> index into self.param_views
 
     set_names: Vec<String>,
     set_preset_names: Vec<String>,
@@ -444,7 +445,6 @@ struct CommonContext {
     //sorted list of instances that have params, and the count of pages
     pub(crate) instance_param_pages: Vec<usize>,
     pub(crate) param_view_pages: Vec<usize>,
-    pub(crate) param_view_current: Option<usize>,
 }
 
 impl Default for CommonContext {
@@ -457,7 +457,6 @@ impl Default for CommonContext {
             instance_param_pages: Vec::new(),
 
             param_view_pages: Vec::new(),
-            param_view_current: None,
         }
     }
 }
@@ -590,6 +589,7 @@ impl StateController {
             param_views: Vec::new(),
             param_view_names: Vec::new(),
             param_view_params: Vec::new(),
+            param_view_param_lookup: HashMap::new(),
 
             set_names: Vec::new(),
             set_preset_names: Vec::new(),
@@ -704,6 +704,8 @@ impl StateController {
     }
 
     async fn update_views(&mut self, common: &mut CommonContext) {
+        //TODO look for changes and only add/remove update those instead of clearing everything
+
         //if there are no views, add a default that has all the params in it
         if self.param_views.len() == 0 && self.params.len() > 0 {
             let params = self
@@ -747,6 +749,14 @@ impl StateController {
     pub async fn set_param_views(&mut self, mut views: Vec<ParamView>) {
         views.sort_by_key(|v| (v.sort_order(), v.index()));
         self.param_views = views;
+
+        //compute lookup
+        self.param_view_param_lookup.clear();
+        for (index, view) in self.param_views.iter().enumerate() {
+            let addr = format!("{}/{}/params", SET_VIEWS_LIST_ADDR, view.index());
+            self.param_view_param_lookup.insert(addr, index);
+        }
+
         let mut common = self.sm.context().common();
         self.update_views(&mut common).await;
         self.update_common(common);
@@ -754,7 +764,37 @@ impl StateController {
     }
 
     pub async fn handle_osc(&mut self, msg: &OscMessage) {
-        if msg.args.len() == 1 {
+        //update param view
+        if let Some(index) = self.param_view_param_lookup.get(&msg.addr) {
+            let updated = if let Some(view) = self.param_views.get_mut(*index) {
+                let params: Result<Vec<(usize, usize)>, ()> = msg
+                    .args
+                    .iter()
+                    .map(|a| {
+                        if let OscType::String(v) = a {
+                            ParamView::parse_param_s(v)
+                        } else {
+                            Err(())
+                        }
+                    })
+                    .collect();
+                if let Ok(params) = params {
+                    view.set_params(params);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if updated {
+                let mut common = self.sm.context().common();
+                self.update_views(&mut common).await;
+                self.update_common(common);
+                //TODO transmit more fine tuned changes
+                self.handle_event(Events::SetViewListChanged).await;
+            }
+        } else if msg.args.len() == 1 {
             //println!("got osc {}", msg.addr);
             //let mut update = None;
             match msg.addr.as_str() {
