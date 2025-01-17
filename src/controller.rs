@@ -5,6 +5,7 @@ use {
         midi::Midi,
         param::Param,
         patcher::PatcherInst,
+        view::ParamView,
     },
     embedded_graphics::{
         mono_font::MonoTextStyle,
@@ -51,6 +52,8 @@ pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
 pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
 pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
 pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loaded";
+pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
+pub const SET_VIEWS_ORDER_ADDR: &str = "/rnbo/inst/control/sets/views/order";
 
 const VOLUME_WHEEL_BUTTON: usize = 8;
 const VOLUME_WHEEL_ENCODER: usize = 9;
@@ -107,7 +110,7 @@ fn power_sysex(cmd: PowerCommand) -> [Midi; 3] {
     ]
 }
 
-fn brightness_sysex(level: u8) -> [Midi; 3] {
+fn _brightness_sysex(level: u8) -> [Midi; 3] {
     [
         Midi::new(&[0xF0, 0x00, 0x21]),
         Midi::new(&[0x1D, 0x01, 0x01]),
@@ -151,7 +154,7 @@ enum Button {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 struct ParamUpdate {
-    instance: usize,
+    instance: usize, //local index
     index: usize,
 }
 
@@ -163,22 +166,38 @@ enum Events {
     EncRight(usize),
     EncTouch(usize),
 
-    ParamUpdate(ParamUpdate),
     Transport(bool),
     Tempo(f32),
+
+    VisibleParamUpdated(usize),
 
     SetNamesChanged,
     SetPresetNamesChanged,
 
     SetCurrentChanged,
     SetPresetLoadedChanged,
+
+    SetViewListChanged,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PatcherParams {
+pub(crate) struct ParamPage {
     index: usize, //not instance index, index within out list
     page: usize,
     focused: Option<usize>,
+}
+
+impl ParamPage {
+    fn offset_page(&self, offset: isize) -> Self {
+        let mut p = self.clone();
+        p.page = (p.page as isize + offset).max(0) as usize;
+        p
+    }
+    fn with_focus(&self, index: usize) -> Self {
+        let mut p = self.clone();
+        p.focused = Some(index);
+        p
+    }
 }
 
 const MENU_ITEMS: [&'static str; 4] = ["Set Presets", "Sets", "Patcher Instances", "Tempo"];
@@ -189,18 +208,50 @@ const SETS_INDEX: usize = 1;
 const PATCHER_INSTANCES_INDEX: usize = 2;
 const TEMPO_INDEX: usize = 3;
 
+#[derive(Clone, Debug, PartialEq)]
+enum Cmd {
+    Power(PowerCommand),
+
+    OffsetParam {
+        instance: usize,
+        index: usize,
+        offset: isize,
+    },
+    OffsetViewParam {
+        view: usize,
+        index: usize,
+        offset: isize,
+    },
+    OffsetVolume(isize),
+    OffsetTempo(isize),
+    MulTempoOffset(bool),
+
+    ToggleTransport,
+
+    LightButton {
+        btn: u8,
+        val: u8,
+    },
+
+    RenderVisibleParams,
+
+    LoadSet(usize),
+    LoadSetPreset(usize),
+}
+
 mod top {
     use super::{
-        Button, Events, MoveColor, OscMessage, PowerCommand, EXIT_MENU, JOG_WHEEL_ENCODER,
-        PLAY_MIDI, VOLUME_WHEEL_BUTTON, VOLUME_WHEEL_ENCODER,
+        Button, Cmd, Context, Events, PowerCommand, EXIT_MENU, JOG_WHEEL_ENCODER,
+        VOLUME_WHEEL_BUTTON, VOLUME_WHEEL_ENCODER,
     };
 
     const POWER_DOWN_INDEX: usize = 0;
     const LAUNCH_MOVE_INDEX: usize = 1;
 
-    pub struct Context {
-        shared: std::rc::Rc<std::sync::Mutex<super::SharedContext>>,
-        rolling: bool,
+    #[derive(PartialEq, Eq, Clone, Copy, Debug)]
+    pub(crate) enum LastView {
+        Main,
+        ParamViews,
     }
 
     smlang::statemachine! {
@@ -210,104 +261,63 @@ mod top {
             Init + BtnDown(Button::JogWheel) = Main,
             Init + BtnDown(Button::Back) = Main,
 
-            VolumeEditor + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptExit(POWER_DOWN_INDEX),
+            VolumeEditor(LastView) + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
 
-            Main + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor,
-            Main + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1); = VolumeEditor,
-            Main + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1); = VolumeEditor,
+            Main + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor(LastView::Main),
+            Main + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::Main),
+            Main + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::Main),
 
-            VolumeEditor + BtnDown(Button::Back) = Main,
-            VolumeEditor + BtnDown(Button::Menu) = Main,
-            VolumeEditor + EncRight(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(1); = VolumeEditor,
-            VolumeEditor + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.offset_volume(-1); = VolumeEditor,
-            VolumeEditor + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON] = Main,
+            //toggle
+            Main + BtnDown(Button::Menu) / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
+            ParamViews + BtnDown(Button::Menu)/ ctx.emit(Cmd::RenderVisibleParams);  = Main,
+
+            ParamViews + EncTouch(VOLUME_WHEEL_BUTTON)  = VolumeEditor(LastView::ParamViews),
+            ParamViews + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::ParamViews),
+            ParamViews + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::ParamViews),
+
+            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::ParamViews] / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::ParamViews] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
+            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
+            VolumeEditor(LastView) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(*state),
+            VolumeEditor(LastView) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(*state),
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON && *state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON && *state == LastView::ParamViews] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
 
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == POWER_DOWN_INDEX] = PowerOff,
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == LAUNCH_MOVE_INDEX] = LaunchMove,
             PromptExit(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < EXIT_MENU.len()] = PromptExit(*state + 1),
             PromptExit(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PromptExit(*state - 1),
-            PromptExit(usize) + BtnDown(Button::Back) = Main,
-            PromptExit(usize) + BtnDown(Button::Menu) = Main,
+            PromptExit(usize) + BtnDown(Button::Back) / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            PromptExit(usize) + BtnDown(Button::Menu) / ctx.emit(Cmd::RenderVisibleParams); = Main,
 
-            _ + BtnDown(Button::PowerShort) / ctx.send_power_cmd(PowerCommand::ClearShortPress); = PromptExit(POWER_DOWN_INDEX),
-            _ + BtnDown(Button::PowerLong) / ctx.send_power_cmd(PowerCommand::ClearLongPress); = PowerOff,
+            _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
+            _ + BtnDown(Button::PowerLong) / ctx.emit(Cmd::Power(PowerCommand::ClearLongPress)); = PowerOff,
 
-            _ + Tempo(_) / ctx.update_tempo(*event);,
-            _ + Transport(_) / ctx.update_transport(*event);,
-            _ + BtnDown(Button::Play) / ctx.toggle_transport().await;,
+            _ + BtnDown(Button::Play) / ctx.emit(Cmd::ToggleTransport);,
 
         }
     }
+}
 
-    impl Context {
-        pub fn new(shared: std::rc::Rc<std::sync::Mutex<super::SharedContext>>) -> Self {
-            Self {
-                shared,
-                rolling: false,
-            }
-        }
+mod view {
+    use super::{Button, Cmd, Context, Events, ParamPage, JOG_WHEEL_ENCODER, PARAM_PAGE_SIZE};
+    smlang::statemachine! {
+        states_attr: #[derive(Clone, Debug)],
+        transitions: {
+            *ParamViewMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < ctx.param_view_count()] = ParamViewMenu(*state + 1),
+            ParamViewMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = ParamViewMenu(*state - 1),
+            ParamViewMenu(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: *state, page: 0, focused: None }),
 
-        fn with_shared<T, F: Fn(std::sync::MutexGuard<super::SharedContext>) -> T>(
-            &self,
-            f: F,
-        ) -> T {
-            let g = self.shared.lock().expect("no poison");
-            f(g)
-        }
+            ViewParams(ParamPage) + BtnDown(Button::Back) = ParamViewMenu(state.index),
+            ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(1)),
+            ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(-1)),
+            ViewParams(ParamPage) + EncTouch(_) [*event < 8] = ViewParams(state.with_focus(*event)),
+            ViewParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
+            ViewParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
+            ViewParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = ViewParams(state.clone()), //redraw
 
-        pub fn send_power_cmd(&mut self, cmd: PowerCommand) {
-            self.with_shared(|mut s| s.send_power_cmd(cmd))
-        }
-
-        pub fn offset_volume(&mut self, amt: isize) {
-            self.with_shared(|mut s| s.offset_volume(amt))
-        }
-
-        pub fn launch_move(&mut self) {
-            //TODO
-        }
-
-        pub fn volume(&self) -> f32 {
-            self.with_shared(|s| s.config.volume as f32 / 255.0)
-        }
-
-        fn update_tempo(&mut self, v: f32) {
-            self.with_shared(|mut s| s.update_tempo(v))
-        }
-
-        fn update_transport(&mut self, on: bool) {
-            self.rolling = on;
-            self.light_button(
-                PLAY_MIDI,
-                if on {
-                    MoveColor::Green
-                } else {
-                    MoveColor::LightGray
-                } as u8,
-            );
-        }
-
-        async fn toggle_transport(&mut self) {
-            let msg = OscMessage {
-                addr: super::TRANSPORT_ROLLING_ADDR.to_string(),
-                args: vec![super::OscType::Bool(!self.rolling)],
-            };
-            self.send_osc(msg).await;
-        }
-
-        fn light_button(&mut self, btn: u8, val: u8) {
-            self.with_shared(|shared| {
-                let _ = shared.midi_out_queue.send(super::Midi::cc(
-                    btn,
-                    val,
-                    super::MOVE_CTL_MIDI_CHAN,
-                ));
-            })
-        }
-
-        async fn send_osc(&mut self, msg: OscMessage) {
-            let mut g = self.shared.lock().expect("no poison");
-            g.send_osc(msg).await;
+            _ + SetViewListChanged = ParamViewMenu(0),
         }
     }
 }
@@ -322,71 +332,61 @@ smlang::statemachine! {
         Menu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = Menu(*state - 1),
 
         //select
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == SETS_INDEX && ctx.sets_len() > 0] = SetsList(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == SET_PRESETS_INDEX && ctx.set_presets_len() > 0] = SetPresetsList(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == SETS_INDEX && ctx.sets_count() > 0] = SetsList(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == SET_PRESETS_INDEX && ctx.set_presets_count() > 0] = SetPresetsList(0),
         //skip patcher instances menu if there is only 1 instance
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.patcher_instances_len() > 1] = PatcherInstances(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.patcher_instances_len() == 1] / ctx.render_param_page(0, 0);
-            = PatcherParams(PatcherParams { index: 0, page: 0, focused: None }),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.instances_count() > 1] = PatcherInstances(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_INSTANCES_INDEX && ctx.instances_count() == 1] / ctx.emit(Cmd::RenderVisibleParams);
+            = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
 
         SetsList(usize) + BtnDown(Button::Back) = Menu(SETS_INDEX),
-        SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_len() > *state + 1] = SetsList(*state + 1),
+        SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_count() > *state + 1] = SetsList(*state + 1),
         SetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetsList(*state - 1),
-        SetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_select(*state).await; = SetsList(*state),
+        SetsList(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::LoadSet(*state)); = SetsList(*state),
         SetsList(usize) + SetNamesChanged = Menu(SETS_INDEX), //backout, TODO be smarter
         SetsList(usize) + SetCurrentChanged = SetsList(*state), //redraw
 
         SetPresetsList(usize) + BtnDown(Button::Back) = Menu(SET_PRESETS_INDEX),
-        SetPresetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.set_presets_len() > *state + 1] = SetPresetsList(*state + 1),
+        SetPresetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.set_presets_count() > *state + 1] = SetPresetsList(*state + 1),
         SetPresetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetPresetsList(*state - 1),
-        SetPresetsList(usize) + BtnDown(Button::JogWheel) / ctx.set_preset_select(*state).await;,
+        SetPresetsList(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::LoadSetPreset(*state));,
         SetPresetsList(usize) + SetPresetNamesChanged = Menu(SET_PRESETS_INDEX), //back out TODO be smarter
         SetPresetsList(usize) + SetPresetLoadedChanged = SetPresetsList(*state), //redraw
 
         PatcherInstances(usize) + BtnDown(Button::Back) = Menu(PATCHER_INSTANCES_INDEX),
-        PatcherInstances(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instances_len() > *state + 1] = PatcherInstances(*state + 1),
+        PatcherInstances(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.instances_count() > *state + 1] = PatcherInstances(*state + 1),
         PatcherInstances(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PatcherInstances(*state - 1),
-        PatcherInstances(usize) + BtnDown(Button::JogWheel) / ctx.render_param_page(*state, 0);
-            = PatcherParams(PatcherParams { index: *state, page: 0, focused: None }),
+        PatcherInstances(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderVisibleParams);
+            = PatcherParams(ParamPage { index: *state, page: 0, focused: None }),
 
         //skip patcher instances menu if there is only 1 instance
-        PatcherParams(PatcherParams) + BtnDown(Button::Back) [ctx.patcher_instances_len() > 1] / ctx.clear_params(); = PatcherInstances(state.index),
-        PatcherParams(PatcherParams) + BtnDown(Button::Back) [ctx.patcher_instances_len() == 1] / ctx.clear_params(); = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() > 1] = PatcherInstances(state.index),
+        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() == 1] = Menu(PATCHER_INSTANCES_INDEX),
 
-        PatcherParams(PatcherParams) + EncRight(JOG_WHEEL_ENCODER) [ctx.patcher_instance_param_pages(state.index) > state.page + 1] / ctx.render_param_page(state.index, state.page + 1);
-            = PatcherParams(PatcherParams { index: state.index, page: state.page + 1, focused: state.focused }),
-        PatcherParams(PatcherParams) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.render_param_page(state.index, state.page - 1);
-            = PatcherParams(PatcherParams { index: state.index, page: state.page - 1, focused: state.focused }),
-        PatcherParams(PatcherParams) + EncTouch(_) [*event < 8]
-            = PatcherParams(PatcherParams { index: state.index, page: state.page, focused: Some(*event) }),
-        PatcherParams(PatcherParams) + EncLeft(_) [*event < 8] / ctx.offset_param(state.index, state.page, *event, -1).await;,
-        PatcherParams(PatcherParams) + EncRight(_) [*event < 8] / ctx.offset_param(state.index, state.page, *event, 1).await;,
+        PatcherParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1] / ctx.emit(Cmd::RenderVisibleParams);
+            = PatcherParams(ParamPage { index: state.index, page: state.page + 1, focused: state.focused }),
+        PatcherParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderVisibleParams);
+            = PatcherParams(ParamPage { index: state.index, page: state.page - 1, focused: state.focused }),
+        PatcherParams(ParamPage) + EncTouch(_) [*event < 8] = PatcherParams(state.with_focus(*event)),
+        PatcherParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
+        PatcherParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
 
         PatcherInstances(usize) + SetCurrentChanged = Menu(PATCHER_INSTANCES_INDEX),
-        PatcherParams(PatcherParams) + SetCurrentChanged  / ctx.clear_params(); = Menu(PATCHER_INSTANCES_INDEX),
-
-        //draw param and update the LED if it is in view
-        //this actually updates the state and we might not need to, but we do need to render the
-        //param
-        PatcherParams(PatcherParams) + ParamUpdate(_) [ctx.param_visible(event, state)] / ctx.render_param(event.instance, event.index); = PatcherParams(state.clone()),
+        PatcherParams(ParamPage) + SetCurrentChanged  = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = PatcherParams(state.clone()), //redraw
 
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
-        TempoEditor + EncRight(JOG_WHEEL_ENCODER) / ctx.offset_tempo(1.0).await; = TempoEditor,
-        TempoEditor + EncLeft(JOG_WHEEL_ENCODER) / ctx.offset_tempo(-1.0).await; = TempoEditor,
-        TempoEditor + BtnDown(Button::JogWheel) / ctx.set_tempo_offset_mul(5.0); = TempoEditor,
-        TempoEditor + BtnUp(Button::JogWheel) / ctx.set_tempo_offset_mul(1.0); = TempoEditor,
-        TempoEditor + Tempo(_) / ctx.update_tempo(*event); = TempoEditor,
-
-        _ + BtnDown(Button::Menu) / ctx.clear_params(); = Menu(0),
+        TempoEditor + EncRight(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(1)); = TempoEditor,
+        TempoEditor + EncLeft(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(-1)); = TempoEditor,
+        TempoEditor + BtnDown(Button::JogWheel) / ctx.emit(Cmd::MulTempoOffset(true)); = TempoEditor,
+        TempoEditor + BtnUp(Button::JogWheel) / ctx.emit(Cmd::MulTempoOffset(false));  = TempoEditor,
+        TempoEditor + Tempo(_) = TempoEditor,
     }
 }
 
 pub struct StateController {
-    pub params: HashMap<String, usize>,
-    pub params_norm: HashMap<String, usize>,
-
     set_current_name: Option<String>,
     set_preset_loaded_name: Option<String>,
 
@@ -397,45 +397,138 @@ pub struct StateController {
 
     exit_cmd: Option<ExitCmd>,
 
-    topsm: top::StateMachine,
     sm: StateMachine,
-}
+    viewsm: view::StateMachine,
+    topsm: top::StateMachine,
 
-struct SharedContext {
-    display: Rc<Mutex<MoveDisplay>>,
+    cmd_queue: sync_mpsc::Receiver<Cmd>,
+
+    ws_tx: Option<SplitSink<WebSocket, Message>>,
     midi_out_queue: sync_mpsc::SyncSender<Midi>,
+    display: Rc<Mutex<MoveDisplay>>,
     volume: Arc<AtomicU8>,
+
     config: Config,
     config_path: PathBuf,
+
+    rolling: bool,
     bpm: f32,
-    ws_tx: Option<SplitSink<WebSocket, Message>>,
-}
-
-struct Context {
-    shared: std::rc::Rc<std::sync::Mutex<SharedContext>>,
-
     tempo_offset_mul: f32,
+
+    params: Vec<Param>,
+
+    instance_params: Vec<Vec<usize>>,
+
+    visible_params: Vec<usize>,
+
+    //(sparce instance index, param_index) -> (local instance_index, param index)
+    instance_param_map: HashMap<(usize, usize), (usize, usize)>,
+
+    param_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
+    param_norm_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
+
+    param_views: Vec<ParamView>,
+    param_view_order: Vec<usize>,
+    param_view_names: Vec<String>,
+    param_view_params: Vec<Vec<usize>>,
+    param_view_param_lookup: HashMap<String, usize>, //OSC addr -> index into self.param_views
+
     set_names: Vec<String>,
     set_preset_names: Vec<String>,
     patcher_instance_names: Vec<String>,
-    patcher_instance_to_index: HashMap<usize, usize>,
-    patcher_params: HashMap<usize, Vec<Param>>,
-    set_selected: Option<String>,
 }
 
-impl SharedContext {
-    fn new(
+#[derive(Clone, Debug)]
+struct CommonContext {
+    pub(crate) sets_count: usize,
+    pub(crate) set_presets_count: usize,
+    pub(crate) instances_count: usize,
+
+    //sorted list of instances that have params, and the count of pages
+    pub(crate) instance_param_pages: Vec<usize>,
+    pub(crate) param_view_pages: Vec<usize>,
+}
+
+impl Default for CommonContext {
+    fn default() -> Self {
+        Self {
+            sets_count: 0,
+            set_presets_count: 0,
+            instances_count: 0,
+
+            instance_param_pages: Vec::new(),
+
+            param_view_pages: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Context {
+    cmd_queue: sync_mpsc::Sender<Cmd>,
+    common: CommonContext,
+}
+
+impl Context {
+    fn new(cmd_queue: super::sync_mpsc::Sender<Cmd>) -> Self {
+        Self {
+            cmd_queue,
+            common: Default::default(),
+        }
+    }
+
+    fn emit(&mut self, cmd: Cmd) {
+        let _ = self.cmd_queue.send(cmd);
+    }
+
+    fn common(&self) -> CommonContext {
+        self.common.clone()
+    }
+
+    fn update_common(&mut self, common: CommonContext) {
+        self.common = common;
+    }
+
+    fn sets_count(&self) -> usize {
+        self.common.sets_count
+    }
+
+    fn set_presets_count(&self) -> usize {
+        self.common.set_presets_count
+    }
+
+    fn instances_count(&self) -> usize {
+        self.common.instances_count
+    }
+
+    fn instance_param_pages(&self, instance: usize) -> usize {
+        *self.common.instance_param_pages.get(instance).unwrap_or(&0)
+    }
+
+    fn view_param_pages(&self, view: usize) -> usize {
+        *self.common.param_view_pages.get(view).unwrap_or(&0)
+    }
+
+    fn param_view_count(&self) -> usize {
+        self.common.param_view_pages.len()
+    }
+}
+
+impl StateController {
+    pub fn new(
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
-        display: &mut Rc<Mutex<MoveDisplay>>,
+        display: Rc<Mutex<MoveDisplay>>,
         volume: Arc<AtomicU8>,
         config_path: PathBuf,
     ) -> Self {
-        //send a reset
-        let _ = midi_out_queue.send(Midi::reset());
+        let (tx, rx) = sync_mpsc::channel();
 
-        for m in brightness_sysex(127) {
-            let _ = midi_out_queue.send(m);
-        }
+        let context = Context::new(tx.clone());
+
+        let sm = StateMachine::new_with_state(context.clone(), States::Menu(0));
+        let viewsm =
+            view::StateMachine::new_with_state(context.clone(), view::States::ParamViewMenu(0));
+        let topsm = top::StateMachine::new(context);
 
         //do config
         let config = if std::path::Path::exists(&config_path) {
@@ -449,416 +542,29 @@ impl SharedContext {
             Config::default()
         };
 
+        //init volume
         volume.store(config.volume, AtomicOrdering::SeqCst);
 
-        Self {
-            display: display.clone(),
-            midi_out_queue,
-            volume,
-            config,
-            config_path,
-            bpm: 0.0,
-            ws_tx: None,
-        }
-    }
+        //reset
+        let _ = midi_out_queue.send(Midi::reset());
 
-    fn set_ws(&mut self, ws_tx: SplitSink<WebSocket, Message>) {
-        self.ws_tx = Some(ws_tx);
-    }
-
-    async fn send_osc(&mut self, msg: OscMessage) {
-        if let Some(ws) = self.ws_tx.as_mut() {
-            let packet = OscPacket::Message(msg);
-            if let Ok(msg) = rosc::encoder::encode(&packet) {
-                let _ = ws.send(Message::Binary(msg)).await;
-            }
-        }
-    }
-
-    fn send_power_cmd(&mut self, cmd: PowerCommand) {
-        for m in power_sysex(cmd).into_iter() {
-            let _ = self.midi_out_queue.send(m);
-        }
-    }
-
-    fn offset_volume(&mut self, amt: isize) {
-        let cur = self.config.volume as isize;
-        let next = (cur + amt).clamp(0, 255);
-        if next != cur {
-            self.config.volume = next as u8;
-            self.volume
-                .store(self.config.volume, AtomicOrdering::SeqCst);
-        }
-    }
-
-    fn update_tempo(&mut self, v: f32) {
-        self.bpm = v;
-    }
-
-    fn bpm(&self) -> f32 {
-        self.bpm
-    }
-
-    async fn locked_display(&self) -> MutexGuard<MoveDisplay> {
-        self.display.lock().await
-    }
-
-    async fn with_display<T, F: Fn(MutexGuard<'_, MoveDisplay>) -> T>(&self, f: F) -> T {
-        let g = self.display.lock().await;
-        f(g)
-    }
-}
-
-impl Context {
-    fn new(shared: std::rc::Rc<std::sync::Mutex<SharedContext>>) -> Self {
-        Self {
-            tempo_offset_mul: 1.0,
-            set_names: Vec::new(),
-            set_preset_names: Vec::new(),
-            set_selected: None,
-            patcher_instance_names: Vec::new(),
-            patcher_instance_to_index: HashMap::new(),
-            patcher_params: HashMap::new(),
-            shared,
-        }
-    }
-
-    fn set_ws(&mut self, ws_tx: SplitSink<WebSocket, Message>) {
-        let mut g = self.shared.lock().expect("no poison");
-        g.set_ws(ws_tx);
-    }
-
-    fn sets_len(&self) -> usize {
-        self.set_names.len()
-    }
-
-    fn set_presets_len(&self) -> usize {
-        self.set_preset_names.len()
-    }
-
-    fn patcher_instances_len(&self) -> usize {
-        self.patcher_instance_names.len()
-    }
-
-    fn patcher_instance_param_pages(&self, instance: usize) -> usize {
-        self.patcher_params
-            .get(&instance)
-            .map(|params| {
-                params.len() / PARAM_PAGE_SIZE
-                    + if params.len() % PARAM_PAGE_SIZE == 0 {
-                        0
-                    } else {
-                        1
-                    }
-            })
-            .unwrap_or(0)
-    }
-
-    fn patcher_instance_params(&self, instance: usize) -> usize {
-        self.patcher_params
-            .get(&instance)
-            .map(|params| params.len())
-            .unwrap_or(0)
-    }
-
-    async fn set_select(&mut self, index: usize) {
-        //unload
-        if index == 0 {
-            let msg = OscMessage {
-                addr: INST_UNLOAD_ADDR.to_string(),
-                args: vec![OscType::Int(-1)],
-            };
-            self.send_osc(msg).await;
-        } else {
-            self.set_selected = self.set_names.get(index).map(|s| s.clone());
-            if let Some(name) = &self.set_selected {
-                let msg = OscMessage {
-                    addr: SET_LOAD_ADDR.to_string(),
-                    args: vec![OscType::String(name.clone())],
-                };
-                self.send_osc(msg).await;
-            }
-        }
-    }
-
-    async fn set_preset_select(&mut self, index: usize) {
-        let selected = self.set_preset_names.get(index).map(|s| s.clone());
-        if let Some(name) = &selected {
-            let msg = OscMessage {
-                addr: SET_PRESETS_LOAD_ADDR.to_string(),
-                args: vec![OscType::String(name.clone())],
-            };
-            self.send_osc(msg).await;
-        }
-    }
-
-    fn set_set_names(&mut self, names: &Vec<String>) {
-        //we always want to keep track of the names but we might not change state
-        let mut names = names.clone();
-        names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-
-        names.insert(0, "<empty>".to_string());
-
-        self.set_names = names;
-
-        //TODO change selected index?
-    }
-
-    fn set_set_preset_names(&mut self, names: &Vec<String>) {
-        let mut names = names.clone();
-        names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-        self.set_preset_names = names;
-    }
-
-    fn set_names(&self) -> &Vec<String> {
-        &self.set_names
-    }
-
-    fn set_preset_names(&self) -> &Vec<String> {
-        &self.set_preset_names
-    }
-
-    fn set_patchers(&mut self, instances: &HashMap<usize, PatcherInst>) {
-        let mut indexes: Vec<usize> = instances.keys().map(|k| *k).collect();
-        indexes.sort();
-
-        self.patcher_instance_to_index.clear();
-        self.patcher_instance_names.clear();
-        self.patcher_params.clear();
-
-        //context addresses instances by index from 0, not by instance index (which could be
-        //sparse)
-        for (index, i) in indexes.iter().enumerate() {
-            self.patcher_instance_to_index.insert(*i, index);
-
-            let inst = instances.get(&i).unwrap();
-            let mut params = inst.params().clone();
-            params.sort_by(|a, b| a.index().cmp(&b.index()));
-
-            self.patcher_params.insert(index, params);
-            self.patcher_instance_names
-                .push(format!("{}: {}", i, inst.name()));
-        }
-    }
-
-    fn patcher_instance_names(&self) -> &Vec<String> {
-        &self.patcher_instance_names
-    }
-
-    fn light_button(&mut self, btn: u8, val: u8) {
-        self.with_shared(|shared| {
-            let _ = shared
-                .midi_out_queue
-                .send(Midi::cc(btn, val, MOVE_CTL_MIDI_CHAN));
-        })
-    }
-
-    fn param_visible(&self, update: &ParamUpdate, state: &PatcherParams) -> bool {
-        let offset = state.page * PARAM_PAGE_SIZE;
-        let range = offset..(offset + PARAM_PAGE_SIZE);
-        state.index == update.instance && range.contains(&update.index)
-    }
-
-    async fn offset_param(&mut self, instance: usize, page: usize, param: usize, offset: isize) {
-        let param = page * PARAM_PAGE_SIZE + param;
-        if let Some(instance) = self.patcher_params.get_mut(&instance) {
-            if let Some(param) = instance.get_mut(param) {
-                let mut args = Vec::new();
-                let step = 0.01; //TODO allow for other step sizes
-                                 //operate on the normalized value.. TODO, change step
-                let v = (param.norm() + if offset > 0 { step } else { -step }).clamp(0.0, 1.0);
-                param.set_norm(v);
-                args.push(OscType::Double(v));
-                let msg = OscMessage {
-                    addr: param.addr_norm().to_string(),
-                    args,
-                };
-                self.send_osc(msg).await;
-            }
-        }
-        self.render_param(instance, param);
-    }
-
-    fn update_param(&mut self, instance: usize, msg: &OscMessage) -> Option<Events> {
-        let instance = self.patcher_instance_to_index.get(&instance)?;
-
-        //TODO get norm from OSC
-        if let Some(params) = self.patcher_params.get_mut(&instance) {
-            if let Some((index, p)) = params
-                .iter_mut()
-                .enumerate()
-                .find(|(_, p)| p.addr() == msg.addr)
-            {
-                match &msg.args[0] {
-                    OscType::Double(v) => p.update_f64(*v),
-                    OscType::Float(v) => p.update_f64(*v as f64),
-                    OscType::Int(v) => p.update_f64(*v as f64),
-                    OscType::String(v) => p.update_s(v),
-                    _ => {
-                        return None;
-                    }
-                }
-                return Some(Events::ParamUpdate(ParamUpdate {
-                    instance: *instance,
-                    index,
-                }));
-            }
-        }
-        None
-    }
-
-    //return is instance index, param index, norm value
-    fn update_param_norm(&mut self, instance: usize, msg: &OscMessage) -> Option<Events> {
-        let instance = self.patcher_instance_to_index.get(&instance)?;
-        if let Some(params) = self.patcher_params.get_mut(&instance) {
-            if let Some((index, p)) = params
-                .iter_mut()
-                .enumerate()
-                .find(|(_, p)| p.addr_norm() == msg.addr)
-            {
-                let v = match &msg.args[0] {
-                    OscType::Double(v) => {
-                        p.set_norm_pending(*v);
-                        Some(*v)
-                    }
-                    OscType::Float(v) => {
-                        let v = *v as f64;
-                        p.set_norm_pending(v);
-                        Some(v)
-                    }
-                    OscType::Int(v) => {
-                        let v = *v as f64;
-                        p.set_norm_pending(v);
-                        Some(v)
-                    }
-                    _ => None,
-                };
-                return v.map(|_v| {
-                    Events::ParamUpdate(ParamUpdate {
-                        instance: *instance,
-                        index,
-                    })
-                });
-            }
-        }
-        None
-    }
-
-    fn param(&self, instance: usize, index: usize) -> Option<&Param> {
-        if let Some(params) = self.patcher_params.get(&instance) {
-            params.get(index)
-        } else {
-            None
-        }
-    }
-
-    fn clear_params(&mut self) {
-        let shared = self.shared.lock().expect("no poison");
-        for index in 0..PARAM_PAGE_SIZE {
-            let num = index + 71;
-            let _ = shared.midi_out_queue.send(Midi::cc(
-                num as u8,
-                MoveColor::Black as _,
-                MOVE_CTL_MIDI_CHAN,
-            ));
-        }
-    }
-
-    fn render_param(&mut self, instance: usize, index: usize) {
-        let num = (index % PARAM_PAGE_SIZE) as u8;
-
-        if let Some(p) = self.param(instance, index) {
-            let cap = 0.96;
-            let v = p.norm_prefer_pending();
-
-            //TODO get from metdata?
-            let color = Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap).into_format();
-
-            let shared = self.shared.lock().expect("no poison");
-            for m in led_color(num, &color) {
-                let _ = shared.midi_out_queue.send(m);
-            }
-        }
-    }
-
-    fn render_param_page(&mut self, instance: usize, page: usize) {
-        self.clear_params();
-        let offset = page * PARAM_PAGE_SIZE;
-        for index in 0..PARAM_PAGE_SIZE {
-            self.render_param(instance, index + offset);
-        }
-    }
-
-    fn update_tempo(&mut self, v: f32) {
-        self.with_shared(|mut s| s.update_tempo(v))
-    }
-
-    fn bpm(&self) -> f32 {
-        self.with_shared(|s| s.bpm())
-    }
-
-    async fn offset_tempo(&mut self, offset: f32) {
-        let bpm = self.with_shared(|s| s.bpm());
-        let v = (bpm + offset * self.tempo_offset_mul).clamp(0.5, 500.0); //XXX range?
-        if v != bpm {
-            self.update_tempo(v);
-            let msg = OscMessage {
-                addr: TRANSPORT_BPM_ADDR.to_string(),
-                args: vec![OscType::Float(v)],
-            };
-            self.send_osc(msg).await;
-        }
-    }
-
-    fn set_tempo_offset_mul(&mut self, mul: f32) {
-        self.tempo_offset_mul = mul;
-    }
-
-    async fn send_osc(&mut self, msg: OscMessage) {
-        let mut g = self.shared.lock().expect("no poison");
-        g.send_osc(msg).await;
-    }
-
-    async fn with_display<T, F: Fn(MutexGuard<'_, MoveDisplay>) -> T>(&self, f: F) -> T {
-        let shared = self.shared.lock().expect("no poison");
-        shared.with_display(f).await
-    }
-
-    fn with_shared<T, F: Fn(std::sync::MutexGuard<SharedContext>) -> T>(&self, f: F) -> T {
-        let g = self.shared.lock().expect("no poison");
-        f(g)
-    }
-}
-
-impl StateController {
-    pub fn new(
-        midi_out_queue: sync_mpsc::SyncSender<Midi>,
-        display: &mut Rc<Mutex<MoveDisplay>>,
-        volume: Arc<AtomicU8>,
-        config_path: PathBuf,
-    ) -> Self {
-        let shared = std::rc::Rc::new(std::sync::Mutex::new(SharedContext::new(
-            midi_out_queue,
-            display,
-            volume,
-            config_path,
-        )));
-
-        let mut context = Context::new(shared.clone());
-        context.light_button(MENU_MIDI, MoveColor::LightGray as _);
-        context.light_button(PLAY_MIDI, MoveColor::LightGray as _);
-        let sm = StateMachine::new_with_state(context, States::Menu(0));
-
-        let context = top::Context::new(shared);
-        let topsm = top::StateMachine::new(context);
-
-        Self {
-            params: HashMap::new(),
-            params_norm: HashMap::new(),
+        let mut s = Self {
             sysex: Vec::new(),
 
             sm,
+            viewsm,
             topsm,
+
+            midi_out_queue,
+            display,
+            volume,
+
+            config,
+            config_path,
+
+            rolling: false,
+            bpm: 100.0,
+            tempo_offset_mul: 1.0,
 
             exit_cmd: None,
 
@@ -867,7 +573,37 @@ impl StateController {
 
             set_current_index: None,
             set_preset_loaded_index: None,
-        }
+
+            cmd_queue: rx,
+
+            ws_tx: None,
+
+            params: Vec::new(),
+
+            instance_params: Vec::new(),
+            visible_params: Vec::new(),
+
+            instance_param_map: HashMap::new(),
+
+            param_lookup: HashMap::new(),
+            param_norm_lookup: HashMap::new(),
+
+            param_views: Vec::new(),
+            param_view_order: Vec::new(),
+            param_view_names: Vec::new(),
+            param_view_params: Vec::new(),
+            param_view_param_lookup: HashMap::new(),
+
+            set_names: Vec::new(),
+            set_preset_names: Vec::new(),
+            patcher_instance_names: Vec::new(),
+        };
+
+        //States::Init not transitioned to so, do setup here
+        s.light_button(MENU_MIDI, MoveColor::LightGray as _);
+        s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
+
+        s
     }
 
     pub async fn set_ws(&mut self, mut ws: SplitSink<WebSocket, Message>) {
@@ -882,53 +618,219 @@ impl StateController {
                 let _ = ws.send(Message::Binary(msg)).await;
             }
         }
-        self.context_mut().set_ws(ws);
+        self.ws_tx = Some(ws);
     }
 
-    pub fn set_state(&mut self, instances: HashMap<usize, PatcherInst>) {
-        self.context_mut().set_patchers(&instances);
+    pub async fn set_instances(&mut self, instances: HashMap<usize, PatcherInst>) {
+        let mut indexes: Vec<usize> = instances.keys().map(|k| *k).collect();
+        indexes.sort();
 
-        let mut params: HashMap<String, usize> = HashMap::new();
-        let mut params_norm: HashMap<String, usize> = HashMap::new();
+        //XXX what about visible params?
 
-        for (index, v) in instances.iter() {
-            for p in v.params().iter() {
-                params.insert(p.addr().to_string(), *index);
-                params_norm.insert(p.addr_norm().to_string(), *index);
+        self.patcher_instance_names.clear();
+        self.params.clear();
+        self.instance_params.clear();
+        self.instance_param_map.clear();
+        self.param_lookup.clear();
+        self.param_norm_lookup.clear();
+
+        let mut common = self.sm.context().common();
+        common.instance_param_pages.clear();
+
+        for (local_instance_index, key) in indexes.iter().enumerate() {
+            let inst = instances.get(key).unwrap();
+
+            //XXX what if there aren't any params?
+            self.patcher_instance_names
+                .push(format!("{}: {}", inst.index(), inst.name()));
+            common
+                .instance_param_pages
+                .push(1 + inst.params().len() / PARAM_PAGE_SIZE);
+
+            let mut instindexes = Vec::new();
+            for p in inst.params().iter() {
+                let index = self.params.len();
+                let local_param_index = instindexes.len();
+
+                self.params.push(p.clone());
+                instindexes.push(index);
+
+                //setup maps
+                self.param_lookup.insert(p.addr().to_string(), index);
+                self.param_norm_lookup
+                    .insert(p.addr_norm().to_string(), index);
+                self.instance_param_map.insert(
+                    (p.instance_index(), p.index()),
+                    (local_instance_index, local_param_index),
+                );
             }
+            self.instance_params.push(instindexes);
         }
-        self.params = params;
-        self.params_norm = params_norm;
+
+        common.instances_count = self.patcher_instance_names.len();
+        self.update_views(&mut common).await;
+        self.update_common(common);
     }
 
     pub async fn set_set_current_name(&mut self, name: Option<String>) {
         self.set_current_name = name;
         self.set_current_index = if let Some(name) = &self.set_current_name {
-            self.context().set_names().iter().position(|r| r == name)
+            self.set_names.iter().position(|r| r == name)
         } else {
             None
         };
         self.handle_event(Events::SetCurrentChanged).await;
     }
 
-    pub async fn set_set_names(&mut self, names: &Vec<String>) {
-        self.context_mut().set_set_names(names);
+    pub async fn set_set_names(&mut self, names: Vec<String>) {
+        self.set_names = names;
+        self.set_names.sort();
+        self.set_names.insert(0, "<empty>".to_string());
+
+        //TODO check set_current_name
+
+        let mut common = self.sm.context().common();
+        common.sets_count = self.set_names.len();
+        self.update_common(common);
+
         self.handle_event(Events::SetNamesChanged).await;
     }
 
-    pub async fn set_set_preset_names(&mut self, names: &Vec<String>) {
-        self.context_mut().set_set_preset_names(names);
+    pub async fn set_set_preset_names(&mut self, names: Vec<String>) {
+        let mut common = self.sm.context().common();
+        common.set_presets_count = names.len();
+        self.update_common(common);
+
+        self.set_preset_names = names;
+
         self.handle_event(Events::SetPresetNamesChanged).await;
     }
 
+    async fn update_views(&mut self, common: &mut CommonContext) {
+        //TODO look for changes and only add/remove update those instead of clearing everything
+
+        //if there are no views, add a default that has all the params in it
+        if self.param_views.len() == 0 && self.params.len() > 0 {
+            let params = self
+                .params
+                .iter()
+                .map(|p| (p.instance_index(), p.index()))
+                .collect();
+            self.param_views
+                .push(ParamView::new("Default".to_string(), params, 0));
+        }
+
+        self.param_view_names.clear();
+        self.param_view_params.clear();
+
+        common.param_view_pages.clear();
+
+        for v in self.param_views.iter() {
+            //find the param indexes indicated by the sparse (instance, param) pair
+            let mut params = Vec::new();
+            for sparce in v.params().iter() {
+                if let Some((instance, param)) = self.instance_param_map.get(&sparce) {
+                    if let Some(instance) = self.instance_params.get(*instance) {
+                        if let Some(index) = instance.get(*param) {
+                            params.push(*index);
+                        }
+                    }
+                }
+            }
+            if params.len() > 0 {
+                self.param_view_names.push(v.name().to_string());
+                common
+                    .param_view_pages
+                    .push(1 + params.len() / PARAM_PAGE_SIZE);
+                self.param_view_params.push(params);
+            }
+        }
+        //TODO check that current view is valid?
+    }
+
+    fn sort_param_views(&mut self) {
+        let mut sorted = Vec::new();
+
+        for i in self.param_view_order.iter() {
+            if let Some(v) = self.param_views.iter().position(|v| v.index() == *i) {
+                sorted.push(self.param_views.swap_remove(v)); //swap remove is more efficient
+            } else {
+                //ERROR
+            }
+        }
+        //if there are any left over, push them all the the back
+        sorted.append(&mut self.param_views);
+
+        std::mem::swap(&mut sorted, &mut self.param_views);
+    }
+
+    pub async fn set_param_views(&mut self, mut views: Vec<ParamView>) {
+        self.param_views = views;
+        self.sort_param_views();
+
+        //compute lookup
+        self.param_view_param_lookup.clear();
+        for (index, view) in self.param_views.iter().enumerate() {
+            let addr = format!("{}/{}/params", SET_VIEWS_LIST_ADDR, view.index());
+            self.param_view_param_lookup.insert(addr, index);
+        }
+
+        let mut common = self.sm.context().common();
+        self.update_views(&mut common).await;
+        self.update_common(common);
+        self.handle_event(Events::SetViewListChanged).await;
+    }
+
     pub async fn handle_osc(&mut self, msg: &OscMessage) {
-        if msg.args.len() == 1 {
+        //update param view
+        if let Some(index) = self.param_view_param_lookup.get(&msg.addr) {
+            let updated = if let Some(view) = self.param_views.get_mut(*index) {
+                let params: Result<Vec<(usize, usize)>, ()> = msg
+                    .args
+                    .iter()
+                    .map(|a| {
+                        if let OscType::String(v) = a {
+                            ParamView::parse_param_s(v)
+                        } else {
+                            Err(())
+                        }
+                    })
+                    .collect();
+                if let Ok(params) = params {
+                    view.set_params(params);
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            if updated {
+                let mut common = self.sm.context().common();
+                self.update_views(&mut common).await;
+                self.update_common(common);
+                //TODO transmit more fine tuned changes
+                self.handle_event(Events::SetViewListChanged).await;
+            }
+        } else if msg.args.len() == 1 {
             //println!("got osc {}", msg.addr);
             //let mut update = None;
             match msg.addr.as_str() {
                 TRANSPORT_ROLLING_ADDR => {
                     if let OscType::Bool(rolling) = msg.args[0] {
-                        self.handle_event(Events::Transport(rolling)).await;
+                        if self.rolling != rolling {
+                            self.rolling = rolling;
+                            let _ = self.midi_out_queue.send(Midi::cc(
+                                PLAY_MIDI,
+                                if rolling {
+                                    MoveColor::Green
+                                } else {
+                                    MoveColor::LightGray
+                                } as _,
+                                MOVE_CTL_MIDI_CHAN,
+                            ));
+                            self.handle_event(Events::Transport(rolling)).await;
+                        }
                     }
                 }
                 TRANSPORT_BPM_ADDR => {
@@ -937,6 +839,7 @@ impl StateController {
                         OscType::Float(v) => Some(*v),
                         _ => None,
                     } {
+                        self.bpm = bpm;
                         self.handle_event(Events::Tempo(bpm)).await;
                     }
                 }
@@ -954,28 +857,81 @@ impl StateController {
                     };
                     self.set_preset_loaded_index = if let Some(name) = &self.set_preset_loaded_name
                     {
-                        self.context()
-                            .set_preset_names()
-                            .iter()
-                            .position(|r| r == name)
+                        self.set_preset_names.iter().position(|r| r == name)
                     } else {
                         None
                     };
                     self.handle_event(Events::SetPresetLoadedChanged).await;
                 }
                 _ => {
-                    if let Some(instance) = self.params.get(&msg.addr).map(|i| *i) {
-                        if let Some(_e) = self.context_mut().update_param(instance, msg) {
+                    if let Some(index) = self.param_lookup.get(&msg.addr) {
+                        if let Some(param) = self.params.get_mut(*index) {
                             //ignore, we wait for normalized
-                            //self.handle_event(e).await;
+                            match &msg.args[0] {
+                                OscType::Double(v) => param.update_f64(*v),
+                                OscType::Float(v) => param.update_f64(*v as f64),
+                                OscType::Int(v) => param.update_f64(*v as f64),
+                                OscType::String(v) => param.update_s(v),
+                                _ => (),
+                            };
                         }
-                    } else if let Some(instance) = self.params_norm.get(&msg.addr).map(|i| *i) {
-                        if let Some(e) = self.context_mut().update_param_norm(instance, msg) {
-                            self.handle_event(e).await;
+                    } else if let Some(index) = self.param_norm_lookup.get(&msg.addr) {
+                        if let Some(param) = self.params.get_mut(*index) {
+                            let v = match &msg.args[0] {
+                                OscType::Double(v) => {
+                                    param.set_norm_pending(*v);
+                                    Some((param.instance_index(), param.index()))
+                                }
+                                OscType::Float(v) => {
+                                    let v = *v as f64;
+                                    param.set_norm_pending(v);
+                                    Some((param.instance_index(), param.index()))
+                                }
+                                _ => None,
+                            };
+                            if let Some(sparce) = v {
+                                //TODO throttle?
+
+                                let mut updates = Vec::new();
+                                //see if this param is visible, render it if so
+                                for (location, index) in self.visible_params.iter().enumerate() {
+                                    if let Some(param) = self.params.get(*index) {
+                                        if sparce.0 == param.instance_index()
+                                            && sparce.1 == param.index()
+                                        {
+                                            self.render_param(&param, location);
+                                            updates.push(location);
+                                        }
+                                    }
+                                }
+                                for location in updates {
+                                    self.handle_event(Events::VisibleParamUpdated(location))
+                                        .await;
+                                }
+                            }
                         }
                     }
                 }
             }
+        } else {
+            match msg.addr.as_str() {
+                SET_VIEWS_ORDER_ADDR => {
+                    self.param_view_order.clear();
+                    for arg in msg.args.iter() {
+                        match arg {
+                            OscType::Int(i) if *i >= 0 => {
+                                self.param_view_order.push(*i as usize);
+                            }
+                            _ => (),
+                        }
+                    }
+                    self.sort_param_views();
+                    let mut common = self.sm.context().common();
+                    self.update_views(&mut common).await;
+                    self.handle_event(Events::SetViewListChanged).await;
+                }
+                _ => (),
+            };
         }
     }
 
@@ -1035,19 +991,11 @@ impl StateController {
             3 => match bytes[0] {
                 0x9F => {
                     self.sysex.clear();
+                    //0..7 params
+                    //8 volume
+                    //9 jog wheel
                     if bytes[1] < 10 && bytes[2] != 0 {
                         self.handle_event(Events::EncTouch(bytes[1] as usize)).await;
-                        //0..7 params
-                        //8 volume
-                        //9 jog wheel
-                        /*
-                         * TODO
-                         self.handle_event(Events::Btn(Btn(
-                         Button::EncoderTouch(bytes[1] as usize),
-                         bytes[2] != 0,
-                         )))
-                         .await;
-                        */
                     }
                 }
                 0xBF => {
@@ -1152,104 +1100,229 @@ impl StateController {
         .await;
     }
 
-    async fn render_state(&mut self, s: &States) {
+    fn update_common(&mut self, common: CommonContext) {
+        self.sm.context_mut().update_common(common.clone());
+        self.viewsm.context_mut().update_common(common.clone());
+        self.topsm.context_mut().update_common(common);
+    }
+
+    fn light_button(&mut self, btn: u8, val: u8) {
+        let _ = self
+            .midi_out_queue
+            .send(Midi::cc(btn, val, MOVE_CTL_MIDI_CHAN));
+    }
+
+    fn send_power_cmd(&mut self, cmd: PowerCommand) {
+        for m in power_sysex(cmd).into_iter() {
+            let _ = self.midi_out_queue.send(m);
+        }
+    }
+
+    fn volume(&self) -> f32 {
+        self.config.volume as f32 / 255.0
+    }
+
+    async fn render_set_views(&mut self, s: &view::States) {
+        use view::States;
+        match s {
+            States::ParamViewMenu(selected) => {
+                self.clear_visible_params();
+                let selected: usize = *selected;
+                self.with_display(|display| {
+                    draw_menu(
+                        display,
+                        &"Param Views",
+                        &self.param_view_names,
+                        selected,
+                        None,
+                    );
+                })
+                .await;
+                self.light_button(BACK_MIDI, MoveColor::Black as _);
+                self.light_button(MENU_MIDI, MoveColor::LightGray as _);
+            }
+            States::ViewParams(state) => {
+                let index = state.index;
+                let page = state.page;
+                let focused = state.focused.clone();
+
+                if let Some((name, params)) = self
+                    .param_view_names
+                    .iter()
+                    .zip(self.param_view_params.iter())
+                    .skip(index)
+                    .next()
+                {
+                    let mut focus: Option<String> = None;
+                    let offset = page * PARAM_PAGE_SIZE;
+                    if let Some(focused) = focused {
+                        let pindex = offset + focused;
+                        if let Some(pindex) = params.get(pindex) {
+                            if let Some(param) = self.params.get(*pindex) {
+                                focus = Some(format!(
+                                    "{}: {}\n{}",
+                                    param.instance_index(),
+                                    param.name(),
+                                    param.render_value()
+                                ))
+                            }
+                        }
+                    }
+
+                    self.visible_params = params
+                        .iter()
+                        .skip(offset)
+                        .take(PARAM_PAGE_SIZE)
+                        .map(|i| *i)
+                        .collect();
+
+                    let pages = self.context().view_param_pages(index);
+
+                    let mut title = format!("view: {}", name);
+                    if title.len() > 16 {
+                        title.truncate(14);
+                        title.push_str("..");
+                    }
+
+                    self.with_display(|mut display| {
+                        let text_style =
+                            MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+
+                        display.clear(BinaryColor::Off).unwrap();
+
+                        draw_title(&mut display, title.as_str());
+                        draw_pager(&mut display, pages, page);
+                        if let Some(focus) = &focus {
+                            Text::with_alignment(
+                                focus.as_str(),
+                                Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
+                                text_style,
+                                Alignment::Center,
+                            )
+                            .draw(display.deref_mut())
+                            .unwrap();
+                        }
+                    })
+                    .await;
+                } else {
+                    self.visible_params.clear();
+                    self.with_display(|mut display| {
+                        display.clear(BinaryColor::Off).unwrap();
+                        draw_title(&mut display, "empty view");
+                    })
+                    .await;
+                }
+
+                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                self.light_button(MENU_MIDI, MoveColor::LightGray as _);
+            }
+        }
+    }
+
+    async fn render_main(&mut self, s: &States) {
         match s {
             States::Menu(selected) => {
+                self.clear_visible_params();
                 let selected: usize = *selected;
                 self.with_display(|display| {
                     draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
                 })
                 .await;
-                let ctx = self.context_mut();
-                ctx.light_button(BACK_MIDI, 0);
+                self.light_button(BACK_MIDI, 0);
             }
             States::TempoEditor => {
-                let bpm = {
-                    let ctx = self.context_mut();
-                    ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                    ctx.bpm()
-                };
+                self.clear_visible_params();
+                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 self.with_display(|mut display| {
                     display.clear(BinaryColor::Off).unwrap();
                     draw_title(&mut display, &"Tempo (bpm)");
-                    let bpm = format!("{:.1}", bpm);
+                    let bpm = format!("{:.1}", self.bpm);
                     draw_centered(&mut display, bpm.as_str(), TITLE_TEXT_STYLE);
                 })
                 .await;
             }
             States::SetsList(selected) => {
+                self.clear_visible_params();
                 let selected = *selected;
                 let indicated = self.set_current_index;
                 self.with_display(|display| {
                     draw_menu(
                         display,
                         &"Load Set",
-                        self.context().set_names(),
+                        self.set_names.as_slice(),
                         selected,
                         indicated,
                     );
                 })
                 .await;
 
-                self.context_mut()
-                    .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             States::SetPresetsList(selected) => {
+                self.clear_visible_params();
                 let selected = *selected;
                 let indicated = self.set_preset_loaded_index;
                 self.with_display(|display| {
                     draw_menu(
                         display,
                         &"Load Set Preset",
-                        self.context().set_preset_names(),
+                        self.set_preset_names.as_slice(),
                         selected,
                         indicated,
                     );
                 })
                 .await;
 
-                self.context_mut()
-                    .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             States::PatcherInstances(selected) => {
+                self.clear_visible_params();
                 let selected = *selected;
                 self.with_display(|display| {
                     draw_menu(
                         display,
                         &"Patcher Instances",
-                        self.context().patcher_instance_names(),
+                        self.patcher_instance_names.as_slice(),
                         selected,
                         None,
                     );
                 })
                 .await;
 
-                self.context_mut()
-                    .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             States::PatcherParams(state) => {
                 let index = state.index;
                 let page = state.page;
-                let focus = state.focused.clone();
+                let focused = state.focused.clone();
                 {
-                    let pages = self.context().patcher_instance_param_pages(index);
+                    let pages = self.context().instance_param_pages(index);
 
-                    //focused valaue
-                    let focus = if let Some(focus) = focus {
-                        if let Some(param) =
-                            self.context().param(index, focus + page * PARAM_PAGE_SIZE)
-                        {
-                            Some(format!("{}\n{}", param.name(), param.render_value()))
-                        } else {
-                            None
+                    let mut focus: Option<String> = None;
+                    if let Some(instance) = self.instance_params.get(index) {
+                        let offset = page * PARAM_PAGE_SIZE;
+                        self.visible_params = instance
+                            .iter()
+                            .skip(offset)
+                            .take(PARAM_PAGE_SIZE)
+                            .map(|i| *i)
+                            .collect();
+                        if let Some(focused) = focused {
+                            let pindex = offset + focused;
+                            if let Some(pindex) = instance.get(pindex) {
+                                if let Some(param) = self.params.get(*pindex) {
+                                    focus =
+                                        Some(format!("{}\n{}", param.name(), param.render_value()))
+                                }
+                            }
                         }
                     } else {
-                        None
-                    };
+                        self.visible_params.clear();
+                    }
 
                     let text_style =
                         MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-                    let name = self.context().patcher_instance_names.get(index).unwrap();
+                    let name = self.patcher_instance_names.get(index).unwrap();
 
                     let mut title = format!("{} Params", name);
                     if title.len() > 16 {
@@ -1261,32 +1334,7 @@ impl StateController {
                         display.clear(BinaryColor::Off).unwrap();
 
                         draw_title(&mut display, title.as_str());
-
-                        //draw pager
-                        if pages > 1 {
-                            let style = PrimitiveStyleBuilder::new()
-                                .stroke_color(BinaryColor::On)
-                                .stroke_width(1)
-                                .fill_color(BinaryColor::On)
-                                .build();
-
-                            let step = DISPLAY_WIDTH / pages as u32;
-                            let width = step - 4;
-
-                            let y = (DISPLAY_HEIGHT - 3) as i32;
-                            let mut x = (step / 2) as i32;
-
-                            //TODO assert that we can actually draw these
-
-                            for p in 0..pages {
-                                let height = if p == page { 3 } else { 1 };
-                                Rectangle::with_center(Point::new(x, y), Size::new(width, height))
-                                    .into_styled(style)
-                                    .draw(display.deref_mut())
-                                    .unwrap();
-                                x = x + (step as i32);
-                            }
-                        }
+                        draw_pager(&mut display, pages, page);
 
                         if let Some(focus) = &focus {
                             Text::with_alignment(
@@ -1301,22 +1349,20 @@ impl StateController {
                     })
                     .await;
                 }
-                let ctx = self.context_mut();
-                ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             _ => (),
         }
     }
 
     async fn handle_event(&mut self, e: Events) {
-        let was_main = match self.topsm.state() {
-            top::States::Main => true,
-            _ => false,
-        };
+        let top_last = self.topsm.state().clone();
+        let top_trans = self.topsm.process_event(e).is_some();
+        let top_cur = self.topsm.state().clone();
 
-        if let Some(ns) = self.topsm.process_event(e).await {
+        if top_trans {
             use top::States;
-            match ns {
+            match top_cur {
                 States::LaunchMove => {
                     self.display_centered("Launching Move").await;
                     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1325,32 +1371,27 @@ impl StateController {
                 States::PowerOff => {
                     self.display_centered("Powering Down").await;
 
-                    {
-                        let ctx = self.context_mut();
-
-                        ctx.light_button(BACK_MIDI, 0);
-                        ctx.light_button(MENU_MIDI, 0);
-                    }
+                    self.light_button(BACK_MIDI, 0);
+                    self.light_button(MENU_MIDI, 0);
 
                     //leave some time for it do draw
                     tokio::time::sleep(Duration::from_millis(500)).await;
-                    self.topsm
-                        .context_mut()
-                        .send_power_cmd(PowerCommand::PowerOff);
+                    self.send_power_cmd(PowerCommand::PowerOff);
                 }
                 States::PromptExit(selected) => {
-                    let selected: usize = *selected;
+                    self.clear_visible_params();
                     self.with_display(|display| {
                         draw_menu(display, &"Exit RNBO", &EXIT_MENU, selected, None);
                     })
                     .await;
-                    let ctx = self.context_mut();
-                    ctx.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
-                States::VolumeEditor => {
-                    let volume = self.topsm.context().volume();
-                    self.context_mut()
-                        .light_button(BACK_MIDI, MoveColor::LightGray as _);
+                States::VolumeEditor(_) => {
+                    if top_last != top_cur {
+                        self.clear_visible_params();
+                    }
+                    let volume = self.volume();
+                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
                     self.display_centered("Volume").await;
                     self.with_display(|mut display| {
                         display.clear(BinaryColor::Off).unwrap();
@@ -1360,22 +1401,39 @@ impl StateController {
                     })
                     .await;
                 }
+                //transitions
+                States::Main | States::ParamViews => self.clear_visible_params(),
                 _ => (),
             }
         }
 
+        //if we're coming out of volume into a parameter editor for instance, we want to
+        //know what we've touched
+        let mut touch = false;
+
+        //pass thru some events that always need to get thru
+        match e {
+            Events::EncTouch(e) if e < 8 => touch = true,
+            Events::SetNamesChanged
+            | Events::SetPresetNamesChanged
+            | Events::SetCurrentChanged
+            | Events::SetPresetLoadedChanged
+                if top_cur != top::States::Main =>
+            {
+                let _ = self.sm.process_event(e);
+            }
+            Events::SetViewListChanged if top_cur != top::States::ParamViews => {
+                let _ = self.viewsm.process_event(e);
+            }
+            _ => (),
+        };
+
         //println!("top state {:?}", self.topsm.state());
 
-        match self.topsm.state() {
+        match top_cur {
             top::States::Main => {
-                //if we're coming out of volume into a parameter editor for instance, we want to
-                //know what we've touched
-                let touch = match e {
-                    Events::EncTouch(e) => e < 8,
-                    _ => false,
-                };
-                let render = if was_main || touch {
-                    let ns = self.sm.process_event(e).await;
+                let render = if touch || !top_trans {
+                    let ns = self.sm.process_event(e);
                     ns.is_some()
                 } else {
                     //if top transitioned, we don't process an event but we do render
@@ -1383,47 +1441,211 @@ impl StateController {
                 };
                 if render {
                     let s = self.sm.state().clone();
-                    self.render_state(&s).await;
+                    self.render_main(&s).await;
                 }
             }
-            _ => {
-                //pass thru  pending changes like sets names changed etc even if
-                let _ = match e {
-                    Events::ParamUpdate(_)
-                    | Events::Transport(_)
-                    | Events::Tempo(_)
-                    | Events::SetNamesChanged
-                    | Events::SetPresetNamesChanged
-                    | Events::SetCurrentChanged
-                    | Events::SetPresetLoadedChanged => self.sm.process_event(e).await,
-                    _ => None,
+            top::States::ParamViews => {
+                let render = if touch || !top_trans {
+                    let ns = self.viewsm.process_event(e);
+                    ns.is_some()
+                } else {
+                    //if top transitioned, we don't process an event but we do render
+                    true
                 };
+                if render {
+                    let s = self.viewsm.state().clone();
+                    self.render_set_views(&s).await;
+                }
+            }
+            _ => (),
+        };
 
-                return;
+        self.process_cmds().await;
+    }
+
+    fn render_param(&self, param: &Param, location: usize) {
+        let cap = 0.96;
+        let v = param.norm_prefer_pending();
+
+        //TODO get from metdata?
+        let color = Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap).into_format();
+
+        for m in led_color(location as _, &color) {
+            let _ = self.midi_out_queue.send(m);
+        }
+    }
+
+    fn render_param_at(&self, index: usize, location: usize) {
+        let color = if let Some(param) = self.params.get(index) {
+            let cap = 0.96;
+            let v = param.norm_prefer_pending();
+
+            //TODO get from metdata?
+            Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap)
+        } else {
+            Srgb::new(0., 0., 0.)
+        }
+        .into_format();
+
+        for m in led_color(location as _, &color) {
+            let _ = self.midi_out_queue.send(m);
+        }
+    }
+
+    fn clear_params(&mut self) {
+        for index in 0..PARAM_PAGE_SIZE {
+            self.clear_param(index);
+        }
+    }
+
+    fn clear_param(&mut self, location: usize) {
+        let num = location + 71;
+        let _ = self.midi_out_queue.send(Midi::cc(
+            num as u8,
+            MoveColor::Black as _,
+            MOVE_CTL_MIDI_CHAN,
+        ));
+    }
+
+    async fn offset_param(&mut self, index: usize, offset: isize) {
+        if let Some(param) = self.params.get_mut(index) {
+            let mut args = Vec::new();
+            let step = 0.01; //TODO allow for other step sizes
+                             //operate on the normalized value.. TODO, change step
+            let v = (param.norm() + if offset > 0 { step } else { -step }).clamp(0.0, 1.0);
+            param.set_norm(v);
+            args.push(OscType::Double(v));
+            let msg = OscMessage {
+                addr: param.addr_norm().to_string(),
+                args,
+            };
+            self.send_osc(msg).await;
+        }
+    }
+
+    async fn process_cmds(&mut self) {
+        while let Ok(cmd) = self.cmd_queue.try_recv() {
+            match cmd {
+                Cmd::Power(cmd) => self.send_power_cmd(cmd),
+
+                Cmd::OffsetParam {
+                    instance,
+                    index,
+                    offset,
+                } => {
+                    if let Some(instance) = self.instance_params.get(instance) {
+                        if let Some(index) = instance.get(index) {
+                            self.offset_param(*index, offset).await;
+                        }
+                    }
+                    //self.render_param(instance, param);
+                }
+                Cmd::OffsetViewParam {
+                    view,
+                    index,
+                    offset,
+                } => {
+                    if let Some(params) = self.param_view_params.get(view) {
+                        if let Some(index) = params.get(index) {
+                            self.offset_param(*index, offset).await;
+                        }
+                    }
+                }
+                Cmd::OffsetVolume(amt) => {
+                    let cur = self.config.volume as isize;
+                    let next = (cur + amt).clamp(0, 255);
+                    if next != cur {
+                        self.config.volume = next as u8;
+                        self.volume
+                            .store(self.config.volume, AtomicOrdering::SeqCst);
+                    }
+                }
+                Cmd::OffsetTempo(offset) => {
+                    let v = (self.bpm + (offset as f32) * self.tempo_offset_mul).clamp(0.5, 500.0); //XXX range?
+                    if v != self.bpm {
+                        let msg = OscMessage {
+                            addr: TRANSPORT_BPM_ADDR.to_string(),
+                            args: vec![OscType::Float(v)],
+                        };
+                        self.send_osc(msg).await;
+                    }
+                }
+                Cmd::MulTempoOffset(mul) => {
+                    self.tempo_offset_mul = if mul { 5.0 } else { 1.0 };
+                }
+                Cmd::ToggleTransport => {
+                    let msg = OscMessage {
+                        addr: TRANSPORT_ROLLING_ADDR.to_string(),
+                        args: vec![OscType::Bool(!self.rolling)],
+                    };
+                    self.send_osc(msg).await;
+                }
+
+                Cmd::LightButton { btn, val } => self.light_button(btn, val),
+
+                Cmd::RenderVisibleParams => {
+                    for i in 0..PARAM_PAGE_SIZE {
+                        if let Some(index) = self.visible_params.get(i) {
+                            self.render_param_at(*index, i);
+                        } else {
+                            self.clear_param(i);
+                        }
+                    }
+                }
+                Cmd::LoadSet(index) => {
+                    if index == 0 {
+                        let msg = OscMessage {
+                            addr: INST_UNLOAD_ADDR.to_string(),
+                            args: vec![OscType::Int(-1)],
+                        };
+                        self.send_osc(msg).await;
+                    } else {
+                        if let Some(name) = self.set_names.get(index) {
+                            let msg = OscMessage {
+                                addr: SET_LOAD_ADDR.to_string(),
+                                args: vec![OscType::String(name.clone())],
+                            };
+                            self.send_osc(msg).await;
+                            //wait for `/loaded` to actually indicate load?
+                        }
+                    }
+                }
+                Cmd::LoadSetPreset(index) => {
+                    if let Some(name) = self.set_preset_names.get(index) {
+                        let msg = OscMessage {
+                            addr: SET_PRESETS_LOAD_ADDR.to_string(),
+                            args: vec![OscType::String(name.clone())],
+                        };
+                        self.send_osc(msg).await;
+                    }
+                }
             }
         }
     }
 
+    fn clear_visible_params(&mut self) {
+        if self.visible_params.len() > 0 {
+            self.visible_params.clear();
+            self.clear_params();
+        }
+    }
+
     async fn with_display<T, F: Fn(MutexGuard<'_, MoveDisplay>) -> T>(&self, f: F) -> T {
-        self.context().with_display(f).await
+        let g = self.display.lock().await;
+        f(g)
     }
 
-    /*
-    fn send_midi(&mut self, midi: Midi) {
-        let _ = self.context_mut().midi_out_queue.send(midi);
-    }
-    */
-
-    fn exit_cmd(&self) -> &Option<ExitCmd> {
-        &self.exit_cmd
+    async fn send_osc(&mut self, msg: OscMessage) {
+        if let Some(ws) = self.ws_tx.as_mut() {
+            let packet = OscPacket::Message(msg);
+            if let Ok(msg) = rosc::encoder::encode(&packet) {
+                let _ = ws.send(Message::Binary(msg)).await;
+            }
+        }
     }
 
     fn context(&self) -> &Context {
         self.sm.context()
-    }
-
-    fn context_mut(&mut self) -> &mut Context {
-        self.sm.context_mut()
     }
 }
 
@@ -1436,6 +1658,33 @@ fn draw_title(display: &mut MoveDisplay, title: &str) {
     )
     .draw(display)
     .unwrap();
+}
+
+fn draw_pager(display: &mut MoveDisplay, pages: usize, page: usize) {
+    if pages > 1 {
+        let style = PrimitiveStyleBuilder::new()
+            .stroke_color(BinaryColor::On)
+            .stroke_width(1)
+            .fill_color(BinaryColor::On)
+            .build();
+
+        let step = DISPLAY_WIDTH / pages as u32;
+        let width = step - 4;
+
+        let y = (DISPLAY_HEIGHT - 3) as i32;
+        let mut x = (step / 2) as i32;
+
+        //TODO assert that we can actually draw these
+
+        for p in 0..pages {
+            let height = if p == page { 3 } else { 1 };
+            Rectangle::with_center(Point::new(x, y), Size::new(width, height))
+                .into_styled(style)
+                .draw(display)
+                .unwrap();
+            x = x + (step as i32);
+        }
+    }
 }
 
 fn draw_centered(display: &mut MoveDisplay, text: &str, style: MonoTextStyle<BinaryColor>) {
@@ -1521,7 +1770,7 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     .unwrap();
 }
 
-impl Drop for SharedContext {
+impl Drop for StateController {
     fn drop(&mut self) {
         if let Ok(file) = std::fs::File::create(&self.config_path) {
             let _ = serde_json::to_writer_pretty(file, &self.config);

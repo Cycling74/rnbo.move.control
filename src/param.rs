@@ -81,6 +81,8 @@ pub enum ParamDetail {
 pub struct Param {
     index: usize,
 
+    instance_index: usize,
+
     addr: String,
     addr_norm: String,
 
@@ -92,6 +94,9 @@ pub struct Param {
 }
 
 impl Param {
+    pub fn instance_index(&self) -> usize {
+        self.instance_index
+    }
     pub fn index(&self) -> usize {
         self.index
     }
@@ -170,7 +175,7 @@ impl Param {
         }
     }
 
-    pub fn parse(json: &serde_json::Value) -> Option<Self> {
+    pub fn parse(instance_index: usize, json: &serde_json::Value) -> Option<Self> {
         if let serde_json::Value::Object(obj) = json {
             let range = obj.get("RANGE")?.as_array()?.get(0)?.as_object()?;
             let addr = obj.get("FULL_PATH")?.as_str()?.to_string();
@@ -205,6 +210,7 @@ impl Param {
                     };
                     Some(Param {
                         index,
+                        instance_index,
                         addr,
                         addr_norm,
                         name,
@@ -222,6 +228,7 @@ impl Param {
                     let detail = ParamDetail::Float { val, min, max };
                     Some(Param {
                         index,
+                        instance_index,
                         addr,
                         addr_norm,
                         name,
@@ -238,23 +245,27 @@ impl Param {
     }
 
     //recursively parse for params
-    fn get_all(json: &serde_json::Value, values: &mut Vec<Param>) -> Option<()> {
+    fn get_all(
+        instance_index: usize,
+        json: &serde_json::Value,
+        values: &mut Vec<Param>,
+    ) -> Option<()> {
         for (_k, v) in json.get("CONTENTS")?.as_object()?.iter() {
             let c = v.get("CONTENTS")?.as_object()?;
             if c.contains_key("normalized") {
-                values.push(Self::parse(v)?);
+                values.push(Self::parse(instance_index, v)?);
             } else {
-                Self::get_all(v, values)?
+                Self::get_all(instance_index, v, values)?
             }
         }
         Some(())
     }
 
-    pub fn parse_all(json: &serde_json::Value) -> Option<Vec<Param>> {
+    pub fn parse_all(instance_index: usize, json: &serde_json::Value) -> Option<Vec<Param>> {
         //make sure we're at the right spot
         if json.get("FULL_PATH")?.as_str()?.ends_with("params") {
             let mut values: Vec<Param> = Vec::new();
-            Self::get_all(json, &mut values)?;
+            Self::get_all(instance_index, json, &mut values)?;
             values.sort_by(|a, b| a.index.partial_cmp(&b.index).unwrap());
             Some(values)
         } else {

@@ -4,6 +4,7 @@ use {
         controller::{ExitCmd, StateController},
         display::{DrawCommand, MoveDisplay},
         midi::Midi,
+        view::ParamView,
     },
     clap::Parser,
     embedded_graphics::{
@@ -59,8 +60,10 @@ mod display;
 mod midi;
 mod param;
 mod patcher;
+mod view;
 
 const HTTP_QUERY_DELAY: Duration = Duration::from_millis(200);
+const HTTP_INITIAL_QUERY_DELAY: Duration = Duration::from_millis(500);
 
 struct Driver {
     display: Port<MidiOut>,
@@ -465,12 +468,12 @@ async fn with_client(
 
     let children = children?;
 
-    let mut display = Rc::new(tokio::sync::Mutex::new(display));
+    let display = Rc::new(tokio::sync::Mutex::new(display));
 
     let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(StateController::new(
             midi_out_tx,
-            &mut display,
+            display.clone(),
             volume,
             config.clone(),
         )));
@@ -500,9 +503,12 @@ async fn with_client(
 
     let inst_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
     let sets_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
+    let views_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
     let set_current_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
 
     let inst_path_regex = Regex::new(r"^/rnbo/inst/\d+$").expect("to create instance regex");
+    let set_view_regex =
+        Regex::new(r"^/rnbo/inst/control/sets/views/list/\d+$").expect("to create set view regex");
 
     //http://c74rpi.local:5678
 
@@ -553,6 +559,19 @@ async fn with_client(
         None
     }
 
+    async fn get_views() -> Result<Vec<ParamView>, ()> {
+        let mut views = Vec::new();
+        if let Ok(res) = reqwest::Client::new()
+            .get("http://127.0.0.1:5678/rnbo/inst/control/sets/views/list")
+            .send()
+            .await
+        {
+            let json: serde_json::Value = res.json().await.map_err(|_| ())?;
+            views = ParamView::parse_all(&json);
+        }
+        Ok(views)
+    }
+
     let inst_query_future = async {
         loop {
             tokio::time::sleep(HTTP_QUERY_DELAY).await;
@@ -567,7 +586,7 @@ async fn with_client(
                         {
                             *g = None;
                             let mut g = state.lock().await;
-                            g.set_set_names(&names).await;
+                            g.set_set_names(names).await;
                         }
 
                         if let Some(names) = get_string_range(
@@ -577,7 +596,19 @@ async fn with_client(
                         {
                             *g = None;
                             let mut g = state.lock().await;
-                            g.set_set_preset_names(&names).await;
+                            g.set_set_preset_names(names).await;
+                        }
+                    }
+                }
+            }
+            {
+                let mut g = views_query.lock().await;
+                if let Some(v) = g.deref() {
+                    if *v <= Instant::now() {
+                        if let Ok(views) = get_views().await {
+                            *g = None;
+                            let mut g = state.lock().await;
+                            g.set_param_views(views).await;
                         }
                     }
                 }
@@ -591,7 +622,7 @@ async fn with_client(
                         if let Ok(inst) = get_instances().await {
                             *g = None;
                             let mut g = state.lock().await;
-                            g.set_state(inst);
+                            g.set_instances(inst).await;
                         }
                     }
                 }
@@ -656,22 +687,29 @@ async fn with_client(
                             g.set_ws(tx).await;
                         }
 
+                        let timeout = Instant::now() + HTTP_INITIAL_QUERY_DELAY;
+
                         //do inst query
                         {
                             let mut g = inst_query.lock().await;
-                            *g = Some(Instant::now() + HTTP_QUERY_DELAY);
+                            *g = Some(timeout);
                         }
 
                         //do sets query
                         {
                             let mut g = sets_query.lock().await;
-                            *g = Some(Instant::now() + HTTP_QUERY_DELAY);
+                            *g = Some(timeout);
+                        }
+
+                        {
+                            let mut g = views_query.lock().await;
+                            *g = Some(timeout);
                         }
 
                         //do set current query
                         {
                             let mut g = set_current_query.lock().await;
-                            *g = Some(Instant::now() + HTTP_QUERY_DELAY);
+                            *g = Some(timeout);
                         }
 
                         while let Ok(message) = rx.try_next().await {
@@ -700,7 +738,7 @@ async fn with_client(
                                                                 if let Ok(range) = range {
                                                                     let mut g = state.lock().await;
                                                                     let range = range.range();
-                                                                    g.set_set_names(&range).await;
+                                                                    g.set_set_names(range).await;
                                                                 }
                                                             }
                                                             Some(
@@ -713,13 +751,14 @@ async fn with_client(
                                                                 if let Ok(range) = range {
                                                                     let mut g = state.lock().await;
                                                                     let range = range.range();
-                                                                    g.set_set_preset_names(&range)
+                                                                    g.set_set_preset_names(range)
                                                                         .await;
                                                                 }
                                                             }
-                                                            _ => (),
+                                                            _ => {
+                                                                //println!("data {:?}", cmd);
+                                                            }
                                                         }
-                                                        //println!("data {:?}", cmd);
                                                         None
                                                         /*
                                                         data
@@ -731,10 +770,13 @@ async fn with_client(
                                                     "PATH_ADDED" | "PATH_REMOVED" => data.as_str(),
                                                     _ => None,
                                                 } {
+                                                    //println!("path {:?}", path);
                                                     //added or removed
                                                     if inst_path_regex.is_match(path) {
-                                                        println!("update instances");
                                                         let mut g = inst_query.lock().await;
+                                                        *g = Some(Instant::now());
+                                                    } else if set_view_regex.is_match(path) {
+                                                        let mut g = views_query.lock().await;
                                                         *g = Some(Instant::now());
                                                     }
                                                 }
