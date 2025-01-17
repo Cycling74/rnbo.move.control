@@ -928,6 +928,7 @@ impl StateController {
                     self.sort_param_views();
                     let mut common = self.sm.context().common();
                     self.update_views(&mut common).await;
+                    self.handle_event(Events::SetViewListChanged).await;
                 }
                 _ => (),
             };
