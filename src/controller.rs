@@ -53,6 +53,7 @@ pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
 pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
 pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loaded";
 pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
+pub const SET_VIEWS_ORDER_ADDR: &str = "/rnbo/inst/control/sets/views/order";
 
 const VOLUME_WHEEL_BUTTON: usize = 8;
 const VOLUME_WHEEL_ENCODER: usize = 9;
@@ -427,6 +428,7 @@ pub struct StateController {
     param_norm_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
 
     param_views: Vec<ParamView>,
+    param_view_order: Vec<usize>,
     param_view_names: Vec<String>,
     param_view_params: Vec<Vec<usize>>,
     param_view_param_lookup: HashMap<String, usize>, //OSC addr -> index into self.param_views
@@ -587,6 +589,7 @@ impl StateController {
             param_norm_lookup: HashMap::new(),
 
             param_views: Vec::new(),
+            param_view_order: Vec::new(),
             param_view_names: Vec::new(),
             param_view_params: Vec::new(),
             param_view_param_lookup: HashMap::new(),
@@ -714,7 +717,7 @@ impl StateController {
                 .map(|p| (p.instance_index(), p.index()))
                 .collect();
             self.param_views
-                .push(ParamView::new("Default".to_string(), 0, params, 0));
+                .push(ParamView::new("Default".to_string(), params, 0));
         }
 
         self.param_view_names.clear();
@@ -735,8 +738,7 @@ impl StateController {
                 }
             }
             if params.len() > 0 {
-                self.param_view_names
-                    .push(format!("{}: {}", v.index(), v.name()));
+                self.param_view_names.push(v.name().to_string());
                 common
                     .param_view_pages
                     .push(1 + params.len() / PARAM_PAGE_SIZE);
@@ -746,9 +748,25 @@ impl StateController {
         //TODO check that current view is valid?
     }
 
+    fn sort_param_views(&mut self) {
+        let mut sorted = Vec::new();
+
+        for i in self.param_view_order.iter() {
+            if let Some(v) = self.param_views.iter().position(|v| v.index() == *i) {
+                sorted.push(self.param_views.swap_remove(v)); //swap remove is more efficient
+            } else {
+                //ERROR
+            }
+        }
+        //if there are any left over, push them all the the back
+        sorted.append(&mut self.param_views);
+
+        std::mem::swap(&mut sorted, &mut self.param_views);
+    }
+
     pub async fn set_param_views(&mut self, mut views: Vec<ParamView>) {
-        views.sort_by_key(|v| (v.sort_order(), v.index()));
         self.param_views = views;
+        self.sort_param_views();
 
         //compute lookup
         self.param_view_param_lookup.clear();
@@ -895,6 +913,24 @@ impl StateController {
                     }
                 }
             }
+        } else {
+            match msg.addr.as_str() {
+                SET_VIEWS_ORDER_ADDR => {
+                    self.param_view_order.clear();
+                    for arg in msg.args.iter() {
+                        match arg {
+                            OscType::Int(i) if *i >= 0 => {
+                                self.param_view_order.push(*i as usize);
+                            }
+                            _ => (),
+                        }
+                    }
+                    self.sort_param_views();
+                    let mut common = self.sm.context().common();
+                    self.update_views(&mut common).await;
+                }
+                _ => (),
+            };
         }
     }
 

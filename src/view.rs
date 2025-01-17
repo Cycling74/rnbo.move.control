@@ -3,7 +3,6 @@ use {serde::Deserialize, std::collections::HashMap};
 #[derive(Debug, Clone)]
 pub struct ParamView {
     name: String,
-    sort_order: isize,
     params: Vec<(usize, usize)>,
     index: usize,
 }
@@ -25,14 +24,12 @@ struct OSCQueryContents<T> {
 struct ParamViewListItem {
     name: OSCQueryItem<String>,
     params: OSCQueryItem<Vec<String>>,
-    sort_order: OSCQueryItem<isize>,
 }
 
 impl ParamView {
-    pub fn new(name: String, sort_order: isize, params: Vec<(usize, usize)>, index: usize) -> Self {
+    pub fn new(name: String, params: Vec<(usize, usize)>, index: usize) -> Self {
         Self {
             name,
-            sort_order,
             params,
             index,
         }
@@ -47,14 +44,6 @@ impl ParamView {
 
     pub fn set_name(&mut self, name: String) {
         self.name = name;
-    }
-
-    pub fn sort_order(&self) -> isize {
-        self.sort_order
-    }
-
-    pub fn set_sort_order(&mut self, sort_order: isize) {
-        self.sort_order = sort_order;
     }
 
     pub fn params(&self) -> &Vec<(usize, usize)> {
@@ -97,7 +86,6 @@ impl ParamView {
                                 index,
                                 name: value.name.value.clone(),
                                 params,
-                                sort_order: value.sort_order.value,
                             })
                         }
                     }
