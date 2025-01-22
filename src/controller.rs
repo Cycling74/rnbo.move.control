@@ -61,12 +61,6 @@ const JOG_WHEEL_ENCODER: usize = 10;
 
 const PARAM_PAGE_SIZE: usize = 8;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum ExitCmd {
-    Exit,
-    LaunchMove,
-}
-
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -395,7 +389,7 @@ pub struct StateController {
 
     sysex: Vec<u8>,
 
-    exit_cmd: Option<ExitCmd>,
+    exit: bool,
 
     sm: StateMachine,
     viewsm: view::StateMachine,
@@ -566,7 +560,7 @@ impl StateController {
             bpm: 100.0,
             tempo_offset_mul: 1.0,
 
-            exit_cmd: None,
+            exit: false,
 
             set_current_name: None,
             set_preset_loaded_name: None,
@@ -959,7 +953,7 @@ impl StateController {
         }
     }
 
-    pub async fn handle_midi(&mut self, bytes: &[u8]) -> Option<ExitCmd> {
+    pub async fn handle_midi(&mut self, bytes: &[u8]) -> bool {
         //println!("got midi {:02x?}", bytes);
 
         //volume 0x08
@@ -1087,7 +1081,7 @@ impl StateController {
                 println!("got other byte midi {:?}", bytes);
             }
         };
-        self.exit_cmd
+        self.exit
     }
 
     async fn display_centered(&mut self, text: &str) {
@@ -1366,7 +1360,7 @@ impl StateController {
                 States::LaunchMove => {
                     self.display_centered("Launching Move").await;
                     tokio::time::sleep(Duration::from_millis(500)).await;
-                    self.exit_cmd = Some(ExitCmd::LaunchMove);
+                    self.exit = true;
                 }
                 States::PowerOff => {
                     self.display_centered("Powering Down").await;
