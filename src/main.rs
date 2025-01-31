@@ -242,15 +242,18 @@ async fn with_client(
     //add properties
 
     let hidden = jack::Property::new("rnbo-graph-hidden", Some("text/plain".to_string()));
-    let graphio = jack::Property::new("rnbo-graph-user-io", Some("text/plain".to_string()));
+
+    //playback == sink, capture == src
+    let graph_src = jack::Property::new("rnbo-graph-user-src", Some("text/plain".to_string()));
+    let graph_sink = jack::Property::new("rnbo-graph-user-sink", Some("text/plain".to_string()));
 
     port_set_group(&c, &display_port, &hidden);
     port_set_group(&c, &midi_control_out, &hidden);
     port_set_group(&c, &midi_in, &hidden);
     port_set_group(&c, &system_display_port, &hidden);
 
-    port_set_group(&c, &system_midi_out_port, &graphio);
-    port_set_group(&c, &midi_thru, &graphio);
+    port_set_group(&c, &system_midi_out_port, &graph_src);
+    port_set_group(&c, &midi_thru, &graph_src);
 
     let pretty = jack::Property::new("Move MIDI Out", Some("text/plain".to_string()));
     port_set_pretty(&c, &system_midi_out_port, &pretty);
@@ -269,9 +272,9 @@ async fn with_client(
             .port_by_name("system:midi_playback")
             .expect("error getting system:midi_playback");
 
-        port_set_group(&c, &in1, &graphio);
-        port_set_group(&c, &in2, &graphio);
-        port_set_group(&c, &midi, &graphio);
+        port_set_group(&c, &in1, &graph_src);
+        port_set_group(&c, &in2, &graph_src);
+        port_set_group(&c, &midi, &graph_sink);
 
         let pretty = jack::Property::new("Move In Left", Some("text/plain".to_string()));
         port_set_pretty(&c, &in1, &pretty);
@@ -318,8 +321,8 @@ async fn with_client(
             .register_port("out2", AudioOut)
             .expect("error creating out2");
 
-        port_set_group(&c, &in1, &graphio);
-        port_set_group(&c, &in2, &graphio);
+        port_set_group(&c, &in1, &graph_sink);
+        port_set_group(&c, &in2, &graph_sink);
 
         let pretty = jack::Property::new("Move Out Left", Some("text/plain".to_string()));
         port_set_pretty(&c, &in1, &pretty);
