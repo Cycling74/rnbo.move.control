@@ -21,6 +21,7 @@ use {
     patcher::PatcherInst,
     regex::Regex,
     reqwest_websocket::{Message, RequestBuilderExt},
+    rlimit::setrlimit,
     rosc::OscPacket,
     serde::{Deserialize, Serialize},
     std::process::{Child, Command, Stdio},
@@ -839,6 +840,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         PathBuf::from(config)
     };
+
+    //request changes to resource limits
+    setrlimit(
+        rlimit::Resource::MEMLOCK,
+        rlimit::INFINITY,
+        rlimit::INFINITY,
+    )
+    .expect("to set memlock to INFINITY");
+    setrlimit(rlimit::Resource::RTPRIO, 95, 95).expect("to set rtprio to 95");
 
     let mut tostartup: Vec<StartupProcess> = Vec::new();
     let mut jackstartup: Option<StartupProcess> = None;
