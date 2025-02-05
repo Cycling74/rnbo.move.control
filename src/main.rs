@@ -45,11 +45,15 @@ use {
 #[command(version, about, long_about = None)]
 struct Args {
     /// path to configuration json
-    #[arg(short, long, default_value = "~/rnbo/rnbomovecontrol.json")]
+    #[arg(short, long, default_value = "/data/UserData/rnbo/config/control.json")]
     config: String,
 
     /// path to startup config json
-    #[arg(short, long)]
+    #[arg(
+        short,
+        long,
+        default_value = "/data/UserData/rnbo/config/control-startup.json"
+    )]
     startup: Option<String>,
 }
 
@@ -830,6 +834,11 @@ async fn with_client(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    //set HOME if it doesn't already exist
+    if std::env::var_os("HOME").is_none() {
+        std::env::set_var("HOME", "/data/UserData/");
+    }
+
     let args = Args::parse();
 
     let config = args.config;
