@@ -1,7 +1,7 @@
 use {
     crate::{
         config::*,
-        controller::StateController,
+        controller::{Caps, StateController},
         display::{DrawCommand, MoveDisplay},
         midi::Midi,
         view::ParamView,
@@ -218,6 +218,7 @@ async fn with_client(
     c: Client,
     startup: &Vec<StartupProcess>,
     config: &PathBuf,
+    caps: Caps,
 ) -> Result<(), Box<dyn Error>> {
     let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
     let (midi_out_tx, midi_out_rx) = sync_mpsc::sync_channel(1024);
@@ -395,15 +396,26 @@ async fn with_client(
         volumeclient
     };
 
-    let style = MonoTextStyle::new(&profont::PROFONT_24_POINT, BinaryColor::On);
     let size = display.size();
-    Text::with_alignment(
-        "RNBO\non Move",
-        Point::new(size.width as i32 / 2, size.height as i32 / 2),
-        style,
-        Alignment::Center,
-    )
-    .draw(&mut display)?;
+    if caps.all() {
+        let style = MonoTextStyle::new(&profont::PROFONT_24_POINT, BinaryColor::On);
+        Text::with_alignment(
+            "RNBO\non Move",
+            Point::new(size.width as i32 / 2, size.height as i32 / 2),
+            style,
+            Alignment::Center,
+        )
+        .draw(&mut display)?;
+    } else {
+        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+        Text::with_alignment(
+            "RNBO\non Move\nREDUCED\nCAPABILITIES",
+            Point::new(size.width as i32 / 2, size.height as i32 / 4),
+            style,
+            Alignment::Center,
+        )
+        .draw(&mut display)?;
+    }
 
     let driver = Driver {
         display: display_port,
@@ -851,13 +863,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     //request changes to resource limits
-    setrlimit(
+    let memlock = setrlimit(
         rlimit::Resource::MEMLOCK,
         rlimit::INFINITY,
         rlimit::INFINITY,
     )
-    .expect("to set memlock to INFINITY");
-    setrlimit(rlimit::Resource::RTPRIO, 95, 95).expect("to set rtprio to 95");
+    .is_ok();
+    let rtprio = setrlimit(rlimit::Resource::RTPRIO, 95, 95).is_ok();
+
+    let caps = Caps { memlock, rtprio };
 
     let mut tostartup: Vec<StartupProcess> = Vec::new();
     let mut jackstartup: Option<StartupProcess> = None;
@@ -908,7 +922,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         //wait until jack exists
         if let Ok((c, _status)) = Client::new(name, ClientOptions::empty()) {
-            let res = with_client(c, &tostartup, &config).await;
+            let res = with_client(c, &tostartup, &config, caps).await;
             match res {
                 Ok(_) => {
                     break;

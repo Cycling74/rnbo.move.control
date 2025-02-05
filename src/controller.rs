@@ -380,6 +380,18 @@ smlang::statemachine! {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub struct Caps {
+    pub memlock: bool,
+    pub rtprio: bool,
+}
+
+impl Caps {
+    pub fn all(&self) -> bool {
+        self.memlock && self.rtprio
+    }
+}
+
 pub struct StateController {
     set_current_name: Option<String>,
     set_preset_loaded_name: Option<String>,
