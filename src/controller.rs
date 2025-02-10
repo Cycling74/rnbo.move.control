@@ -172,6 +172,8 @@ enum Events {
     SetPresetLoadedChanged,
 
     SetViewListChanged,
+
+    ChildProcessError,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -290,6 +292,8 @@ mod top {
 
             _ + BtnDown(Button::Play) / ctx.emit(Cmd::ToggleTransport);,
 
+            _ + ChildProcessError = DisplayChildProcessError,
+            DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
         }
     }
 }
@@ -442,6 +446,8 @@ pub struct StateController {
     set_names: Vec<String>,
     set_preset_names: Vec<String>,
     patcher_instance_names: Vec<String>,
+
+    child_process_error: Option<(String, std::io::Result<std::process::ExitStatus>)>,
 }
 
 #[derive(Clone, Debug)]
@@ -603,6 +609,8 @@ impl StateController {
             set_names: Vec::new(),
             set_preset_names: Vec::new(),
             patcher_instance_names: Vec::new(),
+
+            child_process_error: None,
         };
 
         //States::Init not transitioned to so, do setup here
@@ -785,6 +793,15 @@ impl StateController {
         self.update_views(&mut common).await;
         self.update_common(common);
         self.handle_event(Events::SetViewListChanged).await;
+    }
+
+    pub async fn display_child_process_error(
+        &mut self,
+        name: &str,
+        status: std::io::Result<std::process::ExitStatus>,
+    ) {
+        self.child_process_error = Some((name.to_string(), status));
+        self.handle_event(Events::ChildProcessError).await;
     }
 
     pub async fn handle_osc(&mut self, msg: &OscMessage) {
@@ -1398,12 +1415,32 @@ impl StateController {
                     }
                     let volume = self.volume();
                     self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                    self.display_centered("Volume").await;
                     self.with_display(|mut display| {
                         display.clear(BinaryColor::Off).unwrap();
                         draw_title(&mut display, &"Volume");
                         let volume = format!("{:.2}", volume);
                         draw_centered(&mut display, volume.as_str(), TITLE_TEXT_STYLE);
+                    })
+                    .await;
+                }
+                States::DisplayChildProcessError => {
+                    self.clear_visible_params();
+                    let name = self.child_process_error.as_ref().unwrap().0.clone();
+                    let p = std::path::Path::new(name.as_str());
+                    let prog = p.file_name().unwrap().to_str().unwrap();
+                    let msg = format!("{}\ncrashed\nreport to beta list\nthen hit power button\nto power down\nor return to move", prog);
+
+                    let style = MonoTextStyle::new(&profont::PROFONT_9_POINT, BinaryColor::On);
+                    self.with_display(|mut display| {
+                        display.clear(BinaryColor::Off).unwrap();
+                        Text::with_alignment(
+                            msg.as_str(),
+                            Point::new(DISPLAY_WIDTH as i32 / 2, 6),
+                            style,
+                            Alignment::Center,
+                        )
+                        .draw(display.deref_mut())
+                        .unwrap();
                     })
                     .await;
                 }

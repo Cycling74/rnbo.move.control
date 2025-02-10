@@ -70,6 +70,8 @@ mod view;
 const HTTP_QUERY_DELAY: Duration = Duration::from_millis(200);
 const HTTP_INITIAL_QUERY_DELAY: Duration = Duration::from_millis(500);
 
+const POLL_CHILD_STATUS_MS: u64 = 2000;
+
 struct Driver {
     display: Port<MidiOut>,
     midi_thru: Port<MidiOut>,
@@ -470,11 +472,11 @@ async fn with_client(
             .unwrap();
     }
 
-    let children: Result<Vec<Child>, _> = startup
+    let children: Result<Vec<(String, Child)>, _> = startup
         .iter()
         .map(|s| {
             let mut cmd = Command::new(s.cmd.clone());
-            if let Some(args) = s.args.clone() {
+            let child = if let Some(args) = s.args.clone() {
                 cmd.args(args)
             } else {
                 &mut cmd
@@ -482,11 +484,16 @@ async fn with_client(
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
-            .spawn()
+            .spawn();
+
+            match child {
+                Ok(child) => Ok((s.cmd.clone(), child)),
+                Err(e) => Err(e),
+            }
         })
         .collect();
 
-    let children = children?;
+    let mut children = children?;
 
     let display = Rc::new(tokio::sync::Mutex::new(display));
 
@@ -682,6 +689,7 @@ async fn with_client(
     }
 
     let web_future = async {
+        let state = state.clone();
         loop {
             if let Ok(_res) = reqwest::Client::new()
                 .get("http://127.0.0.1:5678/rnbo")
@@ -828,17 +836,42 @@ async fn with_client(
         }
     };
 
+    let children_future = async {
+        let state = state.clone();
+        let mut failure = false;
+        while !failure {
+            for child in children.iter_mut() {
+                match child.1.try_wait() {
+                    Ok(None) => (),
+                    Ok(Some(status)) => {
+                        let mut g = state.lock().await;
+                        g.display_child_process_error(child.0.as_str(), Ok(status))
+                            .await;
+                        failure = true;
+                    }
+                    Err(e) => (),
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(POLL_CHILD_STATUS_MS)).await;
+        }
+        loop {
+            //keep looping some user can see display and exit or start move
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+        }
+    };
+
     let signal_future = async {
         tokio::signal::ctrl_c().await.unwrap();
     };
     tokio::select! {
         _ = display_future => (), _ = web_future => (),  _ = inst_query_future => (),
         _ = signal_future => (), _ = process_midi => (), _ = disconnect_future => (),
+        _ = children_future => ()
     };
     let _ = c.deactivate();
 
     for mut child in children {
-        child.kill()?
+        child.1.kill()?
     }
 
     Ok(())
