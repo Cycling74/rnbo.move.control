@@ -691,11 +691,18 @@ async fn with_client(
     let web_future = async {
         let state = state.clone();
         loop {
-            if let Ok(_res) = reqwest::Client::new()
-                .get("http://127.0.0.1:5678/rnbo")
+            if let Ok(res) = reqwest::Client::new()
+                .get("http://127.0.0.1:5678/rnbo/info/version?VALUE")
                 .send()
                 .await
             {
+                let version: serde_json::Value = res.json().await.unwrap();
+                let version = version.get("VALUE").unwrap();
+                if let serde_json::Value::String(version) = version {
+                    let mut g = state.lock().await;
+                    g.set_runner_version(version.as_str());
+                }
+
                 if let Ok(res) = reqwest::Client::new()
                     .get("http://127.0.0.1:5678")
                     .upgrade()

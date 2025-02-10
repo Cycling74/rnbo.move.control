@@ -35,6 +35,8 @@ use {
     tokio::sync::{Mutex, MutexGuard},
 };
 
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
 const MENU_MIDI: u8 = 0x32;
 const BACK_MIDI: u8 = 0x33;
 const PLAY_MIDI: u8 = 0x55;
@@ -196,13 +198,20 @@ impl ParamPage {
     }
 }
 
-const MENU_ITEMS: [&'static str; 4] = ["Set Presets", "Sets", "Patcher Instances", "Tempo"];
+const MENU_ITEMS: [&'static str; 5] = [
+    "Set Presets",
+    "Sets",
+    "Patcher Instances",
+    "Tempo",
+    "Versions",
+];
 const EXIT_MENU: [&'static str; 2] = ["Power Down", "Launch Move"];
 
 const SET_PRESETS_INDEX: usize = 0;
 const SETS_INDEX: usize = 1;
 const PATCHER_INSTANCES_INDEX: usize = 2;
 const TEMPO_INDEX: usize = 3;
+const VERSION_INDEX: usize = 4;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Cmd {
@@ -338,6 +347,7 @@ smlang::statemachine! {
             = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == VERSION_INDEX] = Versions,
 
         SetsList(usize) + BtnDown(Button::Back) = Menu(SETS_INDEX),
         SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_count() > *state + 1] = SetsList(*state + 1),
@@ -381,6 +391,8 @@ smlang::statemachine! {
         TempoEditor + BtnDown(Button::JogWheel) / ctx.emit(Cmd::MulTempoOffset(true)); = TempoEditor,
         TempoEditor + BtnUp(Button::JogWheel) / ctx.emit(Cmd::MulTempoOffset(false));  = TempoEditor,
         TempoEditor + Tempo(_) = TempoEditor,
+
+        Versions + BtnDown(Button::Back) = Menu(VERSION_INDEX),
     }
 }
 
@@ -448,6 +460,8 @@ pub struct StateController {
     patcher_instance_names: Vec<String>,
 
     child_process_error: Option<(String, std::io::Result<std::process::ExitStatus>)>,
+
+    runner_rnbo_version: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -611,6 +625,8 @@ impl StateController {
             patcher_instance_names: Vec::new(),
 
             child_process_error: None,
+
+            runner_rnbo_version: None,
         };
 
         //States::Init not transitioned to so, do setup here
@@ -802,6 +818,10 @@ impl StateController {
     ) {
         self.child_process_error = Some((name.to_string(), status));
         self.handle_event(Events::ChildProcessError).await;
+    }
+
+    pub fn set_runner_version(&mut self, runner_rnbo_version: &str) {
+        self.runner_rnbo_version = Some(runner_rnbo_version.to_string());
     }
 
     pub async fn handle_osc(&mut self, msg: &OscMessage) {
@@ -1261,6 +1281,35 @@ impl StateController {
                     draw_title(&mut display, &"Tempo (bpm)");
                     let bpm = format!("{:.1}", self.bpm);
                     draw_centered(&mut display, bpm.as_str(), TITLE_TEXT_STYLE);
+                })
+                .await;
+            }
+            States::Versions => {
+                self.clear_visible_params();
+                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                self.with_display(|mut display| {
+                    display.clear(BinaryColor::Off).unwrap();
+
+                    let versions = format!(
+                        "rnbo.move.control:\n{}\nrnbo library:\n{}",
+                        VERSION,
+                        self.runner_rnbo_version
+                            .clone()
+                            .unwrap_or("unknown".to_string())
+                    );
+
+                    display.clear(BinaryColor::Off).unwrap();
+
+                    draw_title(&mut display, "Versions");
+                    let style = MonoTextStyle::new(&profont::PROFONT_9_POINT, BinaryColor::On);
+                    Text::with_alignment(
+                        versions.as_str(),
+                        Point::new(0, 24),
+                        style,
+                        Alignment::Left,
+                    )
+                    .draw(display.deref_mut())
+                    .unwrap();
                 })
                 .await;
             }
