@@ -47,9 +47,10 @@ class RNBOMoveControl(ConanFile):
 					return
 		raise Exception("cannot find version info in Cargo.toml")
 
-	#def package(self):
-
 	def build(self):
 		with open(os.path.join(self.source_folder, "build.sh"), "w") as f:
 			f.write(BUILD_SCRIPT)
 		self.run("docker run --user node -v $(pwd):/build --platform linux/amd64 %s /bin/bash /build/build.sh" % self.options.dockerimage, cwd=self.source_folder)
+
+	def package(self):
+		self.copy("target/aarch64-unknown-linux-gnu/release/rnbomovecontrol", dst="bin")
