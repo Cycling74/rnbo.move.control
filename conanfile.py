@@ -34,8 +34,8 @@ class RNBOMoveControl(ConanFile):
 	user = "c74"
 	channel = "move"
 	settings = { "os": ["Linux"], "compiler": {"gcc": {"version": ["11.4"], "libcxx": "libstdc++11"}}, "arch": "armv8" }
-	options = { "dockerimage": ["ANY"] }
-	default_options = { "dockerimage": "rnbo.move.takeover:0.1" }
+	options = { "dockerimage": ["ANY"], "conandatadir": ["ANY"] }
+	default_options = { "dockerimage": "rnbo.move.takeover:0.1", "conandatadir": "~/Documents/move-conan-data" }
 
 	def set_version(self):
 		with open("Cargo.toml") as f:
@@ -50,7 +50,8 @@ class RNBOMoveControl(ConanFile):
 	def build(self):
 		with open(os.path.join(self.source_folder, "build.sh"), "w") as f:
 			f.write(BUILD_SCRIPT)
-		self.run("docker run --user node -v $(pwd):/build --platform linux/amd64 %s /bin/bash /build/build.sh" % self.options.dockerimage, cwd=self.source_folder)
+		self.run("mkdir -p %s" % self.options.conandatadir)
+		self.run("docker run --user node -v $(pwd):/build -v %s:/home/node/.conan/data --platform linux/amd64 %s /bin/bash /build/build.sh" % (self.options.conandatadir, self.options.dockerimage), cwd=self.source_folder)
 
 	def package(self):
 		self.copy("rnbomovecontrol", dst="bin", src="target/aarch64-unknown-linux-gnu/release/")
