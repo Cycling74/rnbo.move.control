@@ -54,3 +54,4 @@ class RNBOMoveControl(ConanFile):
 
 	def package(self):
 		self.copy("rnbomovecontrol", dst="bin", src="target/aarch64-unknown-linux-gnu/release/")
+		self.copy("config/control-startup.json")
