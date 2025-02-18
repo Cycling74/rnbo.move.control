@@ -891,6 +891,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::env::set_var("HOME", "/data/UserData/");
     }
 
+    let formatter = syslog::Formatter3164 {
+        facility: syslog::Facility::LOG_USER,
+        hostname: None,
+        process: "rnbomovecontrol".to_string(),
+        pid: std::process::id(),
+    };
+    let mut logger = syslog::unix(formatter).expect("to get syslog");
+    let _ = logger.info("starting");
+
     let args = Args::parse();
 
     let config = args.config;
