@@ -57,7 +57,9 @@ pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loade
 pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
 pub const SET_VIEWS_ORDER_ADDR: &str = "/rnbo/inst/control/sets/views/order";
 
-const VOLUME_WHEEL_BUTTON: usize = 8;
+const JOG_WHEEL_TOUCH: usize = 9;
+const VOLUME_WHEEL_TOUCH: usize = 8;
+
 const VOLUME_WHEEL_ENCODER: usize = 9;
 const JOG_WHEEL_ENCODER: usize = 10;
 
@@ -246,8 +248,8 @@ enum Cmd {
 
 mod top {
     use super::{
-        Button, Cmd, Context, Events, PowerCommand, EXIT_MENU, JOG_WHEEL_ENCODER,
-        VOLUME_WHEEL_BUTTON, VOLUME_WHEEL_ENCODER,
+        Button, Cmd, Context, Events, PowerCommand, EXIT_MENU, JOG_WHEEL_ENCODER, JOG_WHEEL_TOUCH,
+        VOLUME_WHEEL_ENCODER, VOLUME_WHEEL_TOUCH,
     };
 
     const POWER_DOWN_INDEX: usize = 0;
@@ -265,10 +267,13 @@ mod top {
             *Init + BtnDown(Button::Menu) = Main,
             Init + BtnDown(Button::JogWheel) = Main,
             Init + BtnDown(Button::Back) = Main,
+            Init + EncTouch(JOG_WHEEL_TOUCH) = Main,
 
-            VolumeEditor(LastView) + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
+            Init + EncTouch(VOLUME_WHEEL_TOUCH) = VolumeEditor(LastView::Main),
+            Init + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::Main),
+            Init + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::Main),
 
-            Main + EncTouch(VOLUME_WHEEL_BUTTON) = VolumeEditor(LastView::Main),
+            Main + EncTouch(VOLUME_WHEEL_TOUCH) = VolumeEditor(LastView::Main),
             Main + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::Main),
             Main + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::Main),
 
@@ -276,7 +281,7 @@ mod top {
             Main + BtnDown(Button::Menu) / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
             ParamViews + BtnDown(Button::Menu)/ ctx.emit(Cmd::RenderVisibleParams);  = Main,
 
-            ParamViews + EncTouch(VOLUME_WHEEL_BUTTON)  = VolumeEditor(LastView::ParamViews),
+            ParamViews + EncTouch(VOLUME_WHEEL_TOUCH)  = VolumeEditor(LastView::ParamViews),
             ParamViews + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::ParamViews),
             ParamViews + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::ParamViews),
 
@@ -286,8 +291,8 @@ mod top {
             VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
             VolumeEditor(LastView) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(*state),
             VolumeEditor(LastView) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(*state),
-            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON && *state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = Main,
-            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_BUTTON && *state == LastView::ParamViews] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::ParamViews] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
 
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == POWER_DOWN_INDEX] = PowerOff,
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == LAUNCH_MOVE_INDEX] = LaunchMove,
@@ -631,6 +636,7 @@ impl StateController {
 
         //States::Init not transitioned to so, do setup here
         s.light_button(MENU_MIDI, MoveColor::LightGray as _);
+        s.light_button(BACK_MIDI, MoveColor::LightGray as _);
         s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
 
         s
