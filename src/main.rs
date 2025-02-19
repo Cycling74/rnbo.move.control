@@ -1075,7 +1075,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let pollms = 500;
     loop {
         tokio::time::sleep(Duration::from_millis(10)).await;
-        if let Ok((c, _status)) = Client::new(name, ClientOptions::empty()) {
+        if let Ok((c, _status)) = Client::new(name, ClientOptions::NO_START_SERVER) {
             if let Err(e) = with_client(c, &mut logger, &tostartup, &config, caps).await {
                 let _ = logger.err(e);
             }
