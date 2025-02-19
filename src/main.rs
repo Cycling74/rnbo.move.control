@@ -24,7 +24,7 @@ use {
     rlimit::setrlimit,
     rosc::OscPacket,
     serde::{Deserialize, Serialize},
-    std::process::{Child, Command, Stdio},
+    std::process::Stdio,
     std::{
         collections::HashMap,
         error::Error,
@@ -38,7 +38,10 @@ use {
         thread,
         time::{Duration, Instant},
     },
-    tokio::sync::mpsc as async_mpsc,
+    tokio::{
+        io::{AsyncBufReadExt, BufReader},
+        sync::mpsc as async_mpsc,
+    },
 };
 
 #[derive(Parser, Debug)]
@@ -218,6 +221,7 @@ fn port_set_pretty<PS: jack::PortSpec + Send>(
 
 async fn with_client(
     c: Client,
+    logger: &mut syslog::Logger<syslog::LoggerBackend, syslog::Formatter3164>,
     startup: &Vec<StartupProcess>,
     config: &PathBuf,
     caps: Caps,
@@ -311,7 +315,7 @@ async fn with_client(
 
     //volume control
     let volume = Arc::new(AtomicU8::new(0));
-    let _volumeclient = {
+    let volumeclient = {
         let volume = volume.clone();
         let (volumeclient, _status) =
             jack::Client::new("move-volume", jack::ClientOptions::empty()).unwrap();
@@ -471,29 +475,6 @@ async fn with_client(
         c.connect_ports_by_name("system:midi_capture", format!("{}:midi_in", name).as_str())
             .unwrap();
     }
-
-    let children: Result<Vec<(String, Child)>, _> = startup
-        .iter()
-        .map(|s| {
-            let mut cmd = Command::new(s.cmd.clone());
-            let child = if let Some(args) = s.args.clone() {
-                cmd.args(args)
-            } else {
-                &mut cmd
-            }
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .spawn();
-
-            match child {
-                Ok(child) => Ok((s.cmd.clone(), child)),
-                Err(e) => Err(e),
-            }
-        })
-        .collect();
-
-    let mut children = children?;
 
     let display = Rc::new(tokio::sync::Mutex::new(display));
 
@@ -843,27 +824,104 @@ async fn with_client(
         }
     };
 
-    let children_future = async {
+    let children_future = {
+        let mut handles = tokio::task::JoinSet::new();
+
+        for s in startup.iter() {
+            let _ = logger.info(format!("spawning {}", s.cmd));
+
+            //let state = state.clone();
+            let mut cmd = tokio::process::Command::new(s.cmd.clone());
+            let mut child = if let Some(args) = s.args.clone() {
+                cmd.args(args)
+            } else {
+                &mut cmd
+            }
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("to spawn child");
+
+            let stdout = child.stdout.take().expect("to get child stdout");
+            let stderr = child.stderr.take().expect("to get child stderr");
+            let mut stdout_reader = BufReader::new(stdout).lines();
+            let mut stderr_reader = BufReader::new(stderr).lines();
+
+            let path = std::path::Path::new(s.cmd.as_str());
+            let name = path
+                .file_name()
+                .expect("to get file name")
+                .to_os_string()
+                .into_string()
+                .expect("to get string");
+            handles.spawn(async move {
+                let formatter = syslog::Formatter3164 {
+                    facility: syslog::Facility::LOG_USER,
+                    hostname: None,
+                    process: name.clone(),
+                    pid: child.id().unwrap_or(0),
+                };
+                let mut logger = syslog::unix(formatter).expect("to get syslog");
+                let exit_status;
+                loop {
+                    tokio::select! {
+                        result = stdout_reader.next_line() => {
+                            match result {
+                                Ok(Some(line)) => {
+                                    let _ = logger.info(line);
+                                },
+                                Err(e) => {
+                                    //XXX should actually go in top level log but, whatever
+                                    let _ = logger.err(e);
+                                },
+                                _ => (),
+                            }
+                        }
+                        result = stderr_reader.next_line() => {
+                            match result {
+                                Ok(Some(line)) => {
+                                    let _ = logger.err(line);
+                                },
+                                Err(e) => {
+                                    //XXX should actually go in top level log but, whatever
+                                    let _ = logger.err(e);
+                                },
+                                _ => (),
+                            }
+                        }
+                        result = child.wait() => {
+                            exit_status = result;
+                            break // child process exited
+                        }
+                    };
+                }
+                (name, exit_status)
+            });
+        }
+
         let state = state.clone();
-        let mut failure = false;
-        while !failure {
-            for child in children.iter_mut() {
-                match child.1.try_wait() {
-                    Ok(None) => (),
-                    Ok(Some(status)) => {
+        async move {
+            if let Some(res) = handles.join_next().await {
+                match res {
+                    Ok((name, status)) => {
+                        let _ = logger.err(format!(
+                            "child process {} exited early with status {:?}",
+                            name, status
+                        ));
                         let mut g = state.lock().await;
-                        g.display_child_process_error(child.0.as_str(), Ok(status))
-                            .await;
-                        failure = true;
+                        g.display_child_process_error(name.as_str(), status).await;
                     }
-                    Err(e) => (),
+                    Err(e) => {
+                        let _ = logger.err(e);
+                    }
                 }
             }
-            tokio::time::sleep(Duration::from_millis(POLL_CHILD_STATUS_MS)).await;
-        }
-        loop {
-            //keep looping some user can see display and exit or start move
-            tokio::time::sleep(Duration::from_millis(1000)).await;
+            loop {
+                //keep looping some user can see display and exit or start move
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+            }
         }
     };
 
@@ -875,11 +933,9 @@ async fn with_client(
         _ = signal_future => (), _ = process_midi => (), _ = disconnect_future => (),
         _ = children_future => ()
     };
-    let _ = c.deactivate();
 
-    for mut child in children {
-        child.1.kill()?
-    }
+    let _ = volumeclient.deactivate();
+    let _ = c.deactivate();
 
     Ok(())
 }
@@ -890,15 +946,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if std::env::var_os("HOME").is_none() {
         std::env::set_var("HOME", "/data/UserData/");
     }
-
-    let formatter = syslog::Formatter3164 {
-        facility: syslog::Facility::LOG_USER,
-        hostname: None,
-        process: "rnbomovecontrol".to_string(),
-        pid: std::process::id(),
-    };
-    let mut logger = syslog::unix(formatter).expect("to get syslog");
-    let _ = logger.info("starting");
 
     let args = Args::parse();
 
@@ -940,54 +987,118 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let name = "move-control";
-    let pollms = 500;
-    let mut jack: Option<Child> = None;
 
-    loop {
-        if let Some(j) = jackstartup.clone() {
-            let mut start = true;
-            if let Some(jack) = jack.as_mut() {
-                match jack.try_wait() {
-                    Ok(None) => start = false, //hasn't exited
-                    _ => start = true,
-                }
+    let formatter = syslog::Formatter3164 {
+        facility: syslog::Facility::LOG_USER,
+        hostname: None,
+        process: "rnbomovecontrol".to_string(),
+        pid: std::process::id(),
+    };
+    let mut logger = syslog::unix(formatter).expect("to get syslog");
+    let _ = logger.info("starting");
+
+    let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
+
+    let jack_handle = if let Some(j) = jackstartup.clone() {
+        let _ = logger.info("starting jack");
+        Some(tokio::spawn(async move {
+            let mut cmd = tokio::process::Command::new(j.cmd);
+
+            let mut child = if let Some(args) = j.args {
+                cmd.args(args)
+            } else {
+                &mut cmd
             }
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("to start jack");
+            let stdout = child.stdout.take().expect("to get child stdout");
+            let stderr = child.stderr.take().expect("to get child stderr");
+            let mut stdout_reader = BufReader::new(stdout).lines();
+            let mut stderr_reader = BufReader::new(stderr).lines();
 
-            if start {
-                let mut cmd = Command::new(j.cmd);
-
-                jack = Some(
-                    if let Some(args) = j.args {
-                        cmd.args(args)
-                    } else {
-                        &mut cmd
+            let formatter = syslog::Formatter3164 {
+                facility: syslog::Facility::LOG_USER,
+                hostname: None,
+                process: "jackd".to_string(),
+                pid: child.id().unwrap_or(0),
+            };
+            let mut logger = syslog::unix(formatter).expect("to get syslog");
+            tokio::select! {
+                _ = exit_rx => {
+                    let _ = child.kill().await;
+                },
+                _ = async {
+                    loop {
+                        tokio::select! {
+                            result = stdout_reader.next_line() => {
+                                match result {
+                                    Ok(Some(line)) => {
+                                        let _ = logger.info(line);
+                                    },
+                                    Err(e) => {
+                                        //XXX should actually go in top level log but, whatever
+                                        let _ = logger.err(e);
+                                    },
+                                    _ => (),
+                                }
+                            }
+                            result = stderr_reader.next_line() => {
+                                match result {
+                                    Ok(Some(line)) => {
+                                        let _ = logger.err(line);
+                                    },
+                                    Err(e) => {
+                                        //XXX should actually go in top level log but, whatever
+                                        let _ = logger.err(e);
+                                    },
+                                    _ => (),
+                                }
+                            }
+                            _ = child.wait() => {
+                                let _ = logger.info("jack exited");
+                                break // child process exited
+                            }
+                        };
                     }
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::inherit())
-                    .spawn()?,
-                )
-            }
-        }
+                } => {}
+            };
+        }))
+    } else {
+        None
+    };
 
-        //wait until jack exists
+    //wait until jack exists
+    let pollms = 500;
+    loop {
+        tokio::time::sleep(Duration::from_millis(10)).await;
         if let Ok((c, _status)) = Client::new(name, ClientOptions::empty()) {
-            let res = with_client(c, &tostartup, &config, caps).await;
-            match res {
-                Ok(_) => {
-                    break;
-                }
-                Err(e) => {
-                    println!("error {:?}", e);
-                    //add a little extra time if there is an error
-                    tokio::time::sleep(Duration::from_millis(pollms)).await;
-                }
+            if let Err(e) = with_client(c, &mut logger, &tostartup, &config, caps).await {
+                let _ = logger.err(e);
             }
+            break;
+        } else {
+            tokio::time::sleep(Duration::from_millis(pollms - 10)).await;
         }
-        tokio::time::sleep(Duration::from_millis(pollms)).await;
     }
 
-    if let Some(mut jack) = jack {
-        jack.kill()?;
+    //kill jack if we spawned it
+    if let Some(jack) = jack_handle {
+        let _ = logger.info("killing jack");
+        let _ = exit_tx.send(());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        for _i in 0..5 {
+            if jack.is_finished() {
+                return Ok(());
+            }
+            let _ = logger.err("jack isn't finished");
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+        }
+        let _ = logger.err("failed to cleanly stop jack");
+        //XXX
     }
 
     Ok(())
