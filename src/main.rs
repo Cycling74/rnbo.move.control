@@ -421,6 +421,7 @@ async fn with_client(
             Alignment::Center,
         )
         .draw(&mut display)?;
+        let _ = logger.warning("could not get requested capabilites");
     }
 
     let driver = Driver {
@@ -824,83 +825,89 @@ async fn with_client(
         }
     };
 
-    let children_future = {
-        let mut handles = tokio::task::JoinSet::new();
+    let mut handles = tokio::task::JoinSet::new();
 
-        for s in startup.iter() {
-            let _ = logger.info(format!("spawning {}", s.cmd));
+    for s in startup.iter() {
+        let _ = logger.info(format!("spawning {}", s.cmd));
 
-            //let state = state.clone();
-            let mut cmd = tokio::process::Command::new(s.cmd.clone());
-            let mut child = if let Some(args) = s.args.clone() {
-                cmd.args(args)
-            } else {
-                &mut cmd
-            }
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("to spawn child");
+        //let state = state.clone();
+        let mut cmd = tokio::process::Command::new(s.cmd.clone());
+        let child = if let Some(args) = s.args.clone() {
+            cmd.args(args)
+        } else {
+            &mut cmd
+        }
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn();
 
-            let stdout = child.stdout.take().expect("to get child stdout");
-            let stderr = child.stderr.take().expect("to get child stderr");
-            let mut stdout_reader = BufReader::new(stdout).lines();
-            let mut stderr_reader = BufReader::new(stderr).lines();
-
-            let path = std::path::Path::new(s.cmd.as_str());
-            let name = path
-                .file_name()
-                .expect("to get file name")
-                .to_os_string()
-                .into_string()
-                .expect("to get string");
-            handles.spawn(async move {
-                let formatter = syslog::Formatter3164 {
-                    facility: syslog::Facility::LOG_USER,
-                    hostname: None,
-                    process: name.clone(),
-                    pid: child.id().unwrap_or(0),
-                };
-                let mut logger = syslog::unix(formatter).expect("to get syslog");
-                let exit_status;
-                loop {
-                    tokio::select! {
-                        result = stdout_reader.next_line() => {
-                            match result {
-                                Ok(Some(line)) => {
-                                    let _ = logger.info(line);
-                                },
-                                Err(e) => {
-                                    //XXX should actually go in top level log but, whatever
-                                    let _ = logger.err(e);
-                                },
-                                _ => (),
-                            }
-                        }
-                        result = stderr_reader.next_line() => {
-                            match result {
-                                Ok(Some(line)) => {
-                                    let _ = logger.err(line);
-                                },
-                                Err(e) => {
-                                    //XXX should actually go in top level log but, whatever
-                                    let _ = logger.err(e);
-                                },
-                                _ => (),
-                            }
-                        }
-                        result = child.wait() => {
-                            exit_status = result;
-                            break // child process exited
-                        }
-                    };
-                }
-                (name, exit_status)
-            });
+        if let Err(e) = child {
+            let _ = logger.err(format!("failed to spawn child process {}", s.cmd));
+            return Err(Box::new(e));
         }
 
+        let mut child = child.unwrap();
+
+        let stdout = child.stdout.take().expect("to get child stdout");
+        let stderr = child.stderr.take().expect("to get child stderr");
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut stderr_reader = BufReader::new(stderr).lines();
+
+        let path = std::path::Path::new(s.cmd.as_str());
+        let name = path
+            .file_name()
+            .expect("to get file name")
+            .to_os_string()
+            .into_string()
+            .expect("to get string");
+        handles.spawn(async move {
+            let formatter = syslog::Formatter3164 {
+                facility: syslog::Facility::LOG_USER,
+                hostname: None,
+                process: name.clone(),
+                pid: child.id().unwrap_or(0),
+            };
+            let mut logger = syslog::unix(formatter).expect("to get syslog");
+            let exit_status;
+            loop {
+                tokio::select! {
+                    result = stdout_reader.next_line() => {
+                        match result {
+                            Ok(Some(line)) => {
+                                let _ = logger.info(line);
+                            },
+                            Err(e) => {
+                                //XXX should actually go in top level log but, whatever
+                                let _ = logger.err(e);
+                            },
+                            _ => (),
+                        }
+                    }
+                    result = stderr_reader.next_line() => {
+                        match result {
+                            Ok(Some(line)) => {
+                                let _ = logger.err(line);
+                            },
+                            Err(e) => {
+                                //XXX should actually go in top level log but, whatever
+                                let _ = logger.err(e);
+                            },
+                            _ => (),
+                        }
+                    }
+                    result = child.wait() => {
+                        exit_status = result;
+                        break // child process exited
+                    }
+                };
+            }
+            (name, exit_status)
+        });
+    }
+
+    let children_future = {
         let state = state.clone();
         async move {
             if let Some(res) = handles.join_next().await {
