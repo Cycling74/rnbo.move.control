@@ -940,6 +940,79 @@ async fn with_client(
     Ok(())
 }
 
+async fn start_jack(
+    j: &StartupProcess,
+    exit_rx: tokio::sync::oneshot::Receiver<()>,
+) -> tokio::task::JoinHandle<()> {
+    let j = j.clone();
+    tokio::spawn(async move {
+        let mut cmd = tokio::process::Command::new(j.cmd);
+
+        let mut child = if let Some(args) = j.args {
+            cmd.args(args)
+        } else {
+            &mut cmd
+        }
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("to start jack");
+        let stdout = child.stdout.take().expect("to get child stdout");
+        let stderr = child.stderr.take().expect("to get child stderr");
+        let mut stdout_reader = BufReader::new(stdout).lines();
+        let mut stderr_reader = BufReader::new(stderr).lines();
+
+        let formatter = syslog::Formatter3164 {
+            facility: syslog::Facility::LOG_USER,
+            hostname: None,
+            process: "jackd".to_string(),
+            pid: child.id().unwrap_or(0),
+        };
+        let mut logger = syslog::unix(formatter).expect("to get syslog");
+        tokio::select! {
+            _ = exit_rx => {
+                let _ = child.kill().await;
+            },
+            _ = async {
+                loop {
+                    tokio::select! {
+                        result = stdout_reader.next_line() => {
+                            match result {
+                                Ok(Some(line)) => {
+                                    let _ = logger.info(line);
+                                },
+                                Err(e) => {
+                                    //XXX should actually go in top level log but, whatever
+                                    let _ = logger.err(e);
+                                },
+                                _ => (),
+                            }
+                        }
+                        result = stderr_reader.next_line() => {
+                            match result {
+                                Ok(Some(line)) => {
+                                    let _ = logger.err(line);
+                                },
+                                Err(e) => {
+                                    //XXX should actually go in top level log but, whatever
+                                    let _ = logger.err(e);
+                                },
+                                _ => (),
+                            }
+                        }
+                        _ = child.wait() => {
+                            let _ = logger.info("jack exited");
+                            break // child process exited
+                        }
+                    };
+                }
+            } => {}
+        };
+    })
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     //set HOME if it doesn't already exist
@@ -998,83 +1071,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let _ = logger.info("starting");
 
     let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
-
-    let jack_handle = if let Some(j) = jackstartup.clone() {
+    let mut jack_handle = if let Some(j) = jackstartup.clone() {
         let _ = logger.info("starting jack");
-        Some(tokio::spawn(async move {
-            let mut cmd = tokio::process::Command::new(j.cmd);
-
-            let mut child = if let Some(args) = j.args {
-                cmd.args(args)
-            } else {
-                &mut cmd
-            }
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("to start jack");
-            let stdout = child.stdout.take().expect("to get child stdout");
-            let stderr = child.stderr.take().expect("to get child stderr");
-            let mut stdout_reader = BufReader::new(stdout).lines();
-            let mut stderr_reader = BufReader::new(stderr).lines();
-
-            let formatter = syslog::Formatter3164 {
-                facility: syslog::Facility::LOG_USER,
-                hostname: None,
-                process: "jackd".to_string(),
-                pid: child.id().unwrap_or(0),
-            };
-            let mut logger = syslog::unix(formatter).expect("to get syslog");
-            tokio::select! {
-                _ = exit_rx => {
-                    let _ = child.kill().await;
-                },
-                _ = async {
-                    loop {
-                        tokio::select! {
-                            result = stdout_reader.next_line() => {
-                                match result {
-                                    Ok(Some(line)) => {
-                                        let _ = logger.info(line);
-                                    },
-                                    Err(e) => {
-                                        //XXX should actually go in top level log but, whatever
-                                        let _ = logger.err(e);
-                                    },
-                                    _ => (),
-                                }
-                            }
-                            result = stderr_reader.next_line() => {
-                                match result {
-                                    Ok(Some(line)) => {
-                                        let _ = logger.err(line);
-                                    },
-                                    Err(e) => {
-                                        //XXX should actually go in top level log but, whatever
-                                        let _ = logger.err(e);
-                                    },
-                                    _ => (),
-                                }
-                            }
-                            _ = child.wait() => {
-                                let _ = logger.info("jack exited");
-                                break // child process exited
-                            }
-                        };
-                    }
-                } => {}
-            };
-        }))
+        Some(start_jack(&j, exit_rx).await)
     } else {
         None
     };
 
     //wait until jack exists
     let pollms = 500;
+    tokio::time::sleep(Duration::from_millis(pollms)).await;
     loop {
         tokio::time::sleep(Duration::from_millis(10)).await;
+        if let Some(jack) = &jack_handle {
+            if jack.is_finished() {
+                //TODO retry jack?
+                let _ = logger.err("failed to start jack");
+                jack_handle = None;
+                break;
+            }
+        }
         if let Ok((c, _status)) = Client::new(name, ClientOptions::NO_START_SERVER) {
             if let Err(e) = with_client(c, &mut logger, &tostartup, &config, caps).await {
                 let _ = logger.err(e);
