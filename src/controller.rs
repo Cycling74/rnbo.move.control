@@ -169,6 +169,8 @@ enum Events {
 
     VisibleParamUpdated(usize),
 
+    InstancesChanged(usize),
+
     SetNamesChanged,
     SetPresetNamesChanged,
 
@@ -374,6 +376,9 @@ smlang::statemachine! {
         PatcherInstances(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: *state, page: 0, focused: None }),
 
+        PatcherInstances(usize) + InstancesChanged(_) [*event == 0] = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherInstances(usize) + InstancesChanged(_) [*event > 0] = PatcherInstances(0),
+
         //skip patcher instances menu if there is only 1 instance
         PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() > 1] = PatcherInstances(state.index),
         PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count() == 1] = Menu(PATCHER_INSTANCES_INDEX),
@@ -385,6 +390,9 @@ smlang::statemachine! {
         PatcherParams(ParamPage) + EncTouch(_) [*event < 8] = PatcherParams(state.with_focus(*event)),
         PatcherParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1});,
         PatcherParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1});,
+
+        PatcherParams(ParamPage) + InstancesChanged(_) [*event == 0] = Menu(PATCHER_INSTANCES_INDEX),
+        PatcherParams(ParamPage) + InstancesChanged(_) [*event > 0] = PatcherInstances(0),
 
         PatcherInstances(usize) + SetCurrentChanged = Menu(PATCHER_INSTANCES_INDEX),
         PatcherParams(ParamPage) + SetCurrentChanged  = Menu(PATCHER_INSTANCES_INDEX),
@@ -706,6 +714,9 @@ impl StateController {
         common.instances_count = self.patcher_instance_names.len();
         self.update_views(&mut common).await;
         self.update_common(common);
+
+        self.handle_event(Events::InstancesChanged(indexes.len()))
+            .await;
     }
 
     pub async fn set_set_current_name(&mut self, name: Option<String>) {
