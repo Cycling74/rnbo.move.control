@@ -65,6 +65,10 @@ const JOG_WHEEL_ENCODER: usize = 10;
 
 const PARAM_PAGE_SIZE: usize = 8;
 
+fn param_pages(params: usize) -> usize {
+    params / PARAM_PAGE_SIZE + if params % PARAM_PAGE_SIZE == 0 { 0 } else { 1 }
+}
+
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -687,9 +691,10 @@ impl StateController {
             //XXX what if there aren't any params?
             self.patcher_instance_names
                 .push(format!("{}: {}", inst.index(), inst.name()));
+
             common
                 .instance_param_pages
-                .push(1 + inst.params().len() / PARAM_PAGE_SIZE);
+                .push(param_pages(inst.params().len()));
 
             let mut instindexes = Vec::new();
             for p in inst.params().iter() {
@@ -786,9 +791,7 @@ impl StateController {
             }
             if params.len() > 0 {
                 self.param_view_names.push(v.name().to_string());
-                common
-                    .param_view_pages
-                    .push(1 + params.len() / PARAM_PAGE_SIZE);
+                common.param_view_pages.push(param_pages(params.len()));
                 self.param_view_params.push(params);
             }
         }
