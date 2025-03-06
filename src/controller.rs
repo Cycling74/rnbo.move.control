@@ -82,6 +82,12 @@ fn param_pages(params: usize) -> usize {
     params / PARAM_PAGE_SIZE + if params % PARAM_PAGE_SIZE == 0 { 0 } else { 1 }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum MenuIndicator {
+    SubMenu(usize),
+    Item(usize),
+}
+
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -1207,7 +1213,7 @@ impl StateController {
                         display,
                         &"Param Views",
                         &self.param_view_names,
-                        selected,
+                        MenuIndicator::Item(selected),
                         None,
                     );
                 })
@@ -1295,6 +1301,14 @@ impl StateController {
             States::Menu(selected) => {
                 self.clear_visible_params();
                 let selected: usize = *selected;
+                let selected = if selected == TEMPO_INDEX
+                    || selected == ABOUT_INDEX
+                    || (selected == PATCHER_INSTANCES_INDEX && self.context().instances_count() < 2)
+                {
+                    MenuIndicator::Item(selected)
+                } else {
+                    MenuIndicator::SubMenu(selected)
+                };
                 self.with_display(|display| {
                     draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
                 })
@@ -1348,7 +1362,7 @@ impl StateController {
                         display,
                         &"Load Graph",
                         self.set_names.as_slice(),
-                        selected,
+                        MenuIndicator::Item(selected),
                         indicated,
                     );
                 })
@@ -1365,7 +1379,7 @@ impl StateController {
                         display,
                         &"Load Graph Preset",
                         self.set_preset_names.as_slice(),
-                        selected,
+                        MenuIndicator::Item(selected),
                         indicated,
                     );
                 })
@@ -1381,7 +1395,7 @@ impl StateController {
                         display,
                         &"Device Params",
                         self.patcher_instance_names.as_slice(),
-                        selected,
+                        MenuIndicator::Item(selected),
                         None,
                     );
                 })
@@ -1477,7 +1491,13 @@ impl StateController {
                 States::PromptExit(selected) => {
                     self.clear_visible_params();
                     self.with_display(|display| {
-                        draw_menu(display, &"Exit RNBO", &EXIT_MENU, selected, None);
+                        draw_menu(
+                            display,
+                            &"Exit RNBO",
+                            &EXIT_MENU,
+                            MenuIndicator::Item(selected),
+                            None,
+                        );
                     })
                     .await;
                     self.light_button(BACK_MIDI, MoveColor::LightGray as _);
@@ -1817,7 +1837,7 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     mut display: D,
     title: &str,
     items: &[S],
-    selected: usize,
+    selected: MenuIndicator,
     indicated: Option<usize>,
 ) {
     use embedded_layout::{layout::linear::LinearLayout, prelude::*};
@@ -1826,6 +1846,11 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     let display_area = display.bounding_box();
 
     let mut list: [String; 3] = Default::default();
+
+    let (selected_indicator, selected) = match selected {
+        MenuIndicator::Item(index) => ("-", index),
+        MenuIndicator::SubMenu(index) => (">", index),
+    };
 
     //try to keep 3 on screen, select indicator may need to move to first or last item depending
     let start = if selected == 0 || items.len() <= 3 {
@@ -1845,7 +1870,7 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
         let indicator = if Some(off) == indicated { &"*" } else { &" " };
 
         *l = if off == selected {
-            format!(">{}{}", indicator, item.as_ref())
+            format!("{}{}{}", selected_indicator, indicator, item.as_ref())
         } else {
             format!(" {}{}", indicator, item.as_ref())
         }
