@@ -247,7 +247,7 @@ async fn with_client(
     let system_display_port = c
         .port_by_name("system:display")
         .expect("error getting system:display");
-    let system_midi_out_port = c
+    let system_midi_capture_port = c
         .port_by_name("system:midi_capture")
         .expect("error getting system:midi_capture");
 
@@ -264,13 +264,10 @@ async fn with_client(
     port_set_group(&c, &midi_in, &hidden);
     port_set_group(&c, &system_display_port, &hidden);
 
-    port_set_group(&c, &system_midi_out_port, &graph_src);
+    port_set_group(&c, &system_midi_capture_port, &hidden);
     port_set_group(&c, &midi_thru, &graph_src);
 
-    let pretty = jack::Property::new("Move MIDI Out", Some("text/plain".to_string()));
-    port_set_pretty(&c, &system_midi_out_port, &pretty);
-
-    let pretty = jack::Property::new("Move MIDI In", Some("text/plain".to_string()));
+    let pretty = jack::Property::new("Move In MIDI", Some("text/plain".to_string()));
     port_set_pretty(&c, &midi_thru, &pretty);
 
     {
@@ -280,18 +277,6 @@ async fn with_client(
         let in2 = c
             .port_by_name("system:capture_2")
             .expect("error getting system:capture_2");
-        let midi = c
-            .port_by_name("system:midi_playback")
-            .expect("error getting system:midi_playback");
-
-        port_set_group(&c, &in1, &graph_src);
-        port_set_group(&c, &in2, &graph_src);
-        port_set_group(&c, &midi, &graph_sink);
-
-        let pretty = jack::Property::new("Move In Left", Some("text/plain".to_string()));
-        port_set_pretty(&c, &in1, &pretty);
-        let pretty = jack::Property::new("Move In Right", Some("text/plain".to_string()));
-        port_set_pretty(&c, &in2, &pretty);
 
         let out1 = c
             .port_by_name("system:playback_1")
@@ -300,8 +285,38 @@ async fn with_client(
             .port_by_name("system:playback_2")
             .expect("error getting system:playback_2");
 
+        let midi_out = c
+            .port_by_name("system:midi_playback")
+            .expect("error getting system:midi_playback");
+
+        let midi_ext_in = c
+            .port_by_name("system:midi_capture_ext")
+            .expect("error getting system:midi_capture_ext");
+        let midi_ext_out = c
+            .port_by_name("system:midi_playback_ext")
+            .expect("error getting system:midi_playback_ext");
+
+        port_set_group(&c, &in1, &graph_src);
+        port_set_group(&c, &in2, &graph_src);
         port_set_group(&c, &out1, &hidden);
         port_set_group(&c, &out2, &hidden);
+
+        port_set_group(&c, &midi_out, &graph_sink);
+        port_set_group(&c, &midi_ext_in, &graph_src);
+        port_set_group(&c, &midi_ext_out, &graph_sink);
+
+        let pretty = jack::Property::new("Move In Left", Some("text/plain".to_string()));
+        port_set_pretty(&c, &in1, &pretty);
+        let pretty = jack::Property::new("Move In Right", Some("text/plain".to_string()));
+        port_set_pretty(&c, &in2, &pretty);
+
+        let pretty = jack::Property::new("Move Out MIDI", Some("text/plain".to_string()));
+        port_set_pretty(&c, &midi_out, &pretty);
+
+        let pretty = jack::Property::new("External In MIDI", Some("text/plain".to_string()));
+        port_set_pretty(&c, &midi_ext_in, &pretty);
+        let pretty = jack::Property::new("External Out MIDI", Some("text/plain".to_string()));
+        port_set_pretty(&c, &midi_ext_out, &pretty);
     }
 
     let mut display = MoveDisplay::new();
@@ -309,7 +324,7 @@ async fn with_client(
         display_port: display_port.clone_unowned(),
         system_display_port,
         midi_in_port: midi_in.clone_unowned(),
-        system_midi_out_port,
+        system_midi_out_port: system_midi_capture_port,
         disconnect_queue: disconnect_tx,
     };
 
