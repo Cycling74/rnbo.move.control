@@ -2,8 +2,6 @@ from conans import ConanFile, tools
 import os
 import re
 
-JACK_VERSION = "1.9.22-457eee49"
-
 BUILD_SCRIPT = r""" #!/bin/bash
 
 . "$HOME/.cargo/env"
@@ -24,7 +22,7 @@ cargo build --target=aarch64-unknown-linux-gnu --release \
 --config './.cargo/config-docker.toml' \
 --config 'target.aarch64-unknown-linux-gnu.linker="/usr/local/oecore-x86_64/sysroots/x86_64-oesdk-linux/usr/bin/aarch64-oe-linux/aarch64-oe-linux-gcc"' \
 --config "target.aarch64-unknown-linux-gnu.rustflags=[\"-C\", \"link-arg=-Wl,-rpath,/data/UserData/rnbo/lib/\", \"-C\", \"link-arg=--sysroot=/usr/local/oecore-x86_64/sysroots/cortexa72-oe-linux\", \"-C\", \"link-arg=-L${{JACK_PACKAGE_FOLDER}}/lib/\"]"
-""".format(JACK_VERSION=JACK_VERSION)
+"""
 
 class RNBOMoveControl(ConanFile):
 	name = "rnbomovecontrol"
@@ -34,8 +32,8 @@ class RNBOMoveControl(ConanFile):
 	user = "c74"
 	channel = "move"
 	settings = { "os": ["Linux"], "compiler": {"gcc": {"version": ["11.4"], "libcxx": "libstdc++11"}}, "arch": "armv8" }
-	options = { "dockerimage": ["ANY"], "conandatadir": ["ANY"] }
-	default_options = { "dockerimage": "rnbo.move.takeover:0.1", "conandatadir": "~/Documents/move-conan-data" }
+	options = { "dockerimage": ["ANY"], "conandatadir": ["ANY"], "jackversion": ["ANY"] }
+	default_options = { "dockerimage": "rnbo.move.takeover:0.1", "conandatadir": "~/Documents/move-conan-data", "jackversion": "1.9.22-457eee49" }
 
 	def set_version(self):
 		with open("Cargo.toml") as f:
@@ -49,7 +47,7 @@ class RNBOMoveControl(ConanFile):
 
 	def build(self):
 		with open(os.path.join(self.source_folder, "build.sh"), "w") as f:
-			f.write(BUILD_SCRIPT)
+			f.write(BUILD_SCRIPT.format(JACK_VERSION=self.options.jackversion))
 		self.run("mkdir -p %s" % self.options.conandatadir)
 		self.run("docker run --user node -v $(pwd):/build -v %s:/home/node/.conan/data --platform linux/amd64 %s /bin/bash /build/build.sh" % (self.options.conandatadir, self.options.dockerimage), cwd=self.source_folder)
 
