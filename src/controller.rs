@@ -8,7 +8,7 @@ use {
         view::ParamView,
     },
     embedded_graphics::{
-        mono_font::MonoTextStyle,
+        mono_font::{MonoTextStyle, MonoTextStyleBuilder},
         pixelcolor::BinaryColor,
         prelude::*,
         primitives::{PrimitiveStyleBuilder, Rectangle},
@@ -46,8 +46,21 @@ const MOVE_CTL_MIDI_CHAN: u8 = 15;
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 
-const TITLE_TEXT_STYLE: MonoTextStyle<BinaryColor> =
-    MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
+const TITLE_TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyleBuilder::new()
+    .font(&profont::PROFONT_12_POINT)
+    .text_color(BinaryColor::On)
+    .underline_with_color(BinaryColor::On)
+    .build();
+
+const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyleBuilder::new()
+    .font(&profont::PROFONT_12_POINT)
+    .text_color(BinaryColor::On)
+    .build();
+
+const SMALL_TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyleBuilder::new()
+    .font(&profont::PROFONT_9_POINT)
+    .text_color(BinaryColor::On)
+    .build();
 
 pub const INST_UNLOAD_ADDR: &str = "/rnbo/inst/control/unload";
 pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
@@ -1155,10 +1168,9 @@ impl StateController {
 
     async fn display_centered(&mut self, text: &str) {
         self.with_display(|mut display| {
-            let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
             display.clear(BinaryColor::Off).unwrap();
 
-            draw_centered(&mut display, text, style);
+            draw_centered(&mut display, text, TEXT_STYLE);
         })
         .await;
     }
@@ -1248,9 +1260,6 @@ impl StateController {
                     }
 
                     self.with_display(|mut display| {
-                        let text_style =
-                            MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-
                         display.clear(BinaryColor::Off).unwrap();
 
                         draw_title(&mut display, title.as_str());
@@ -1259,7 +1268,7 @@ impl StateController {
                             Text::with_alignment(
                                 focus.as_str(),
                                 Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
-                                text_style,
+                                TEXT_STYLE,
                                 Alignment::Center,
                             )
                             .draw(display.deref_mut())
@@ -1300,7 +1309,7 @@ impl StateController {
                     display.clear(BinaryColor::Off).unwrap();
                     draw_title(&mut display, &"Tempo (bpm)");
                     let bpm = format!("{:.1}", self.bpm);
-                    draw_centered(&mut display, bpm.as_str(), TITLE_TEXT_STYLE);
+                    draw_centered(&mut display, bpm.as_str(), TEXT_STYLE);
                 })
                 .await;
             }
@@ -1321,11 +1330,10 @@ impl StateController {
                     display.clear(BinaryColor::Off).unwrap();
 
                     draw_title(&mut display, "Versions");
-                    let style = MonoTextStyle::new(&profont::PROFONT_9_POINT, BinaryColor::On);
                     Text::with_alignment(
                         versions.as_str(),
                         Point::new(0, 24),
-                        style,
+                        SMALL_TEXT_STYLE,
                         Alignment::Left,
                     )
                     .draw(display.deref_mut())
@@ -1412,8 +1420,6 @@ impl StateController {
                         self.visible_params.clear();
                     }
 
-                    let text_style =
-                        MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
                     let name = self.patcher_instance_names.get(index).unwrap();
 
                     let mut title = format!("{} Params", name);
@@ -1432,7 +1438,7 @@ impl StateController {
                             Text::with_alignment(
                                 focus.as_str(),
                                 Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
-                                text_style,
+                                TEXT_STYLE,
                                 Alignment::Center,
                             )
                             .draw(display.deref_mut())
@@ -1488,7 +1494,7 @@ impl StateController {
                         display.clear(BinaryColor::Off).unwrap();
                         draw_title(&mut display, &"Volume");
                         let volume = format!("{:.2}", volume);
-                        draw_centered(&mut display, volume.as_str(), TITLE_TEXT_STYLE);
+                        draw_centered(&mut display, volume.as_str(), TEXT_STYLE);
                     })
                     .await;
                 }
@@ -1499,13 +1505,12 @@ impl StateController {
                     let prog = p.file_name().unwrap().to_str().unwrap();
                     let msg = format!("{}\ncrashed\nreport to beta list\nthen hit power button\nto power down\nor return to move", prog);
 
-                    let style = MonoTextStyle::new(&profont::PROFONT_9_POINT, BinaryColor::On);
                     self.with_display(|mut display| {
                         display.clear(BinaryColor::Off).unwrap();
                         Text::with_alignment(
                             msg.as_str(),
                             Point::new(DISPLAY_WIDTH as i32 / 2, 6),
-                            style,
+                            SMALL_TEXT_STYLE,
                             Alignment::Center,
                         )
                         .draw(display.deref_mut())
@@ -1818,7 +1823,6 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     indicated: Option<usize>,
 ) {
     use embedded_layout::{layout::linear::LinearLayout, prelude::*};
-    let text_style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
 
     display.clear(BinaryColor::Off).unwrap();
     let display_area = display.bounding_box();
@@ -1864,11 +1868,11 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     }
 
     LinearLayout::vertical(
-        Chain::new(Text::new(title, Point::zero(), text_style)).append(
+        Chain::new(Text::new(title, Point::zero(), TITLE_TEXT_STYLE)).append(
             LinearLayout::vertical(
-                Chain::new(Text::new(list[0].as_str(), Point::zero(), text_style))
-                    .append(Text::new(list[1].as_str(), Point::zero(), text_style))
-                    .append(Text::new(list[2].as_str(), Point::zero(), text_style)),
+                Chain::new(Text::new(list[0].as_str(), Point::zero(), TEXT_STYLE))
+                    .append(Text::new(list[1].as_str(), Point::zero(), TEXT_STYLE))
+                    .append(Text::new(list[2].as_str(), Point::zero(), TEXT_STYLE)),
             )
             .with_alignment(horizontal::Left)
             .align_to(&display_area, horizontal::Left, vertical::Center)
