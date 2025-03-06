@@ -207,9 +207,9 @@ impl ParamPage {
 }
 
 const MENU_ITEMS: [&'static str; 5] = [
-    "Set Presets",
-    "Sets",
-    "Patcher Instances",
+    "Graph Presets",
+    "Graphs",
+    "Device Params",
     "Tempo",
     "Versions",
 ];
@@ -1340,7 +1340,7 @@ impl StateController {
                 self.with_display(|display| {
                     draw_menu(
                         display,
-                        &"Load Set",
+                        &"Load Graph",
                         self.set_names.as_slice(),
                         selected,
                         indicated,
@@ -1357,7 +1357,7 @@ impl StateController {
                 self.with_display(|display| {
                     draw_menu(
                         display,
-                        &"Load Set Preset",
+                        &"Load Graph Preset",
                         self.set_preset_names.as_slice(),
                         selected,
                         indicated,
@@ -1373,7 +1373,7 @@ impl StateController {
                 self.with_display(|display| {
                     draw_menu(
                         display,
-                        &"Patcher Instances",
+                        &"Device Params",
                         self.patcher_instance_names.as_slice(),
                         selected,
                         None,
