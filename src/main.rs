@@ -494,11 +494,31 @@ async fn with_client(
 
     let display = Rc::new(tokio::sync::Mutex::new(display));
 
+    let version_path =
+        PathBuf::from("/data/UserData/rnbo/share/rnbomovetakeover/package-version.txt");
+
+    let package_version = if std::path::Path::exists(&version_path) {
+        use std::io::Read;
+        if let Ok(file) = std::fs::File::open(&version_path) {
+            let mut reader = std::io::BufReader::new(file);
+            let mut str = String::new();
+            reader
+                .read_to_string(&mut str)
+                .expect("to read string from package-version.txt file");
+            Some(str.trim().to_string())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(StateController::new(
             midi_out_tx,
             display.clone(),
             volume,
+            package_version,
             config.clone(),
         )));
 
@@ -1043,10 +1063,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let args = Args::parse();
+    let homedir = home::home_dir().expect("to get home directory");
 
     let config = args.config;
     let config = if let Some(config) = config.strip_prefix("~/") {
-        let mut p = home::home_dir().expect("to get home directory");
+        let mut p = homedir.clone();
         p.push(config);
         p
     } else {

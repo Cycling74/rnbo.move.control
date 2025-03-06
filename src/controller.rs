@@ -219,20 +219,15 @@ impl ParamPage {
     }
 }
 
-const MENU_ITEMS: [&'static str; 5] = [
-    "Graph Presets",
-    "Graphs",
-    "Device Params",
-    "Tempo",
-    "Versions",
-];
+const MENU_ITEMS: [&'static str; 5] =
+    ["Graph Presets", "Graphs", "Device Params", "Tempo", "About"];
 const EXIT_MENU: [&'static str; 2] = ["Power Down", "Launch Move"];
 
 const SET_PRESETS_INDEX: usize = 0;
 const SETS_INDEX: usize = 1;
 const PATCHER_INSTANCES_INDEX: usize = 2;
 const TEMPO_INDEX: usize = 3;
-const VERSION_INDEX: usize = 4;
+const ABOUT_INDEX: usize = 4;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Cmd {
@@ -371,7 +366,7 @@ smlang::statemachine! {
             = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == VERSION_INDEX] = Versions,
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == ABOUT_INDEX] = About,
 
         SetsList(usize) + BtnDown(Button::Back) = Menu(SETS_INDEX),
         SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_count() > *state + 1] = SetsList(*state + 1),
@@ -422,7 +417,7 @@ smlang::statemachine! {
         TempoEditor + BtnUp(Button::JogWheel) / ctx.emit(Cmd::MulTempoOffset(false));  = TempoEditor,
         TempoEditor + Tempo(_) = TempoEditor,
 
-        Versions + BtnDown(Button::Back) = Menu(VERSION_INDEX),
+        About + BtnDown(Button::Back) = Menu(ABOUT_INDEX),
     }
 }
 
@@ -492,6 +487,8 @@ pub struct StateController {
     child_process_error: Option<(String, std::io::Result<std::process::ExitStatus>)>,
 
     runner_rnbo_version: Option<String>,
+
+    package_version: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -575,6 +572,7 @@ impl StateController {
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
         display: Rc<Mutex<MoveDisplay>>,
         volume: Arc<AtomicU8>,
+        package_version: Option<String>,
         config_path: PathBuf,
     ) -> Self {
         let (tx, rx) = sync_mpsc::channel();
@@ -657,6 +655,7 @@ impl StateController {
             child_process_error: None,
 
             runner_rnbo_version: None,
+            package_version,
         };
 
         //States::Init not transitioned to so, do setup here
@@ -1313,28 +1312,27 @@ impl StateController {
                 })
                 .await;
             }
-            States::Versions => {
+            States::About => {
                 self.clear_visible_params();
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 self.with_display(|mut display| {
                     display.clear(BinaryColor::Off).unwrap();
 
-                    let versions = format!(
-                        "rnbo.move.control:\n{}\nrnbo library:\n{}",
-                        VERSION,
-                        self.runner_rnbo_version
+                    let info = format!(
+                        "package version:\n{}\nwebsite:\nbeta.cycling74.com\n",
+                        self.package_version
                             .clone()
                             .unwrap_or("unknown".to_string())
                     );
 
                     display.clear(BinaryColor::Off).unwrap();
 
-                    draw_title(&mut display, "Versions");
+                    draw_title(&mut display, "About");
                     Text::with_alignment(
-                        versions.as_str(),
-                        Point::new(0, 24),
+                        info.as_str(),
+                        Point::new(DISPLAY_WIDTH as i32 / 2, 24),
                         SMALL_TEXT_STYLE,
-                        Alignment::Left,
+                        Alignment::Center,
                     )
                     .draw(display.deref_mut())
                     .unwrap();
