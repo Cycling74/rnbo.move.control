@@ -1240,11 +1240,11 @@ impl StateController {
                         if let Some(pindex) = params.get(pindex) {
                             if let Some(param) = self.params.get(*pindex) {
                                 focus = Some(format!(
-                                    "{}: {}\n{}",
+                                    "inst: {}\n{}\n{}",
                                     param.instance_index(),
                                     param.display_name(),
                                     param.render_value()
-                                ))
+                                ));
                             }
                         }
                     }
