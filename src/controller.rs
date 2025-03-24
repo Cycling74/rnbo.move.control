@@ -474,8 +474,8 @@ pub struct StateController {
 
     visible_params: Vec<usize>,
 
-    //(sparce instance index, param_index) -> (local instance_index, param index)
-    instance_param_map: HashMap<(usize, usize), (usize, usize)>,
+    //(sparce instance index, param_id) -> (local instance_index, param index)
+    instance_param_map: HashMap<(usize, String), (usize, usize)>,
 
     param_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
     param_norm_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
@@ -727,7 +727,7 @@ impl StateController {
                 self.param_norm_lookup
                     .insert(p.addr_norm().to_string(), index);
                 self.instance_param_map.insert(
-                    (p.instance_index(), p.index()),
+                    (p.instance_index(), p.name().to_string()),
                     (local_instance_index, local_param_index),
                 );
             }
@@ -784,7 +784,7 @@ impl StateController {
             let params = self
                 .params
                 .iter()
-                .map(|p| (p.instance_index(), p.index()))
+                .map(|p| (p.instance_index(), p.name().to_string()))
                 .collect();
             self.param_views
                 .push(ParamView::new("Default".to_string(), params, 0));
@@ -866,7 +866,7 @@ impl StateController {
         //update param view
         if let Some(index) = self.param_view_param_lookup.get(&msg.addr) {
             let updated = if let Some(view) = self.param_views.get_mut(*index) {
-                let params: Result<Vec<(usize, usize)>, ()> = msg
+                let params: Result<Vec<(usize, String)>, ()> = msg
                     .args
                     .iter()
                     .map(|a| {
@@ -1242,7 +1242,7 @@ impl StateController {
                                 focus = Some(format!(
                                     "{}: {}\n{}",
                                     param.instance_index(),
-                                    param.name(),
+                                    param.display_name(),
                                     param.render_value()
                                 ))
                             }
@@ -1423,8 +1423,11 @@ impl StateController {
                             let pindex = offset + focused;
                             if let Some(pindex) = instance.get(pindex) {
                                 if let Some(param) = self.params.get(*pindex) {
-                                    focus =
-                                        Some(format!("{}\n{}", param.name(), param.render_value()))
+                                    focus = Some(format!(
+                                        "{}\n{}",
+                                        param.display_name(),
+                                        param.render_value()
+                                    ))
                                 }
                             }
                         }

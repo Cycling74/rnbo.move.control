@@ -89,6 +89,8 @@ pub struct Param {
     name: String,
     detail: ParamDetail,
 
+    display_name: Option<String>,
+
     norm: f64,
     norm_pending: Option<(f64, Instant)>,
 }
@@ -110,6 +112,10 @@ impl Param {
 
     pub fn name(&self) -> &str {
         self.name.as_str()
+    }
+
+    pub fn display_name(&self) -> &str {
+        self.display_name.as_ref().unwrap_or(&self.name).as_str()
     }
 
     pub fn norm(&mut self) -> f64 {
@@ -191,6 +197,17 @@ impl Param {
 
             let index = contents.get("index")?.get("VALUE")?.as_number()?.as_u64()? as usize;
 
+            let display_name = if let Some(n) = contents.get("display_name") {
+                let v = n.get("VALUE")?.as_str()?;
+                if v.len() == 0 {
+                    None
+                } else {
+                    Some(v.to_string())
+                }
+            } else {
+                None
+            };
+
             match obj.get("TYPE")?.as_str()? {
                 "s" => {
                     let vals: Option<Vec<String>> = range
@@ -211,6 +228,7 @@ impl Param {
                     Some(Param {
                         index,
                         instance_index,
+                        display_name,
                         addr,
                         addr_norm,
                         name,
@@ -229,6 +247,7 @@ impl Param {
                     Some(Param {
                         index,
                         instance_index,
+                        display_name,
                         addr,
                         addr_norm,
                         name,

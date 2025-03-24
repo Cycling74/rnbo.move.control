@@ -3,7 +3,7 @@ use {serde::Deserialize, std::collections::HashMap};
 #[derive(Debug, Clone)]
 pub struct ParamView {
     name: String,
-    params: Vec<(usize, usize)>,
+    params: Vec<(usize, String)>,
     index: usize,
 }
 
@@ -27,7 +27,7 @@ struct ParamViewListItem {
 }
 
 impl ParamView {
-    pub fn new(name: String, params: Vec<(usize, usize)>, index: usize) -> Self {
+    pub fn new(name: String, params: Vec<(usize, String)>, index: usize) -> Self {
         Self {
             name,
             params,
@@ -46,19 +46,19 @@ impl ParamView {
         self.name = name;
     }
 
-    pub fn params(&self) -> &Vec<(usize, usize)> {
+    pub fn params(&self) -> &Vec<(usize, String)> {
         &self.params
     }
 
-    pub fn set_params(&mut self, params: Vec<(usize, usize)>) {
+    pub fn set_params(&mut self, params: Vec<(usize, String)>) {
         self.params = params;
     }
 
-    pub fn parse_param_s(v: &str) -> Result<(usize, usize), ()> {
+    pub fn parse_param_s(v: &str) -> Result<(usize, String), ()> {
         let mut split = v.split(":");
         if let Some(Ok(instance)) = split.next().map(|p| p.parse::<usize>()) {
-            if let Some(Ok(param)) = split.next().map(|p| p.parse::<usize>()) {
-                return Ok((instance, param));
+            if let Some(param_id) = split.next() {
+                return Ok((instance, param_id.to_string()));
             }
         }
         Err(())
@@ -75,7 +75,7 @@ impl ParamView {
                 for (key, value) in content.iter() {
                     if let Some(value) = value.contents.as_ref() {
                         let index = key.parse::<usize>().unwrap();
-                        let params: Result<Vec<(usize, usize)>, _> = value
+                        let params: Result<Vec<(usize, String)>, _> = value
                             .params
                             .value
                             .iter()
