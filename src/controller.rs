@@ -1,6 +1,6 @@
 use {
     crate::{
-        cmd::RunnerCmd,
+        cmd::{RunnerCmd, RunnerCmdResponse, RunnerCmdResult},
         config::Config,
         display::{MoveDisplay, DISPLAY_HEIGHT, DISPLAY_WIDTH},
         midi::Midi,
@@ -49,6 +49,7 @@ const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 
 const DATAFILE_DIR_MTIME_ADDR: &str = "/rnbo/info/datafile_dir_mtime";
+const CMD_RESP: &str = "/rnbo/resp";
 
 const TITLE_TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyleBuilder::new()
     .font(&profont::PROFONT_12_POINT)
@@ -496,7 +497,7 @@ pub struct StateController {
 
     datafile_names: Vec<String>,
 
-    cmd_responses: HashMap<uuid::Uuid, Vec<String>>,
+    cmd_responses: HashMap<uuid::Uuid, Vec<RunnerCmdResult>>,
 
     child_process_error: Option<(String, std::io::Result<std::process::ExitStatus>)>,
 
@@ -959,6 +960,32 @@ impl StateController {
                 DATAFILE_DIR_MTIME_ADDR => {
                     self.read_datafiles().await;
                 }
+                CMD_RESP => {
+                    if let OscType::String(resp) = &msg.args[0] {
+                        let resp: Result<RunnerCmdResponse, _> = serde_json::from_str(&resp);
+                        if let Ok(mut resp) = resp {
+                            let mut ready = Vec::new();
+                            if resp.error() {
+                                self.cmd_responses.remove(resp.id());
+                            } else {
+                                if let Some(results) = self.cmd_responses.get_mut(resp.id()) {
+                                    if let Some(result) = resp.take_result() {
+                                        let done = result.done();
+                                        results.push(result);
+                                        if done {
+                                            std::mem::swap(results, &mut ready);
+                                        }
+                                    }
+                                }
+                            }
+                            //process
+                            if ready.len() > 0 {
+                                self.cmd_responses.remove(resp.id());
+                                self.handle_cmd_result(resp.id(), ready).await;
+                            }
+                        }
+                    }
+                }
                 _ => {
                     if let Some(index) = self.param_lookup.get(&msg.addr) {
                         if let Some(param) = self.params.get_mut(*index) {
@@ -1225,13 +1252,17 @@ impl StateController {
 
     async fn read_datafiles(&mut self) {
         use serde_json::Value;
-        let mut params = serde_json::map::Map::new();
+        let mut params = HashMap::new();
         params.insert("filetype".to_owned(), Value::String("datafile".to_owned()));
         params.insert(
             "size".to_owned(),
             Value::Number(FILE_READ_CHUNK_SIZE.into()),
         );
         self.send_cmd(RunnerCmd::new("file_read", params)).await;
+    }
+
+    async fn handle_cmd_result(&mut self, id: &uuid::Uuid, results: Vec<RunnerCmdResult>) {
+        //TODO
     }
 
     async fn render_set_views(&mut self, s: &view::States) {
