@@ -62,6 +62,7 @@ struct Args {
 
 //NOTE channel type should match the reciever: https://users.rust-lang.org/t/communicating-between-sync-and-async-code/41005/3
 
+mod cmd;
 mod config;
 mod controller;
 mod display;

@@ -1,5 +1,6 @@
 use {
     crate::{
+        cmd::RunnerCmd,
         config::Config,
         display::{MoveDisplay, DISPLAY_HEIGHT, DISPLAY_WIDTH},
         midi::Midi,
@@ -36,6 +37,7 @@ use {
 };
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+const FILE_READ_CHUNK_SIZE: usize = 1024;
 
 const MENU_MIDI: u8 = 0x32;
 const BACK_MIDI: u8 = 0x33;
@@ -45,6 +47,8 @@ const MOVE_CTL_MIDI_CHAN: u8 = 15;
 
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
+
+const DATAFILE_DIR_MTIME_ADDR: &str = "/rnbo/info/datafile_dir_mtime";
 
 const TITLE_TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyleBuilder::new()
     .font(&profont::PROFONT_12_POINT)
@@ -490,6 +494,10 @@ pub struct StateController {
     set_preset_names: Vec<String>,
     patcher_instance_names: Vec<String>,
 
+    datafile_names: Vec<String>,
+
+    cmd_responses: HashMap<uuid::Uuid, Vec<String>>,
+
     child_process_error: Option<(String, std::io::Result<std::process::ExitStatus>)>,
 
     runner_rnbo_version: Option<String>,
@@ -657,6 +665,10 @@ impl StateController {
             set_names: Vec::new(),
             set_preset_names: Vec::new(),
             patcher_instance_names: Vec::new(),
+
+            datafile_names: Vec::new(),
+
+            cmd_responses: HashMap::new(),
 
             child_process_error: None,
 
@@ -944,6 +956,9 @@ impl StateController {
                     };
                     self.handle_event(Events::SetPresetLoadedChanged).await;
                 }
+                DATAFILE_DIR_MTIME_ADDR => {
+                    self.read_datafiles().await;
+                }
                 _ => {
                     if let Some(index) = self.param_lookup.get(&msg.addr) {
                         if let Some(param) = self.params.get_mut(*index) {
@@ -1200,6 +1215,23 @@ impl StateController {
 
     fn volume(&self) -> f32 {
         self.config.volume as f32 / 255.0
+    }
+
+    async fn send_cmd(&mut self, cmd: RunnerCmd) {
+        //make a response so we queue up responses
+        self.cmd_responses.insert(cmd.id().clone(), Vec::new());
+        self.send_osc(cmd.into_osc()).await;
+    }
+
+    async fn read_datafiles(&mut self) {
+        use serde_json::Value;
+        let mut params = serde_json::map::Map::new();
+        params.insert("filetype".to_owned(), Value::String("datafile".to_owned()));
+        params.insert(
+            "size".to_owned(),
+            Value::Number(FILE_READ_CHUNK_SIZE.into()),
+        );
+        self.send_cmd(RunnerCmd::new("file_read", params)).await;
     }
 
     async fn render_set_views(&mut self, s: &view::States) {
