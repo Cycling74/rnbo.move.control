@@ -28,3 +28,4 @@ home = "0.5.9"
 libc = "0.2.168"
 rlimit = "0.10.2"
 syslog = "7.0.0"
+uuid = { version =  "1.16.0", features = ["v4", "serde"] }
