@@ -6,6 +6,7 @@ pub struct PatcherInst {
     name: String,
     params: Vec<Param>,
     presets: Vec<String>,
+    data_refs: HashMap<String, Option<String>>,
 }
 
 fn parse_presets(contents: &serde_json::Map<String, serde_json::Value>) -> Option<Vec<String>> {
@@ -27,6 +28,30 @@ fn parse_presets(contents: &serde_json::Map<String, serde_json::Value>) -> Optio
     Some(presets)
 }
 
+fn parse_datarefs(
+    contents: &serde_json::Map<String, serde_json::Value>,
+) -> Option<HashMap<String, Option<String>>> {
+    let mut data_refs = HashMap::new();
+
+    for (name, body) in contents
+        .get("data_refs")?
+        .as_object()?
+        .get("CONTENTS")?
+        .as_object()?
+        .iter()
+    {
+        let value = body.get("VALUE")?.as_str()?;
+        let value = if value.len() > 0 {
+            Some(value.to_string())
+        } else {
+            None
+        };
+        data_refs.insert(name.clone(), value);
+    }
+
+    Some(data_refs)
+}
+
 impl PatcherInst {
     pub fn index(&self) -> usize {
         self.index
@@ -40,6 +65,14 @@ impl PatcherInst {
 
     pub fn params_mut(&mut self) -> &mut Vec<Param> {
         &mut self.params
+    }
+
+    pub fn data_refs(&self) -> &HashMap<String, Option<String>> {
+        &self.data_refs
+    }
+
+    pub fn data_refs_mut(&mut self) -> &mut HashMap<String, Option<String>> {
+        &mut self.data_refs
     }
 
     pub fn update_param_f64(&mut self, addr: &str, val: f64) -> Option<usize> {
@@ -80,12 +113,14 @@ impl PatcherInst {
             .to_string();
         let params = Param::parse_all(index, contents.get("params")?).unwrap_or_default();
         let presets = parse_presets(&contents).unwrap_or_default();
+        let data_refs = parse_datarefs(&contents).unwrap_or_default();
 
         Some(PatcherInst {
             index,
             name,
             params,
             presets,
+            data_refs,
         })
     }
 
