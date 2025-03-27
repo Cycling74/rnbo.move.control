@@ -1819,18 +1819,37 @@ impl StateController {
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             States::PatcherDatarefLoad(entry) => {
-                self.with_display(|display| {
-                    draw_menu(
-                        display,
-                        "Load File",
-                        self.datafile_menu.as_slice(),
-                        MenuIndicator::Item(entry.selected()),
-                        None,
-                    );
-                })
-                .await;
-                //TODO
-                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                if let Some(inst) = self
+                    .instances
+                    .get(self.patchers_datarefs_instance_indexes[entry.dataref().instance()])
+                {
+                    let indicated = if let Some(Some(filename)) = inst
+                        .datarefs()
+                        .values()
+                        .skip(entry.dataref().selected())
+                        .next()
+                    {
+                        self.datafile_list
+                            .iter()
+                            .position(|item| item == filename)
+                            .map(|index| index + 1) //+ 1 because of (unload) being first item
+                    } else {
+                        Some(0) //"(unload)"
+                    };
+
+                    self.with_display(|display| {
+                        draw_menu(
+                            display,
+                            "Load File",
+                            self.datafile_menu.as_slice(),
+                            MenuIndicator::Item(entry.selected()),
+                            indicated,
+                        );
+                    })
+                    .await;
+                    //TODO
+                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                }
             }
             _ => (),
         }
