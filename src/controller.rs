@@ -1841,7 +1841,7 @@ impl StateController {
                     self.with_display(|display| {
                         draw_menu(
                             display,
-                            "Load File",
+                            "Data Mapping",
                             self.datafile_menu.as_slice(),
                             MenuIndicator::Item(entry.selected()),
                             indicated,
@@ -2147,18 +2147,26 @@ impl StateController {
                 }
                 Cmd::UpdateDataFileList => {
                     self.datafile_list.clear();
-                    self.datafile_menu = vec!["(unload)".into()];
+
                     if let Ok(entries) = std::fs::read_dir(DATFILE_DIR) {
                         for e in entries {
                             if let Ok(e) = e {
                                 if let Some(f) = e.path().file_name() {
                                     let s = f.to_string_lossy().to_string();
-                                    self.datafile_menu.push(format_menu_item(s.clone()));
                                     self.datafile_list.push(s);
                                 }
                             }
                         }
                     };
+                    self.datafile_list.sort();
+                    self.datafile_menu = vec!["(empty)".into()];
+                    self.datafile_menu.append(
+                        &mut self
+                            .datafile_list
+                            .iter()
+                            .map(|v| format_menu_item(v.clone()))
+                            .collect(),
+                    );
 
                     let mut common = self.sm.context().common();
                     common.datafile_count = self.datafile_menu.len();
