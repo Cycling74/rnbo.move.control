@@ -24,7 +24,7 @@ use {
         fs::File,
         io::BufReader,
         ops::DerefMut,
-        path::PathBuf,
+        path::{Path, PathBuf},
         rc::Rc,
         sync::{
             atomic::{AtomicU8, Ordering as AtomicOrdering},
@@ -36,6 +36,8 @@ use {
 };
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+
+const DATFILE_DIR: &'static str = "/data/UserData/Documents/rnbo/datafiles";
 
 const MENU_MIDI: u8 = 0x32;
 const BACK_MIDI: u8 = 0x33;
@@ -88,6 +90,22 @@ fn format_title(mut title: String) -> String {
         title.push_str("..");
     }
     title
+}
+
+fn format_menu_item(mut item: String) -> String {
+    //make strings all length 16
+    if item.len() > 16 {
+        //add ellipsis
+        item.truncate(14);
+        item.push_str("..");
+    } else if item.len() < 16 {
+        //add whitespace
+        item.reserve(16 - item.len());
+        while item.len() < 16 {
+            item.push(' ');
+        }
+    }
+    item
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -300,13 +318,13 @@ impl ParamPage {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct DatarefEdit {
+pub(crate) struct DataSel {
     instance: usize, //not instance index, index within out list
     selected: usize,
     count: usize,
 }
 
-impl DatarefEdit {
+impl DataSel {
     pub fn new(instance: usize, dataref_count: usize) -> Self {
         Self {
             instance,
@@ -331,7 +349,7 @@ impl DatarefEdit {
         self.selected + 1 < self.count
     }
 
-    pub fn prev(&self) -> DatarefEdit {
+    pub fn prev(&self) -> DataSel {
         let mut v = self.clone();
         if self.can_go_prev() {
             v.selected = v.selected - 1;
@@ -339,7 +357,7 @@ impl DatarefEdit {
         v
     }
 
-    pub fn next(&self) -> DatarefEdit {
+    pub fn next(&self) -> DataSel {
         let mut v = self.clone();
         if self.can_go_next() {
             v.selected = v.selected + 1;
@@ -391,6 +409,10 @@ enum Cmd {
     },
 
     RenderVisibleParams,
+
+    UpdateDataFileList,
+    //local index, dataref name, file index
+    LoadDataref((usize, String, usize)),
 
     LoadSet(usize),
     LoadSetPreset(usize),
@@ -501,7 +523,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) == 1] / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] = PatcherDatarefs(DatarefEdit::new(0, ctx.dataref_count(0))),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
         Menu(usize) + BtnDown(Button::JogWheel) [*state == ABOUT_INDEX] = About,
@@ -526,7 +548,7 @@ smlang::statemachine! {
         PatcherInstances(InstSel) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherInstances(state.prev()),
         PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Params] / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: state.selected(), page: 0, focused: None }),
-        PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Datarefs] = PatcherDatarefs(DatarefEdit::new(state.selected(), ctx.dataref_count(state.selected()))),
+        PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Datarefs] = PatcherDatarefs(DataSel::new(state.selected(), ctx.dataref_count(state.selected()))),
 
         PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) == 0] = Menu(if state.typ == InstSelType::Params { PATCHER_PARAMS_INDEX } else { PATCHER_DATA_INDEX }),
         PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) > 0] = PatcherInstances(state.restart()),
@@ -534,8 +556,8 @@ smlang::statemachine! {
         //skip patcher instances menu if there is only 1 instance
         PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Params) > 1] = PatcherInstances(InstSel::new(InstSelType::Params, state.index, ctx.instances_count(InstSelType::Params))),
         PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Params) == 1] = Menu(PATCHER_PARAMS_INDEX),
-        PatcherDatarefs(DatarefEdit) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::new(InstSelType::Datarefs, state.instance(), ctx.instances_count(InstSelType::Datarefs))),
-        PatcherDatarefs(DatarefEdit) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) == 1] = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::new(InstSelType::Datarefs, state.instance(), ctx.instances_count(InstSelType::Datarefs))),
+        PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) == 1] = Menu(PATCHER_DATA_INDEX),
 
         PatcherParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1] / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: state.index, page: state.page + 1, focused: state.focused }),
@@ -547,15 +569,28 @@ smlang::statemachine! {
 
         PatcherParams(ParamPage) + InstancesChanged(_) [ctx.instances_count(InstSelType::Params) == 0] = Menu(PATCHER_PARAMS_INDEX),
         PatcherParams(ParamPage) + InstancesChanged(_) [ctx.instances_count(InstSelType::Params) > 0] = PatcherInstances(InstSel::enter(InstSelType::Params, ctx.instances_count(InstSelType::Params))),
-        PatcherDatarefs(DatarefEdit) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
-        PatcherDatarefs(DatarefEdit) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
+        PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
+        PatcherDatarefDetail(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefDetail(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
+        PatcherDatarefEdit(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefEdit(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
 
-        PatcherDatarefs(DatarefEdit) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefs(state.next()),
-        PatcherDatarefs(DatarefEdit) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefs(state.prev()),
+        PatcherDatarefs(DataSel) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefs(state.next()),
+        PatcherDatarefs(DataSel) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefs(state.prev()),
+
+        PatcherDatarefs(DataSel) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::UpdateDataFileList);  = PatcherDatarefDetail(state.clone()),
+        PatcherDatarefDetail(DataSel) + BtnDown(Button::Back) = PatcherDatarefs(state.clone()),
+        PatcherDatarefDetail(DataSel) + BtnDown(Button::JogWheel) = PatcherDatarefEdit(state.clone()),
+
+        PatcherDatarefEdit(DataSel) + BtnDown(Button::JogWheel) = PatcherDatarefDetail(state.clone()), //TODO load dataref
+        PatcherDatarefEdit(DataSel) + BtnDown(Button::Back) = PatcherDatarefDetail(state.clone()),
 
         PatcherInstances(InstSel) + SetCurrentChanged = Menu(PATCHER_PARAMS_INDEX),
         PatcherParams(ParamPage) + SetCurrentChanged  = Menu(PATCHER_PARAMS_INDEX),
-        PatcherDatarefs(DatarefEdit) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefs(DataSel) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefDetail(DataSel) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefEdit(DataSel) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
         PatcherParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = PatcherParams(state.clone()), //redraw
 
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
@@ -645,6 +680,8 @@ pub struct StateController {
     runner_rnbo_version: Option<String>,
 
     package_version: Option<String>,
+
+    datafile_list: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -659,6 +696,7 @@ struct CommonContext {
 
     //sorted list of instances that have datarefs, and the count of datarefs
     pub(crate) dataref_count: Vec<usize>,
+    pub(crate) datafile_count: usize,
 }
 
 impl Default for CommonContext {
@@ -673,6 +711,7 @@ impl Default for CommonContext {
             param_view_pages: Vec::new(),
 
             dataref_count: Vec::new(),
+            datafile_count: 0,
         }
     }
 }
@@ -729,6 +768,10 @@ impl Context {
 
     fn dataref_count(&self, index: usize) -> usize {
         *self.common.dataref_count.get(index).unwrap_or(&0)
+    }
+
+    fn datafile_count(&self) -> usize {
+        self.common.datafile_count
     }
 }
 
@@ -829,6 +872,8 @@ impl StateController {
 
             runner_rnbo_version: None,
             package_version,
+
+            datafile_list: Vec::new(),
         };
 
         //States::Init not transitioned to so, do setup here
@@ -1695,8 +1740,13 @@ impl StateController {
                         .get(entry.instance())
                         .unwrap();
                     let title = format_title(format!("{} Data", name));
-                    let items: Vec<String> =
-                        inst.datarefs().keys().map(|s| s.to_string()).collect();
+                    let items: Vec<String> = inst
+                        .datarefs()
+                        .iter()
+                        .map(|(k, v)| {
+                            format!("{}: {}", k, v.as_ref().map(|v| v.as_str()).unwrap_or("()"))
+                        })
+                        .collect();
 
                     self.with_display(|display| {
                         draw_menu(
@@ -1709,6 +1759,13 @@ impl StateController {
                     })
                     .await;
                 }
+                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+            }
+            States::PatcherDatarefDetail(entry) => {
+                //TODO
+                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+            }
+            States::PatcherDatarefEdit(entry) => {
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             _ => (),
@@ -2004,6 +2061,38 @@ impl StateController {
                         self.send_osc(msg).await;
                     }
                 }
+                Cmd::UpdateDataFileList => {
+                    self.datafile_list.clear();
+                    if let Ok(entries) = std::fs::read_dir(DATFILE_DIR) {
+                        for e in entries {
+                            if let Ok(e) = e {
+                                self.datafile_list
+                                    .push(e.path().to_string_lossy().to_string());
+                            }
+                        }
+                    };
+
+                    let mut common = self.sm.context().common();
+                    common.datafile_count = self.datafile_list.len();
+                    self.update_common(common);
+                }
+                Cmd::LoadDataref((instance, name, fileindex)) => {
+                    if let Some(filename) = self.datafile_list.get(fileindex) {
+                        if let Some(instance) =
+                            self.patchers_datarefs_instance_indexes.get(instance)
+                        {
+                            if let Some(instance) = self.instances.get(*instance) {
+                                let addr =
+                                    format!("/rnbo/inst/{}/data_refs/{}", instance.index(), name);
+                                let msg = OscMessage {
+                                    addr,
+                                    args: vec![OscType::String(filename.clone())],
+                                };
+                                self.send_osc(msg).await;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -2119,25 +2208,14 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
         let off = index + start;
         let indicator = if Some(off) == indicated { &"*" } else { &" " };
 
-        *l = if off == selected {
-            format!("{}{}{}", selected_indicator, indicator, item.as_ref())
-        } else {
-            format!(" {}{}", indicator, item.as_ref())
-        }
-        .to_string();
-
-        //make strings all length 16
-        if l.len() > 16 {
-            //add ellipsis
-            l.truncate(14);
-            l.push_str("..");
-        } else if l.len() < 16 {
-            //add whitespace
-            l.reserve(16 - l.len());
-            while l.len() < 16 {
-                l.push(' ');
+        *l = format_menu_item(
+            if off == selected {
+                format!("{}{}{}", selected_indicator, indicator, item.as_ref())
+            } else {
+                format!(" {}{}", indicator, item.as_ref())
             }
-        }
+            .to_string(),
+        );
     }
 
     LinearLayout::vertical(
