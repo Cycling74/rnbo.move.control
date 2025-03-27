@@ -580,7 +580,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) == 1] / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
         Menu(usize) + BtnDown(Button::JogWheel) [*state == ABOUT_INDEX] = About,
@@ -605,7 +605,7 @@ smlang::statemachine! {
         PatcherInstances(InstSel) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherInstances(state.prev()),
         PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Params] / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: state.selected(), page: 0, focused: None }),
-        PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Datarefs] = PatcherDatarefs(DataSel::new(state.selected(), ctx.dataref_count(state.selected()))),
+        PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Datarefs] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(state.selected(), ctx.dataref_count(state.selected()))),
 
         PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) == 0] = Menu(if state.typ == InstSelType::Params { PATCHER_PARAMS_INDEX } else { PATCHER_DATA_INDEX }),
         PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) > 0] = PatcherInstances(state.restart()),
@@ -628,20 +628,16 @@ smlang::statemachine! {
         PatcherParams(ParamPage) + InstancesChanged(_) [ctx.instances_count(InstSelType::Params) > 0] = PatcherInstances(InstSel::enter(InstSelType::Params, ctx.instances_count(InstSelType::Params))),
         PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
         PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
-        PatcherDatarefDetail(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
-        PatcherDatarefDetail(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
         PatcherDatarefLoad(DataLoad) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
         PatcherDatarefLoad(DataLoad) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
 
         PatcherDatarefs(DataSel) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefs(state.next()),
         PatcherDatarefs(DataSel) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefs(state.prev()),
 
-        PatcherDatarefs(DataSel) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::UpdateDataFileList);  = PatcherDatarefDetail(state.clone()),
-        PatcherDatarefDetail(DataSel) + BtnDown(Button::Back) = PatcherDatarefs(state.clone()),
-        PatcherDatarefDetail(DataSel) + BtnDown(Button::JogWheel) = PatcherDatarefLoad(DataLoad::new(state.clone(), ctx.datafile_count())),
+        PatcherDatarefs(DataSel) + BtnDown(Button::JogWheel) = PatcherDatarefLoad(DataLoad::new(state.clone(), ctx.datafile_count())),
 
-        PatcherDatarefLoad(DataLoad) + BtnDown(Button::JogWheel) / ctx.emit(state.dataload_cmd()); = PatcherDatarefDetail(state.dataref().clone()),
-        PatcherDatarefLoad(DataLoad) + BtnDown(Button::Back) = PatcherDatarefDetail(state.dataref()),
+        PatcherDatarefLoad(DataLoad) + BtnDown(Button::JogWheel) / ctx.emit(state.dataload_cmd()); = PatcherDatarefLoad(state.clone()),
+        PatcherDatarefLoad(DataLoad) + BtnDown(Button::Back) = PatcherDatarefs(state.dataref()),
 
         PatcherDatarefLoad(DataLoad) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefLoad(state.next()),
         PatcherDatarefLoad(DataLoad) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefLoad(state.prev()),
@@ -649,7 +645,6 @@ smlang::statemachine! {
         PatcherInstances(InstSel) + SetCurrentChanged = Menu(PATCHER_PARAMS_INDEX),
         PatcherParams(ParamPage) + SetCurrentChanged  = Menu(PATCHER_PARAMS_INDEX),
         PatcherDatarefs(DataSel) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
-        PatcherDatarefDetail(DataSel) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
         PatcherDatarefLoad(DataLoad) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
         PatcherParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = PatcherParams(state.clone()), //redraw
 
@@ -1821,11 +1816,6 @@ impl StateController {
                     })
                     .await;
                 }
-                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-            }
-            States::PatcherDatarefDetail(entry) => {
-                self.display_centered("hit jog wheel").await;
-                //TODO
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             States::PatcherDatarefLoad(entry) => {
