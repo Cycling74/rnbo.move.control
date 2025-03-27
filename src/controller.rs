@@ -366,6 +366,63 @@ impl DataSel {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct DataLoad {
+    dataref: DataSel,
+    selected: usize,
+    filecount: usize,
+}
+
+impl DataLoad {
+    pub fn new(dataref: DataSel, filecount: usize) -> Self {
+        Self {
+            dataref,
+            selected: 0,
+            filecount,
+        }
+    }
+
+    pub fn dataload_cmd(&self) -> Cmd {
+        Cmd::LoadDataref((
+            self.dataref.instance(),
+            self.dataref.selected(),
+            self.selected,
+        ))
+    }
+
+    pub fn dataref(&self) -> DataSel {
+        self.dataref.clone()
+    }
+
+    pub fn selected(&self) -> usize {
+        self.selected
+    }
+
+    pub fn can_go_prev(&self) -> bool {
+        self.selected > 0
+    }
+
+    pub fn can_go_next(&self) -> bool {
+        self.selected + 1 < self.filecount
+    }
+
+    pub fn prev(&self) -> Self {
+        let mut v = self.clone();
+        if self.can_go_prev() {
+            v.selected = v.selected - 1;
+        }
+        v
+    }
+
+    pub fn next(&self) -> Self {
+        let mut v = self.clone();
+        if self.can_go_next() {
+            v.selected = v.selected + 1;
+        }
+        v
+    }
+}
+
 const MENU_ITEMS: [&'static str; 6] = [
     "Graph Presets",
     "Graphs",
@@ -411,8 +468,8 @@ enum Cmd {
     RenderVisibleParams,
 
     UpdateDataFileList,
-    //local index, dataref name, file index
-    LoadDataref((usize, String, usize)),
+    //local index, dataref index, file index
+    LoadDataref((usize, usize, usize)),
 
     LoadSet(usize),
     LoadSetPreset(usize),
@@ -573,24 +630,27 @@ smlang::statemachine! {
         PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
         PatcherDatarefDetail(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
         PatcherDatarefDetail(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
-        PatcherDatarefEdit(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
-        PatcherDatarefEdit(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
+        PatcherDatarefLoad(DataLoad) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefLoad(DataLoad) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
 
         PatcherDatarefs(DataSel) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefs(state.next()),
         PatcherDatarefs(DataSel) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefs(state.prev()),
 
         PatcherDatarefs(DataSel) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::UpdateDataFileList);  = PatcherDatarefDetail(state.clone()),
         PatcherDatarefDetail(DataSel) + BtnDown(Button::Back) = PatcherDatarefs(state.clone()),
-        PatcherDatarefDetail(DataSel) + BtnDown(Button::JogWheel) = PatcherDatarefEdit(state.clone()),
+        PatcherDatarefDetail(DataSel) + BtnDown(Button::JogWheel) = PatcherDatarefLoad(DataLoad::new(state.clone(), ctx.datafile_count())),
 
-        PatcherDatarefEdit(DataSel) + BtnDown(Button::JogWheel) = PatcherDatarefDetail(state.clone()), //TODO load dataref
-        PatcherDatarefEdit(DataSel) + BtnDown(Button::Back) = PatcherDatarefDetail(state.clone()),
+        PatcherDatarefLoad(DataLoad) + BtnDown(Button::JogWheel) / ctx.emit(state.dataload_cmd()); = PatcherDatarefDetail(state.dataref().clone()),
+        PatcherDatarefLoad(DataLoad) + BtnDown(Button::Back) = PatcherDatarefDetail(state.dataref()),
+
+        PatcherDatarefLoad(DataLoad) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefLoad(state.next()),
+        PatcherDatarefLoad(DataLoad) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefLoad(state.prev()),
 
         PatcherInstances(InstSel) + SetCurrentChanged = Menu(PATCHER_PARAMS_INDEX),
         PatcherParams(ParamPage) + SetCurrentChanged  = Menu(PATCHER_PARAMS_INDEX),
         PatcherDatarefs(DataSel) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
         PatcherDatarefDetail(DataSel) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
-        PatcherDatarefEdit(DataSel) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefLoad(DataLoad) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
         PatcherParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = PatcherParams(state.clone()), //redraw
 
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
@@ -682,6 +742,7 @@ pub struct StateController {
     package_version: Option<String>,
 
     datafile_list: Vec<String>,
+    datafile_menu: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -874,6 +935,7 @@ impl StateController {
             package_version,
 
             datafile_list: Vec::new(),
+            datafile_menu: Vec::new(),
         };
 
         //States::Init not transitioned to so, do setup here
@@ -1762,10 +1824,22 @@ impl StateController {
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             States::PatcherDatarefDetail(entry) => {
+                self.display_centered("hit jog wheel").await;
                 //TODO
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
-            States::PatcherDatarefEdit(entry) => {
+            States::PatcherDatarefLoad(entry) => {
+                self.with_display(|display| {
+                    draw_menu(
+                        display,
+                        "Load File",
+                        self.datafile_menu.as_slice(),
+                        MenuIndicator::Item(entry.selected()),
+                        None,
+                    );
+                })
+                .await;
+                //TODO
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             _ => (),
@@ -2063,30 +2137,43 @@ impl StateController {
                 }
                 Cmd::UpdateDataFileList => {
                     self.datafile_list.clear();
+                    self.datafile_menu = vec!["(unload)".into()];
                     if let Ok(entries) = std::fs::read_dir(DATFILE_DIR) {
                         for e in entries {
                             if let Ok(e) = e {
-                                self.datafile_list
-                                    .push(e.path().to_string_lossy().to_string());
+                                if let Some(f) = e.path().file_name() {
+                                    let s = f.to_string_lossy().to_string();
+                                    self.datafile_menu.push(format_menu_item(s.clone()));
+                                    self.datafile_list.push(s);
+                                }
                             }
                         }
                     };
 
                     let mut common = self.sm.context().common();
-                    common.datafile_count = self.datafile_list.len();
+                    common.datafile_count = self.datafile_menu.len();
                     self.update_common(common);
                 }
-                Cmd::LoadDataref((instance, name, fileindex)) => {
-                    if let Some(filename) = self.datafile_list.get(fileindex) {
-                        if let Some(instance) =
-                            self.patchers_datarefs_instance_indexes.get(instance)
-                        {
-                            if let Some(instance) = self.instances.get(*instance) {
+                Cmd::LoadDataref((instance, datarefindex, fileindex)) => {
+                    //0 == unload
+                    let filename = if fileindex == 0 {
+                        ""
+                    } else {
+                        if let Some(filename) = self.datafile_list.get(fileindex - 1) {
+                            filename.as_str()
+                        } else {
+                            return;
+                        }
+                    };
+                    if let Some(instance) = self.patchers_datarefs_instance_indexes.get(instance) {
+                        if let Some(instance) = self.instances.get(*instance) {
+                            if let Some(name) = instance.datarefs().keys().skip(datarefindex).next()
+                            {
                                 let addr =
                                     format!("/rnbo/inst/{}/data_refs/{}", instance.index(), name);
                                 let msg = OscMessage {
                                     addr,
-                                    args: vec![OscType::String(filename.clone())],
+                                    args: vec![OscType::String(filename.to_string())],
                                 };
                                 self.send_osc(msg).await;
                             }
