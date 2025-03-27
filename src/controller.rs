@@ -2160,13 +2160,8 @@ impl StateController {
                     };
                     self.datafile_list.sort();
                     self.datafile_menu = vec!["(empty)".into()];
-                    self.datafile_menu.append(
-                        &mut self
-                            .datafile_list
-                            .iter()
-                            .map(|v| format_menu_item(v.clone()))
-                            .collect(),
-                    );
+                    self.datafile_menu
+                        .append(&mut self.datafile_list.iter().map(|v| v.clone()).collect());
 
                     let mut common = self.sm.context().common();
                     common.datafile_count = self.datafile_menu.len();
