@@ -284,7 +284,7 @@ enum Events {
     VisibleParamUpdated(usize),
 
     InstancesChanged(usize),
-    DatarefMappingChanged(usize), //local instance index
+    DatarefMappingChanged,
 
     SetNamesChanged,
     SetPresetNamesChanged,
@@ -641,6 +641,7 @@ smlang::statemachine! {
 
         PatcherDatarefLoad(DataLoad) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefLoad(state.next()),
         PatcherDatarefLoad(DataLoad) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefLoad(state.prev()),
+        PatcherDatarefLoad(DataLoad) + DatarefMappingChanged = PatcherDatarefLoad(state.clone()), //redraw, TODO filter to only redraw if it is a dataref we care about?
 
         PatcherInstances(InstSel) + SetCurrentChanged = Menu(PATCHER_PARAMS_INDEX),
         PatcherParams(ParamPage) + SetCurrentChanged  = Menu(PATCHER_PARAMS_INDEX),
@@ -1018,8 +1019,9 @@ impl StateController {
                 self.patchers_datarefs_instance_indexes
                     .push(local_instance_index);
                 for d in inst.datarefs().keys() {
+                    let addr = format!("/rnbo/inst/{}/data_refs/{}", inst.index(), d.clone());
                     self.dataref_lookup
-                        .insert(d.clone(), (local_instance_index, d.clone()));
+                        .insert(addr, (local_instance_index, d.clone()));
                 }
                 common.dataref_count.push(inst.datarefs().len());
             }
@@ -1305,8 +1307,7 @@ impl StateController {
                         if let Some(inst) = self.instances.get_mut(*index) {
                             if let Some(d) = inst.datarefs_mut().get_mut(name) {
                                 *d = mapping;
-                                self.handle_event(Events::DatarefMappingChanged(*index))
-                                    .await;
+                                self.handle_event(Events::DatarefMappingChanged).await;
                             }
                         }
                     }
