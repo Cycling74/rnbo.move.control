@@ -1,15 +1,16 @@
 use {
     crate::param::Param,
+    serde_json::Value,
     std::collections::{BTreeMap, HashMap},
 };
 
-#[derive(Debug)]
 pub struct PatcherInst {
     index: usize,
     name: String,
     params: Vec<Param>,
     presets: Vec<String>,
-    datarefs: BTreeMap<String, Option<String>>,
+    datarefs: BTreeMap<String, Dataref>,
+    visible_datarefs: Vec<String>, //keys from datarefs
 }
 
 fn parse_presets(contents: &serde_json::Map<String, serde_json::Value>) -> Option<Vec<String>> {
@@ -31,9 +32,21 @@ fn parse_presets(contents: &serde_json::Map<String, serde_json::Value>) -> Optio
     Some(presets)
 }
 
+fn parse_meta(body: &Value) -> Option<Value> {
+    let meta = body
+        .as_object()?
+        .get("CONTENTS")?
+        .as_object()?
+        .get("meta")?
+        .as_object()?
+        .get("VALUE")?
+        .as_str()?;
+    serde_json::from_str(meta).ok()
+}
+
 fn parse_datarefs(
     contents: &serde_json::Map<String, serde_json::Value>,
-) -> Option<BTreeMap<String, Option<String>>> {
+) -> Option<BTreeMap<String, Dataref>> {
     let mut datarefs = BTreeMap::new();
 
     for (name, body) in contents
@@ -43,16 +56,56 @@ fn parse_datarefs(
         .as_object()?
         .iter()
     {
-        let value = body.get("VALUE")?.as_str()?;
-        let value = if value.len() > 0 {
-            Some(value.to_string())
+        let mapping = body.get("VALUE")?.as_str()?;
+        let mapping = if mapping.len() > 0 {
+            Some(mapping.to_string())
         } else {
             None
         };
-        datarefs.insert(name.clone(), value);
+
+        let meta = parse_meta(body).unwrap_or(Value::Null);
+
+        let mapping = Dataref { mapping, meta };
+
+        datarefs.insert(name.clone(), mapping);
     }
 
     Some(datarefs)
+}
+
+#[derive(Clone)]
+pub struct Dataref {
+    mapping: Option<String>,
+    meta: Value,
+}
+
+impl Dataref {
+    pub fn mapping(&self) -> &Option<String> {
+        &self.mapping
+    }
+    pub fn mapping_mut(&mut self) -> &mut Option<String> {
+        &mut self.mapping
+    }
+
+    pub fn meta(&self) -> &Value {
+        &self.meta
+    }
+    pub fn meta_mut(&mut self) -> &mut Value {
+        &mut self.meta
+    }
+
+    pub fn hidden(&self) -> bool {
+        if let Some(meta) = self.meta.as_object() {
+            if meta.contains_key("hidden") {
+                if let Some(hidden) = meta.get("hidden") {
+                    if let Some(v) = hidden.as_bool() {
+                        return v;
+                    }
+                }
+            }
+        }
+        false
+    }
 }
 
 impl PatcherInst {
@@ -70,12 +123,29 @@ impl PatcherInst {
         &mut self.params
     }
 
-    pub fn datarefs(&self) -> &BTreeMap<String, Option<String>> {
+    pub fn visible_datarefs(&self) -> &Vec<String> {
+        &self.visible_datarefs
+    }
+
+    pub fn visibile_datarefs_mut(&mut self) -> &mut Vec<String> {
+        &mut self.visible_datarefs
+    }
+
+    pub fn dataref_mappings(&self) -> &BTreeMap<String, Dataref> {
         &self.datarefs
     }
 
-    pub fn datarefs_mut(&mut self) -> &mut BTreeMap<String, Option<String>> {
+    pub fn dataref_mappings_mut(&mut self) -> &mut BTreeMap<String, Dataref> {
         &mut self.datarefs
+    }
+
+    pub fn update_visible_datarefs(&mut self) {
+        self.visible_datarefs = self
+            .datarefs
+            .iter()
+            .filter(|(_, dref)| !dref.hidden())
+            .map(|(key, _)| key.clone())
+            .collect();
     }
 
     pub fn update_param_f64(&mut self, addr: &str, val: f64) -> Option<usize> {
@@ -118,13 +188,16 @@ impl PatcherInst {
         let presets = parse_presets(&contents).unwrap_or_default();
         let datarefs = parse_datarefs(&contents).unwrap_or_default();
 
-        Some(PatcherInst {
+        let mut inst = PatcherInst {
             index,
             name,
             params,
             presets,
             datarefs,
-        })
+            visible_datarefs: Vec::new(),
+        };
+        inst.update_visible_datarefs();
+        Some(inst)
     }
 
     pub fn parse_all(json: &serde_json::Value) -> Option<HashMap<usize, Self>> {
