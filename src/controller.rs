@@ -285,6 +285,7 @@ enum Events {
 
     InstancesChanged(usize),
     DatarefMappingChanged,
+    DatarefVisibleChanged,
 
     SetNamesChanged,
     SetPresetNamesChanged,
@@ -607,6 +608,7 @@ smlang::statemachine! {
             = PatcherParams(ParamPage { index: state.selected(), page: 0, focused: None }),
         PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Datarefs] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(state.selected(), ctx.dataref_count(state.selected()))),
 
+
         PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) == 0] = Menu(if state.typ == InstSelType::Params { PATCHER_PARAMS_INDEX } else { PATCHER_DATA_INDEX }),
         PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) > 0] = PatcherInstances(state.restart()),
 
@@ -642,6 +644,11 @@ smlang::statemachine! {
         PatcherDatarefLoad(DataLoad) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefLoad(state.next()),
         PatcherDatarefLoad(DataLoad) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefLoad(state.prev()),
         PatcherDatarefLoad(DataLoad) + DatarefMappingChanged = PatcherDatarefLoad(state.clone()), //redraw, TODO filter to only redraw if it is a dataref we care about?
+
+         //TODO can we be less drastic?
+        PatcherDatarefs(DataSel) + DatarefVisibleChanged = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefLoad(DataLoad) + DatarefVisibleChanged = Menu(PATCHER_DATA_INDEX),
+        PatcherInstances(InstSel) + DatarefVisibleChanged [state.typ() == InstSelType::Datarefs] = Menu(PATCHER_DATA_INDEX),
 
         PatcherInstances(InstSel) + SetCurrentChanged = Menu(PATCHER_PARAMS_INDEX),
         PatcherParams(ParamPage) + SetCurrentChanged  = Menu(PATCHER_PARAMS_INDEX),
@@ -715,6 +722,7 @@ pub struct StateController {
     param_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
     param_norm_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
     dataref_lookup: HashMap<String, (usize, String)>, //OSC addr -> (index into self.instances, datarefname)
+    dataref_meta_lookup: HashMap<String, (usize, String)>, //OSC addr -> (index into self.instances, datarefname)
 
     param_views: Vec<ParamView>,
     param_view_order: Vec<usize>,
@@ -909,6 +917,7 @@ impl StateController {
             param_lookup: HashMap::new(),
             param_norm_lookup: HashMap::new(),
             dataref_lookup: HashMap::new(),
+            dataref_meta_lookup: HashMap::new(),
 
             param_views: Vec::new(),
             param_view_order: Vec::new(),
@@ -973,7 +982,7 @@ impl StateController {
         self.instance_param_map.clear();
         self.param_lookup.clear();
         self.param_norm_lookup.clear();
-        self.dataref_lookup.clear();
+        self.dataref_meta_lookup.clear();
         self.instances.clear();
 
         let mut common = self.sm.context().common();
@@ -1014,16 +1023,22 @@ impl StateController {
                 self.instance_params.push(instindexes);
             }
 
-            if inst.datarefs().len() > 0 {
-                self.patchers_datarefs_instance_names.push(name.clone());
-                self.patchers_datarefs_instance_indexes
-                    .push(local_instance_index);
-                for d in inst.datarefs().keys() {
+            {
+                let visible = inst.visible_datarefs();
+                if visible.len() > 0 {
+                    self.patchers_datarefs_instance_names.push(name.clone());
+                    self.patchers_datarefs_instance_indexes
+                        .push(local_instance_index);
+                    common.dataref_count.push(visible.len());
+                }
+                for d in inst.dataref_mappings().keys() {
                     let addr = format!("/rnbo/inst/{}/data_refs/{}", inst.index(), d.clone());
                     self.dataref_lookup
+                        .insert(addr.clone(), (local_instance_index, d.clone()));
+                    let addr = format!("{}/meta", addr);
+                    self.dataref_meta_lookup
                         .insert(addr, (local_instance_index, d.clone()));
                 }
-                common.dataref_count.push(inst.datarefs().len());
             }
 
             self.instances.push(inst);
@@ -1305,9 +1320,23 @@ impl StateController {
                             _ => None,
                         };
                         if let Some(inst) = self.instances.get_mut(*index) {
-                            if let Some(d) = inst.datarefs_mut().get_mut(name) {
-                                *d = mapping;
+                            if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
+                                *d.mapping_mut() = mapping;
                                 self.handle_event(Events::DatarefMappingChanged).await;
+                            }
+                        }
+                    } else if let Some((index, name)) = self.dataref_meta_lookup.get(&msg.addr) {
+                        let meta = match &msg.args[0] {
+                            OscType::String(v) => {
+                                serde_json::from_str(v).unwrap_or(serde_json::Value::Null)
+                            }
+                            _ => serde_json::Value::Null,
+                        };
+                        if let Some(inst) = self.instances.get_mut(*index) {
+                            if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
+                                if d.set_meta(&meta) {
+                                    self.handle_event(Events::DatarefVisibleChanged).await;
+                                }
                             }
                         }
                     }
@@ -1798,13 +1827,7 @@ impl StateController {
                         .get(entry.instance())
                         .unwrap();
                     let title = format_title(format!("{} Data", name));
-                    let items: Vec<String> = inst
-                        .datarefs()
-                        .iter()
-                        .map(|(k, v)| {
-                            format!("{}: {}", k, v.as_ref().map(|v| v.as_str()).unwrap_or("()"))
-                        })
-                        .collect();
+                    let items: Vec<String> = inst.visible_datarefs().clone();
 
                     self.with_display(|display| {
                         draw_menu(
@@ -1824,19 +1847,23 @@ impl StateController {
                     .instances
                     .get(self.patchers_datarefs_instance_indexes[entry.dataref().instance()])
                 {
-                    let indicated = if let Some(Some(filename)) = inst
-                        .datarefs()
-                        .values()
+                    let indicated = inst
+                        .visible_datarefs()
+                        .iter()
                         .skip(entry.dataref().selected())
                         .next()
-                    {
-                        self.datafile_list
-                            .iter()
-                            .position(|item| item == filename)
-                            .map(|index| index + 1) //+ 1 because of (unload) being first item
-                    } else {
-                        Some(0) //"(unload)"
-                    };
+                        .map(|key| {
+                            let dr = inst.dataref_mappings().get(key).unwrap();
+                            if let Some(filename) = dr.mapping() {
+                                self.datafile_list
+                                    .iter()
+                                    .position(|item| item == filename)
+                                    .map(|index| index + 1) //+ 1 because of (unload) being first item
+                                    .unwrap_or(0)
+                            } else {
+                                0
+                            }
+                        });
 
                     self.with_display(|display| {
                         draw_menu(
@@ -2180,7 +2207,8 @@ impl StateController {
                     };
                     if let Some(instance) = self.patchers_datarefs_instance_indexes.get(instance) {
                         if let Some(instance) = self.instances.get(*instance) {
-                            if let Some(name) = instance.datarefs().keys().skip(datarefindex).next()
+                            if let Some(name) =
+                                instance.visible_datarefs().iter().skip(datarefindex).next()
                             {
                                 let addr =
                                     format!("/rnbo/inst/{}/data_refs/{}", instance.index(), name);
