@@ -87,11 +87,15 @@ impl Dataref {
         &mut self.mapping
     }
 
+    //returns true if visibility changes
+    pub fn set_meta(&mut self, meta: &Value) -> bool {
+        let hidden = self.hidden();
+        self.meta = meta.clone();
+        hidden != self.hidden()
+    }
+
     pub fn meta(&self) -> &Value {
         &self.meta
-    }
-    pub fn meta_mut(&mut self) -> &mut Value {
-        &mut self.meta
     }
 
     pub fn hidden(&self) -> bool {
