@@ -425,19 +425,19 @@ impl DataLoad {
 }
 
 const MENU_ITEMS: [&'static str; 6] = [
-    "Graph Presets",
-    "Graphs",
     "Device Params",
     "Device Data",
+    "Graphs",
+    "Graph Presets",
     "Tempo",
     "About",
 ];
 const EXIT_MENU: [&'static str; 2] = ["Power Down", "Launch Move"];
 
-const SET_PRESETS_INDEX: usize = 0;
-const SETS_INDEX: usize = 1;
-const PATCHER_PARAMS_INDEX: usize = 2;
-const PATCHER_DATA_INDEX: usize = 3;
+const PATCHER_PARAMS_INDEX: usize = 0;
+const PATCHER_DATA_INDEX: usize = 1;
+const SETS_INDEX: usize = 2;
+const SET_PRESETS_INDEX: usize = 3;
 const TEMPO_INDEX: usize = 4;
 const ABOUT_INDEX: usize = 5;
 
