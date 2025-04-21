@@ -91,6 +91,8 @@ impl ParamView {
                     }
                 }
             }
+        } else {
+            eprintln!("failed to parse views");
         }
         views
     }
