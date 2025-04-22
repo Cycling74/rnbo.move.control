@@ -312,7 +312,10 @@ pub(crate) struct ParamPage {
 }
 
 impl ParamPage {
-    fn offset_page(&self, offset: isize) -> Self {
+    fn offset_page(&self, offset: isize) -> usize {
+        (self.page as isize + offset).max(0) as usize
+    }
+    fn with_offset_page(&self, offset: isize) -> Self {
         let mut p = self.clone();
         p.page = (p.page as isize + offset).max(0) as usize;
         p
@@ -480,6 +483,8 @@ enum Cmd {
 
     LoadSet(usize),
     LoadSetPreset(usize),
+
+    ReportViewParamPage(usize, usize),
 }
 
 mod top {
@@ -560,22 +565,33 @@ mod view {
         transitions: {
             *ParamViewMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < ctx.param_view_count()] = ParamViewMenu(*state + 1),
             ParamViewMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = ParamViewMenu(*state - 1),
-            ParamViewMenu(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: *state, page: 0, focused: None }),
+            ParamViewMenu(usize) + BtnDown(Button::JogWheel) /
+                { ctx.emit(Cmd::ReportViewParamPage(*state, 0)); ctx.emit(Cmd::RenderVisibleParams); }=
+                ViewParams(ParamPage { index: *state, page: 0, focused: None }),
 
             ViewParams(ParamPage) + BtnDown(Button::Back) = ParamViewMenu(state.index),
-            ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(1)),
-            ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(-1)),
+            ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] /
+                { ctx.emit(Cmd::ReportViewParamPage(state.index, state.offset_page(1))); ctx.emit(Cmd::RenderVisibleParams); }=
+                ViewParams(state.with_offset_page(1)),
+            ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] /
+                { ctx.emit(Cmd::ReportViewParamPage(state.index, state.offset_page(-1))); ctx.emit(Cmd::RenderVisibleParams); }=
+                ViewParams(state.with_offset_page(-1)),
             ViewParams(ParamPage) + EncTouch(_) [*event < 8] = ViewParams(state.with_focus(*event)),
             ViewParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1}); = ViewParams(state.with_focus(*event)),
             ViewParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1}); = ViewParams(state.with_focus(*event)),
             ViewParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = ViewParams(state.clone()), //redraw
 
-            ParamViewMenu(usize) + SetViewSelected(_) [event.0 < ctx.param_view_count() && event.1 < ctx.view_param_pages(event.0)] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: event.0, page: event.1, focused: None }),
+            ParamViewMenu(usize) + SetViewSelected(_) [event.0 < ctx.param_view_count() && event.1 < ctx.view_param_pages(event.0)] /
+                { ctx.emit(Cmd::ReportViewParamPage(event.0, event.1)); ctx.emit(Cmd::RenderVisibleParams); }=
+                ViewParams(ParamPage { index: event.0, page: event.1, focused: None }),
             ViewParams(ParamPage) + SetViewSelected(_)
-                [(state.index != event.0 || state.page != event.1) && event.0 < ctx.param_view_count() && event.1 < ctx.view_param_pages(event.0)] / ctx.emit(Cmd::RenderVisibleParams); =
+                [(state.index != event.0 || state.page != event.1) && event.0 < ctx.param_view_count() && event.1 < ctx.view_param_pages(event.0)] /
+                { ctx.emit(Cmd::ReportViewParamPage(event.0, event.1)); ctx.emit(Cmd::RenderVisibleParams); }=
                 ViewParams(ParamPage { index: event.0, page: event.1, focused: state.focused }),
 
-            ViewParams(ParamPage) + SetViewPageSelected(_) [state.page != *event] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: state.index, page: (*event).min(ctx.view_param_pages(state.index) - 1), focused: state.focused }),
+            ViewParams(ParamPage) + SetViewPageSelected(_) [state.page != *event] /
+                { ctx.emit(Cmd::ReportViewParamPage(state.index, (*event).min(ctx.view_param_pages(state.index) - 1))); ctx.emit(Cmd::RenderVisibleParams);} =
+                ViewParams(ParamPage { index: state.index, page: (*event).min(ctx.view_param_pages(state.index) - 1), focused: state.focused }),
 
             _ + SetViewListChanged = ParamViewMenu(0),
         }
@@ -2305,6 +2321,13 @@ impl StateController {
                             }
                         }
                     }
+                }
+                Cmd::ReportViewParamPage(index, page) => {
+                    let msg = OscMessage {
+                        addr: SET_VIEW_DISPLAY.to_string(),
+                        args: vec![OscType::Int(index as _), OscType::Int(page as _)],
+                    };
+                    self.send_osc(msg).await;
                 }
             }
         }
