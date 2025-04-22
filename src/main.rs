@@ -642,18 +642,6 @@ async fn with_client(
                     }
                 }
             }
-            {
-                let mut g = views_query.lock().await;
-                if let Some(v) = g.deref() {
-                    if *v <= Instant::now() {
-                        if let Ok(views) = get_views().await {
-                            *g = None;
-                            let mut g = state.lock().await;
-                            g.set_param_views(views).await;
-                        }
-                    }
-                }
-            }
 
             {
                 let mut g = inst_query.lock().await;
@@ -664,6 +652,12 @@ async fn with_client(
                             *g = None;
                             let mut g = state.lock().await;
                             g.set_instances(inst).await;
+
+                            //look up views after instances have been looked up
+                            {
+                                let mut g = views_query.lock().await;
+                                *g = Some(Instant::now() + HTTP_INITIAL_QUERY_DELAY);
+                            }
                         }
                     }
                 }
@@ -676,6 +670,18 @@ async fn with_client(
                             *g = None;
                             let mut g = state.lock().await;
                             g.set_set_current_name(name).await;
+                        }
+                    }
+                }
+            }
+            {
+                let mut g = views_query.lock().await;
+                if let Some(v) = g.deref() {
+                    if *v <= Instant::now() {
+                        if let Ok(views) = get_views().await {
+                            *g = None;
+                            let mut g = state.lock().await;
+                            g.set_param_views(views).await;
                         }
                     }
                 }
@@ -752,7 +758,7 @@ async fn with_client(
 
                         {
                             let mut g = views_query.lock().await;
-                            *g = Some(timeout);
+                            *g = Some(timeout + HTTP_INITIAL_QUERY_DELAY);
                         }
 
                         //do set current query
@@ -826,7 +832,10 @@ async fn with_client(
                                                         *g = Some(Instant::now());
                                                     } else if set_view_regex.is_match(path) {
                                                         let mut g = views_query.lock().await;
-                                                        *g = Some(Instant::now());
+                                                        *g = Some(
+                                                            Instant::now()
+                                                                + Duration::from_millis(100),
+                                                        );
                                                     }
                                                 }
                                             }

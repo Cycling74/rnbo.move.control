@@ -33,7 +33,7 @@ PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.12/sysro
 
 copy lib contents from jack2.move destdir into /usr/local/oecore-x86_64/sysroots/cortexa72-oe-linux/lib/
 
-install rustup and 
+install rustup and
 
 ```
 rustup target add aarch64-unknown-linux-gnu
@@ -46,6 +46,15 @@ PKG_CONFIG_SYSROOT_DIR=/usr/local/oecore-x86_64/sysroots/cortexa72-oe-linux/ PKG
 ```
 conan create .  -s os=Linux -s arch=armv8 -s compiler=gcc -s compiler.version=11.4 -s compiler.libcxx=libstdc++11
 ```
+
+## OSC
+
+* `/rnboctl/view/display <view index> [<optional page index>]`
+  * send this message and no matter where you are, the display should show the given view (clamped to be in range) at either page 0 or the page you specify (clamped to be in range)
+  * this message should also be sent from the control app to indicate what view/page it is displaying
+* `/rnboctl/view/page <page index>`
+  * send this message if you're in a param view and the view should display the page you've given (clamped to be in range)
+
 
 ## Notes
 

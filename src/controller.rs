@@ -45,6 +45,8 @@ const PLAY_MIDI: u8 = 0x55;
 
 const MOVE_CTL_MIDI_CHAN: u8 = 15;
 
+const PARAM_Y_OFFSET: i32 = -6;
+
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 
@@ -71,6 +73,9 @@ pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
 pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loaded";
 pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
 pub const SET_VIEWS_ORDER_ADDR: &str = "/rnbo/inst/control/sets/views/order";
+
+pub const SET_VIEW_DISPLAY: &str = "/rnboctl/view/display";
+pub const SET_VIEW_PAGE_DISPLAY: &str = "/rnboctl/view/page";
 
 const JOG_WHEEL_TOUCH: usize = 9;
 const VOLUME_WHEEL_TOUCH: usize = 8;
@@ -281,6 +286,9 @@ enum Events {
     Transport(bool),
     Tempo(f32),
 
+    SetViewSelected((usize, usize)), //index, page
+    SetViewPageSelected(usize),
+
     VisibleParamUpdated(usize),
 
     InstancesChanged(usize),
@@ -306,7 +314,10 @@ pub(crate) struct ParamPage {
 }
 
 impl ParamPage {
-    fn offset_page(&self, offset: isize) -> Self {
+    fn offset_page(&self, offset: isize) -> usize {
+        (self.page as isize + offset).max(0) as usize
+    }
+    fn with_offset_page(&self, offset: isize) -> Self {
         let mut p = self.clone();
         p.page = (p.page as isize + offset).max(0) as usize;
         p
@@ -474,6 +485,8 @@ enum Cmd {
 
     LoadSet(usize),
     LoadSetPreset(usize),
+
+    ReportViewParamPage(usize, usize),
 }
 
 mod top {
@@ -536,6 +549,11 @@ mod top {
 
             _ + BtnDown(Button::Play) / ctx.emit(Cmd::ToggleTransport);,
 
+            Main + SetViewSelected(_) = ParamViews,
+            Main + SetViewPageSelected(_) = ParamViews,
+            VolumeEditor(LastView) + SetViewSelected(_) = ParamViews,
+            VolumeEditor(LastView) + SetViewPageSelected(_) = ParamViews,
+
             _ + ChildProcessError = DisplayChildProcessError,
             DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
         }
@@ -549,15 +567,33 @@ mod view {
         transitions: {
             *ParamViewMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < ctx.param_view_count()] = ParamViewMenu(*state + 1),
             ParamViewMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = ParamViewMenu(*state - 1),
-            ParamViewMenu(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: *state, page: 0, focused: None }),
+            ParamViewMenu(usize) + BtnDown(Button::JogWheel) /
+                { ctx.emit(Cmd::ReportViewParamPage(*state, 0)); ctx.emit(Cmd::RenderVisibleParams); }=
+                ViewParams(ParamPage { index: *state, page: 0, focused: None }),
 
             ViewParams(ParamPage) + BtnDown(Button::Back) = ParamViewMenu(state.index),
-            ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(1)),
-            ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(state.offset_page(-1)),
+            ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] /
+                { ctx.emit(Cmd::ReportViewParamPage(state.index, state.offset_page(1))); ctx.emit(Cmd::RenderVisibleParams); }=
+                ViewParams(state.with_offset_page(1)),
+            ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] /
+                { ctx.emit(Cmd::ReportViewParamPage(state.index, state.offset_page(-1))); ctx.emit(Cmd::RenderVisibleParams); }=
+                ViewParams(state.with_offset_page(-1)),
             ViewParams(ParamPage) + EncTouch(_) [*event < 8] = ViewParams(state.with_focus(*event)),
             ViewParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1}); = ViewParams(state.with_focus(*event)),
             ViewParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1}); = ViewParams(state.with_focus(*event)),
             ViewParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = ViewParams(state.clone()), //redraw
+
+            ParamViewMenu(usize) + SetViewSelected(_) [event.0 < ctx.param_view_count() && event.1 < ctx.view_param_pages(event.0)] /
+                { ctx.emit(Cmd::ReportViewParamPage(event.0, event.1)); ctx.emit(Cmd::RenderVisibleParams); }=
+                ViewParams(ParamPage { index: event.0, page: event.1, focused: None }),
+            ViewParams(ParamPage) + SetViewSelected(_)
+                [(state.index != event.0 || state.page != event.1) && event.0 < ctx.param_view_count() && event.1 < ctx.view_param_pages(event.0)] /
+                { ctx.emit(Cmd::ReportViewParamPage(event.0, event.1)); ctx.emit(Cmd::RenderVisibleParams); }=
+                ViewParams(ParamPage { index: event.0, page: event.1, focused: state.focused }),
+
+            ViewParams(ParamPage) + SetViewPageSelected(_) [state.page != *event] /
+                { ctx.emit(Cmd::ReportViewParamPage(state.index, (*event).min(ctx.view_param_pages(state.index) - 1))); ctx.emit(Cmd::RenderVisibleParams);} =
+                ViewParams(ParamPage { index: state.index, page: (*event).min(ctx.view_param_pages(state.index) - 1), focused: state.focused }),
 
             _ + SetViewListChanged = ParamViewMenu(0),
         }
@@ -990,11 +1026,12 @@ impl StateController {
         common.dataref_count.clear();
 
         for key in indexes.iter() {
-            let local_instance_index = self.instances.len();
             let inst = instances.remove(key).unwrap();
             let name = format!("{}: {}", inst.index(), inst.name());
 
             if inst.params().len() > 0 {
+                let mut instindexes = Vec::new();
+                let local_instance_index = self.patchers_params_instance_names.len();
                 self.patchers_params_instance_names.push(name.clone());
                 self.patchers_params_instance_indexes
                     .push(local_instance_index);
@@ -1003,7 +1040,6 @@ impl StateController {
                     .instance_param_pages
                     .push(param_pages(inst.params().len()));
 
-                let mut instindexes = Vec::new();
                 for p in inst.params().iter() {
                     let index = self.params.len();
                     let local_param_index = instindexes.len();
@@ -1024,6 +1060,7 @@ impl StateController {
             }
 
             {
+                let local_instance_index = self.instances.len();
                 let visible = inst.visible_datarefs();
                 if visible.len() > 0 {
                     self.patchers_datarefs_instance_names.push(name.clone());
@@ -1052,7 +1089,7 @@ impl StateController {
             InstSelType::Datarefs,
             self.patchers_datarefs_instance_names.len(),
         );
-        self.update_views(&mut common).await;
+        self.clear_param_views(); //to be updated later
         self.update_common(common);
 
         self.handle_event(Events::InstancesChanged(indexes.len()))
@@ -1120,8 +1157,14 @@ impl StateController {
                     if let Some(instance) = self.instance_params.get(*instance) {
                         if let Some(index) = instance.get(*param) {
                             params.push(*index);
+                        } else {
+                            eprintln!("couldn't get param at local index {}", *param);
                         }
+                    } else {
+                        eprintln!("couldn't get instance at local index {}", *instance);
                     }
+                } else {
+                    eprintln!("couldn't find instance at index {:?}", sparce);
                 }
             }
             if params.len() > 0 {
@@ -1147,6 +1190,11 @@ impl StateController {
         sorted.append(&mut self.param_views);
 
         std::mem::swap(&mut sorted, &mut self.param_views);
+    }
+
+    pub fn clear_param_views(&mut self) {
+        self.param_views.clear();
+        self.param_view_param_lookup.clear();
     }
 
     pub async fn set_param_views(&mut self, mut views: Vec<ParamView>) {
@@ -1210,140 +1258,65 @@ impl StateController {
                 //TODO transmit more fine tuned changes
                 self.handle_event(Events::SetViewListChanged).await;
             }
-        } else if msg.args.len() == 1 {
+        } else {
             //println!("got osc {}", msg.addr);
             //let mut update = None;
             match msg.addr.as_str() {
                 TRANSPORT_ROLLING_ADDR => {
-                    if let OscType::Bool(rolling) = msg.args[0] {
-                        if self.rolling != rolling {
-                            self.rolling = rolling;
-                            let _ = self.midi_out_queue.send(Midi::cc(
-                                PLAY_MIDI,
-                                if rolling {
-                                    MoveColor::Green
-                                } else {
-                                    MoveColor::LightGray
-                                } as _,
-                                MOVE_CTL_MIDI_CHAN,
-                            ));
-                            self.handle_event(Events::Transport(rolling)).await;
+                    if msg.args.len() == 1 {
+                        if let OscType::Bool(rolling) = msg.args[0] {
+                            if self.rolling != rolling {
+                                self.rolling = rolling;
+                                let _ = self.midi_out_queue.send(Midi::cc(
+                                    PLAY_MIDI,
+                                    if rolling {
+                                        MoveColor::Green
+                                    } else {
+                                        MoveColor::LightGray
+                                    } as _,
+                                    MOVE_CTL_MIDI_CHAN,
+                                ));
+                                self.handle_event(Events::Transport(rolling)).await;
+                            }
                         }
                     }
                 }
                 TRANSPORT_BPM_ADDR => {
-                    if let Some(bpm) = match &msg.args[0] {
-                        OscType::Double(v) => Some(*v as f32),
-                        OscType::Float(v) => Some(*v),
-                        _ => None,
-                    } {
-                        self.bpm = bpm;
-                        self.handle_event(Events::Tempo(bpm)).await;
+                    if msg.args.len() == 1 {
+                        if let Some(bpm) = match &msg.args[0] {
+                            OscType::Double(v) => Some(*v as f32),
+                            OscType::Float(v) => Some(*v),
+                            _ => None,
+                        } {
+                            self.bpm = bpm;
+                            self.handle_event(Events::Tempo(bpm)).await;
+                        }
                     }
                 }
                 SET_CURRENT_ADDR => {
-                    let name = match &msg.args[0] {
-                        OscType::String(name) => Some(name.clone()),
-                        _ => None,
-                    };
-                    self.set_set_current_name(name).await;
-                }
-                SET_PRESETS_LOADED_ADDR => {
-                    self.set_preset_loaded_name = match &msg.args[0] {
-                        OscType::String(name) => Some(name.clone()),
-                        _ => None,
-                    };
-                    self.set_preset_loaded_index = if let Some(name) = &self.set_preset_loaded_name
-                    {
-                        self.set_preset_names.iter().position(|r| r == name)
-                    } else {
-                        None
-                    };
-                    self.handle_event(Events::SetPresetLoadedChanged).await;
-                }
-                _ => {
-                    if let Some(index) = self.param_lookup.get(&msg.addr) {
-                        if let Some(param) = self.params.get_mut(*index) {
-                            //ignore, we wait for normalized
-                            match &msg.args[0] {
-                                OscType::Double(v) => param.update_f64(*v),
-                                OscType::Float(v) => param.update_f64(*v as f64),
-                                OscType::Int(v) => param.update_f64(*v as f64),
-                                OscType::String(v) => param.update_s(v),
-                                _ => (),
-                            };
-                        }
-                    } else if let Some(index) = self.param_norm_lookup.get(&msg.addr) {
-                        if let Some(param) = self.params.get_mut(*index) {
-                            let v = match &msg.args[0] {
-                                OscType::Double(v) => {
-                                    param.set_norm_pending(*v);
-                                    Some((param.instance_index(), param.index()))
-                                }
-                                OscType::Float(v) => {
-                                    let v = *v as f64;
-                                    param.set_norm_pending(v);
-                                    Some((param.instance_index(), param.index()))
-                                }
-                                _ => None,
-                            };
-                            if let Some(sparce) = v {
-                                //TODO throttle?
-
-                                let mut updates = Vec::new();
-                                //see if this param is visible, render it if so
-                                for (location, index) in self.visible_params.iter().enumerate() {
-                                    if let Some(param) = self.params.get(*index) {
-                                        if sparce.0 == param.instance_index()
-                                            && sparce.1 == param.index()
-                                        {
-                                            self.render_param(&param, location);
-                                            updates.push(location);
-                                        }
-                                    }
-                                }
-                                for location in updates {
-                                    self.handle_event(Events::VisibleParamUpdated(location))
-                                        .await;
-                                }
-                            }
-                        }
-                    } else if let Some((index, name)) = self.dataref_lookup.get(&msg.addr) {
-                        let mapping = match &msg.args[0] {
-                            OscType::String(v) => {
-                                if v.len() > 0 {
-                                    Some(v.clone())
-                                } else {
-                                    None
-                                }
-                            }
+                    if msg.args.len() == 1 {
+                        let name = match &msg.args[0] {
+                            OscType::String(name) => Some(name.clone()),
                             _ => None,
                         };
-                        if let Some(inst) = self.instances.get_mut(*index) {
-                            if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
-                                *d.mapping_mut() = mapping;
-                                self.handle_event(Events::DatarefMappingChanged).await;
-                            }
-                        }
-                    } else if let Some((index, name)) = self.dataref_meta_lookup.get(&msg.addr) {
-                        let meta = match &msg.args[0] {
-                            OscType::String(v) => {
-                                serde_json::from_str(v).unwrap_or(serde_json::Value::Null)
-                            }
-                            _ => serde_json::Value::Null,
-                        };
-                        if let Some(inst) = self.instances.get_mut(*index) {
-                            if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
-                                if d.set_meta(&meta) {
-                                    self.handle_event(Events::DatarefVisibleChanged).await;
-                                }
-                            }
-                        }
+                        self.set_set_current_name(name).await;
                     }
                 }
-            }
-        } else {
-            match msg.addr.as_str() {
+                SET_PRESETS_LOADED_ADDR => {
+                    if msg.args.len() == 1 {
+                        self.set_preset_loaded_name = match &msg.args[0] {
+                            OscType::String(name) => Some(name.clone()),
+                            _ => None,
+                        };
+                        self.set_preset_loaded_index =
+                            if let Some(name) = &self.set_preset_loaded_name {
+                                self.set_preset_names.iter().position(|r| r == name)
+                            } else {
+                                None
+                            };
+                        self.handle_event(Events::SetPresetLoadedChanged).await;
+                    }
+                }
                 SET_VIEWS_ORDER_ADDR => {
                     self.param_view_order.clear();
                     for arg in msg.args.iter() {
@@ -1359,8 +1332,146 @@ impl StateController {
                     self.update_views(&mut common).await;
                     self.handle_event(Events::SetViewListChanged).await;
                 }
-                _ => (),
-            };
+                SET_VIEW_DISPLAY => {
+                    if msg.args.len() > 0 {
+                        if let Some(mut index) = match &msg.args[0] {
+                            OscType::Double(v) => Some(v.max(0.0) as usize),
+                            OscType::Float(v) => Some(v.max(0.0) as usize),
+                            OscType::Int(v) => Some(*v.max(&0) as usize),
+                            _ => None,
+                        } {
+                            let mut page = 0;
+                            if msg.args.len() > 1 {
+                                if let Some(p) = match &msg.args[1] {
+                                    OscType::Double(v) => Some(v.max(0.0) as usize),
+                                    OscType::Float(v) => Some(v.max(0.0) as usize),
+                                    OscType::Int(v) => Some(*v.max(&0) as usize),
+                                    _ => None,
+                                } {
+                                    page = p
+                                } else {
+                                    eprintln!("invalid 2nd arg for set view select");
+                                    return;
+                                }
+                            }
+
+                            //clamp
+                            let ctx = self.sm.context();
+                            let cnt = ctx.param_view_count();
+                            if cnt > 0 {
+                                index = index.min(cnt - 1);
+                                let pages = ctx.view_param_pages(index);
+                                if pages > 0 {
+                                    page = page.min(pages - 1);
+                                    self.handle_event(Events::SetViewSelected((index, page)))
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                }
+                SET_VIEW_PAGE_DISPLAY => {
+                    if msg.args.len() == 1 {
+                        if let Some(index) = match &msg.args[0] {
+                            OscType::Double(v) => Some(v.max(0.0) as usize),
+                            OscType::Float(v) => Some(v.max(0.0) as usize),
+                            OscType::Int(v) => Some(*v.max(&0) as usize),
+                            _ => None,
+                        } {
+                            self.handle_event(Events::SetViewPageSelected(index)).await;
+                        }
+                    }
+                }
+                _ => {
+                    if let Some(index) = self.param_lookup.get(&msg.addr) {
+                        if let Some(param) = self.params.get_mut(*index) {
+                            if msg.args.len() == 1 {
+                                //ignore, we wait for normalized
+                                match &msg.args[0] {
+                                    OscType::Double(v) => param.update_f64(*v),
+                                    OscType::Float(v) => param.update_f64(*v as f64),
+                                    OscType::Int(v) => param.update_f64(*v as f64),
+                                    OscType::String(v) => param.update_s(v),
+                                    _ => (),
+                                };
+                            }
+                        }
+                    } else if let Some(index) = self.param_norm_lookup.get(&msg.addr) {
+                        if let Some(param) = self.params.get_mut(*index) {
+                            if msg.args.len() == 1 {
+                                let v = match &msg.args[0] {
+                                    OscType::Double(v) => {
+                                        param.set_norm_pending(*v);
+                                        Some((param.instance_index(), param.index()))
+                                    }
+                                    OscType::Float(v) => {
+                                        let v = *v as f64;
+                                        param.set_norm_pending(v);
+                                        Some((param.instance_index(), param.index()))
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(sparce) = v {
+                                    //TODO throttle?
+
+                                    let mut updates = Vec::new();
+                                    //see if this param is visible, render it if so
+                                    for (location, index) in self.visible_params.iter().enumerate()
+                                    {
+                                        if let Some(param) = self.params.get(*index) {
+                                            if sparce.0 == param.instance_index()
+                                                && sparce.1 == param.index()
+                                            {
+                                                self.render_param(&param, location);
+                                                updates.push(location);
+                                            }
+                                        }
+                                    }
+                                    for location in updates {
+                                        self.handle_event(Events::VisibleParamUpdated(location))
+                                            .await;
+                                    }
+                                }
+                            }
+                        }
+                    } else if let Some((index, name)) = self.dataref_lookup.get(&msg.addr) {
+                        if msg.args.len() == 1 {
+                            let mapping = match &msg.args[0] {
+                                OscType::String(v) => {
+                                    if v.len() > 0 {
+                                        Some(v.clone())
+                                    } else {
+                                        None
+                                    }
+                                }
+                                _ => None,
+                            };
+                            if let Some(inst) = self.instances.get_mut(*index) {
+                                if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
+                                    *d.mapping_mut() = mapping;
+                                    self.handle_event(Events::DatarefMappingChanged).await;
+                                }
+                            }
+                        }
+                    } else if let Some((index, name)) = self.dataref_meta_lookup.get(&msg.addr) {
+                        if msg.args.len() == 1 {
+                            let meta = match &msg.args[0] {
+                                OscType::String(v) => {
+                                    serde_json::from_str(v).unwrap_or(serde_json::Value::Null)
+                                }
+                                _ => serde_json::Value::Null,
+                            };
+                            if let Some(inst) = self.instances.get_mut(*index) {
+                                if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
+                                    if d.set_meta(&meta) {
+                                        self.handle_event(Events::DatarefVisibleChanged).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -1620,7 +1731,10 @@ impl StateController {
                         if let Some(focus) = &focus {
                             Text::with_alignment(
                                 focus.as_str(),
-                                Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
+                                Point::new(
+                                    DISPLAY_WIDTH as i32 / 2,
+                                    DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
+                                ),
                                 TEXT_STYLE,
                                 Alignment::Center,
                             )
@@ -1764,6 +1878,7 @@ impl StateController {
                 let index = state.index;
                 let page = state.page;
                 let focused = state.focused.clone();
+
                 {
                     let pages = self.context().instance_param_pages(index);
 
@@ -1785,7 +1900,11 @@ impl StateController {
                                         param.display_name(),
                                         param.render_value()
                                     ))
+                                } else {
+                                    eprintln!("cannot get param at {}", *pindex);
                                 }
+                            } else {
+                                eprintln!("cannot get pinstance {}", pindex);
                             }
                         }
                     } else {
@@ -1805,7 +1924,10 @@ impl StateController {
                         if let Some(focus) = &focus {
                             Text::with_alignment(
                                 focus.as_str(),
-                                Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
+                                Point::new(
+                                    DISPLAY_WIDTH as i32 / 2,
+                                    DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
+                                ),
                                 TEXT_STYLE,
                                 Alignment::Center,
                             )
@@ -1998,6 +2120,13 @@ impl StateController {
                 }
             }
             top::States::ParamViews => {
+                match e {
+                    Events::SetViewSelected(_) | Events::SetViewPageSelected(_) => {
+                        touch = true; //hack to pass event thru
+                    }
+                    _ => (),
+                };
+
                 let render = if touch || !top_trans {
                     let ns = self.viewsm.process_event(e);
                     ns.is_some()
@@ -2220,6 +2349,13 @@ impl StateController {
                             }
                         }
                     }
+                }
+                Cmd::ReportViewParamPage(index, page) => {
+                    let msg = OscMessage {
+                        addr: SET_VIEW_DISPLAY.to_string(),
+                        args: vec![OscType::Int(index as _), OscType::Int(page as _)],
+                    };
+                    self.send_osc(msg).await;
                 }
             }
         }
