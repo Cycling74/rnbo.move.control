@@ -72,8 +72,8 @@ pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loade
 pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
 pub const SET_VIEWS_ORDER_ADDR: &str = "/rnbo/inst/control/sets/views/order";
 
-pub const SET_VIEW_SELECT: &str = "/rnboctl/view/display";
-pub const SET_VIEW_PAGE_SELECT: &str = "/rnboctl/view/page";
+pub const SET_VIEW_DISPLAY: &str = "/rnboctl/view/display";
+pub const SET_VIEW_PAGE_DISPLAY: &str = "/rnboctl/view/page";
 
 const JOG_WHEEL_TOUCH: usize = 9;
 const VOLUME_WHEEL_TOUCH: usize = 8;
@@ -284,7 +284,7 @@ enum Events {
     Transport(bool),
     Tempo(f32),
 
-    SetViewSelected(usize),
+    SetViewSelected((usize, usize)), //index, page
     SetViewPageSelected(usize),
 
     VisibleParamUpdated(usize),
@@ -570,10 +570,12 @@ mod view {
             ViewParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1}); = ViewParams(state.with_focus(*event)),
             ViewParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = ViewParams(state.clone()), //redraw
 
-            ParamViewMenu(usize) + SetViewSelected(_) [*event < ctx.param_view_count()] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: *event, page: 0, focused: None }),
-            ViewParams(ParamPage) + SetViewSelected(_) [(state.index != *event || state.page != 0) && *event < ctx.param_view_count()] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: *event, page: 0, focused: state.focused }),
+            ParamViewMenu(usize) + SetViewSelected(_) [event.0 < ctx.param_view_count() && event.1 < ctx.view_param_pages(event.0)] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: event.0, page: event.1, focused: None }),
+            ViewParams(ParamPage) + SetViewSelected(_)
+                [(state.index != event.0 || state.page != event.1) && event.0 < ctx.param_view_count() && event.1 < ctx.view_param_pages(event.0)] / ctx.emit(Cmd::RenderVisibleParams); =
+                ViewParams(ParamPage { index: event.0, page: event.1, focused: state.focused }),
 
-            ViewParams(ParamPage) + SetViewPageSelected(_) [state.page != *event && *event < ctx.view_param_pages(state.index)] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: state.index, page: *event, focused: state.focused }),
+            ViewParams(ParamPage) + SetViewPageSelected(_) [state.page != *event] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: state.index, page: (*event).min(ctx.view_param_pages(state.index) - 1), focused: state.focused }),
 
             _ + SetViewListChanged = ParamViewMenu(0),
         }
@@ -1232,76 +1234,129 @@ impl StateController {
                 //TODO transmit more fine tuned changes
                 self.handle_event(Events::SetViewListChanged).await;
             }
-        } else if msg.args.len() == 1 {
+        } else {
             //println!("got osc {}", msg.addr);
             //let mut update = None;
             match msg.addr.as_str() {
-                SET_VIEW_SELECT => {
-                    if let Some(index) = match &msg.args[0] {
-                        OscType::Double(v) => Some(v.max(0.0) as usize),
-                        OscType::Float(v) => Some(v.max(0.0) as usize),
-                        OscType::Int(v) => Some(*v.max(&0) as usize),
-                        _ => None,
-                    } {
-                        self.handle_event(Events::SetViewSelected(index)).await;
-                    }
-                }
-                SET_VIEW_PAGE_SELECT => {
-                    if let Some(index) = match &msg.args[0] {
-                        OscType::Double(v) => Some(v.max(0.0) as usize),
-                        OscType::Float(v) => Some(v.max(0.0) as usize),
-                        OscType::Int(v) => Some(*v.max(&0) as usize),
-                        _ => None,
-                    } {
-                        self.handle_event(Events::SetViewPageSelected(index)).await;
-                    }
-                }
                 TRANSPORT_ROLLING_ADDR => {
-                    if let OscType::Bool(rolling) = msg.args[0] {
-                        if self.rolling != rolling {
-                            self.rolling = rolling;
-                            let _ = self.midi_out_queue.send(Midi::cc(
-                                PLAY_MIDI,
-                                if rolling {
-                                    MoveColor::Green
-                                } else {
-                                    MoveColor::LightGray
-                                } as _,
-                                MOVE_CTL_MIDI_CHAN,
-                            ));
-                            self.handle_event(Events::Transport(rolling)).await;
+                    if msg.args.len() == 1 {
+                        if let OscType::Bool(rolling) = msg.args[0] {
+                            if self.rolling != rolling {
+                                self.rolling = rolling;
+                                let _ = self.midi_out_queue.send(Midi::cc(
+                                    PLAY_MIDI,
+                                    if rolling {
+                                        MoveColor::Green
+                                    } else {
+                                        MoveColor::LightGray
+                                    } as _,
+                                    MOVE_CTL_MIDI_CHAN,
+                                ));
+                                self.handle_event(Events::Transport(rolling)).await;
+                            }
                         }
                     }
                 }
                 TRANSPORT_BPM_ADDR => {
-                    if let Some(bpm) = match &msg.args[0] {
-                        OscType::Double(v) => Some(*v as f32),
-                        OscType::Float(v) => Some(*v),
-                        _ => None,
-                    } {
-                        self.bpm = bpm;
-                        self.handle_event(Events::Tempo(bpm)).await;
+                    if msg.args.len() == 1 {
+                        if let Some(bpm) = match &msg.args[0] {
+                            OscType::Double(v) => Some(*v as f32),
+                            OscType::Float(v) => Some(*v),
+                            _ => None,
+                        } {
+                            self.bpm = bpm;
+                            self.handle_event(Events::Tempo(bpm)).await;
+                        }
                     }
                 }
                 SET_CURRENT_ADDR => {
-                    let name = match &msg.args[0] {
-                        OscType::String(name) => Some(name.clone()),
-                        _ => None,
-                    };
-                    self.set_set_current_name(name).await;
+                    if msg.args.len() == 1 {
+                        let name = match &msg.args[0] {
+                            OscType::String(name) => Some(name.clone()),
+                            _ => None,
+                        };
+                        self.set_set_current_name(name).await;
+                    }
                 }
                 SET_PRESETS_LOADED_ADDR => {
-                    self.set_preset_loaded_name = match &msg.args[0] {
-                        OscType::String(name) => Some(name.clone()),
-                        _ => None,
-                    };
-                    self.set_preset_loaded_index = if let Some(name) = &self.set_preset_loaded_name
-                    {
-                        self.set_preset_names.iter().position(|r| r == name)
-                    } else {
-                        None
-                    };
-                    self.handle_event(Events::SetPresetLoadedChanged).await;
+                    if msg.args.len() == 1 {
+                        self.set_preset_loaded_name = match &msg.args[0] {
+                            OscType::String(name) => Some(name.clone()),
+                            _ => None,
+                        };
+                        self.set_preset_loaded_index =
+                            if let Some(name) = &self.set_preset_loaded_name {
+                                self.set_preset_names.iter().position(|r| r == name)
+                            } else {
+                                None
+                            };
+                        self.handle_event(Events::SetPresetLoadedChanged).await;
+                    }
+                }
+                SET_VIEWS_ORDER_ADDR => {
+                    self.param_view_order.clear();
+                    for arg in msg.args.iter() {
+                        match arg {
+                            OscType::Int(i) if *i >= 0 => {
+                                self.param_view_order.push(*i as usize);
+                            }
+                            _ => (),
+                        }
+                    }
+                    self.sort_param_views();
+                    let mut common = self.sm.context().common();
+                    self.update_views(&mut common).await;
+                    self.handle_event(Events::SetViewListChanged).await;
+                }
+                SET_VIEW_DISPLAY => {
+                    if msg.args.len() > 0 {
+                        if let Some(mut index) = match &msg.args[0] {
+                            OscType::Double(v) => Some(v.max(0.0) as usize),
+                            OscType::Float(v) => Some(v.max(0.0) as usize),
+                            OscType::Int(v) => Some(*v.max(&0) as usize),
+                            _ => None,
+                        } {
+                            let mut page = 0;
+                            if msg.args.len() > 1 {
+                                if let Some(p) = match &msg.args[1] {
+                                    OscType::Double(v) => Some(v.max(0.0) as usize),
+                                    OscType::Float(v) => Some(v.max(0.0) as usize),
+                                    OscType::Int(v) => Some(*v.max(&0) as usize),
+                                    _ => None,
+                                } {
+                                    page = p
+                                } else {
+                                    eprintln!("invalid 2nd arg for set view select");
+                                    return;
+                                }
+                            }
+
+                            //clamp
+                            let ctx = self.sm.context();
+                            let cnt = ctx.param_view_count();
+                            if cnt > 0 {
+                                index = index.min(cnt - 1);
+                                let pages = ctx.view_param_pages(index);
+                                if pages > 0 {
+                                    page = page.min(pages - 1);
+                                    self.handle_event(Events::SetViewSelected((index, page)))
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                }
+                SET_VIEW_PAGE_DISPLAY => {
+                    if msg.args.len() == 1 {
+                        if let Some(index) = match &msg.args[0] {
+                            OscType::Double(v) => Some(v.max(0.0) as usize),
+                            OscType::Float(v) => Some(v.max(0.0) as usize),
+                            OscType::Int(v) => Some(*v.max(&0) as usize),
+                            _ => None,
+                        } {
+                            self.handle_event(Events::SetViewPageSelected(index)).await;
+                        }
+                    }
                 }
                 _ => {
                     if let Some(index) = self.param_lookup.get(&msg.addr) {
@@ -1384,25 +1439,6 @@ impl StateController {
                     }
                 }
             }
-        } else {
-            match msg.addr.as_str() {
-                SET_VIEWS_ORDER_ADDR => {
-                    self.param_view_order.clear();
-                    for arg in msg.args.iter() {
-                        match arg {
-                            OscType::Int(i) if *i >= 0 => {
-                                self.param_view_order.push(*i as usize);
-                            }
-                            _ => (),
-                        }
-                    }
-                    self.sort_param_views();
-                    let mut common = self.sm.context().common();
-                    self.update_views(&mut common).await;
-                    self.handle_event(Events::SetViewListChanged).await;
-                }
-                _ => (),
-            };
         }
     }
 
