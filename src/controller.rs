@@ -1086,7 +1086,7 @@ impl StateController {
             InstSelType::Datarefs,
             self.patchers_datarefs_instance_names.len(),
         );
-        self.update_views(&mut common).await;
+        self.clear_param_views(); //to be updated later
         self.update_common(common);
 
         self.handle_event(Events::InstancesChanged(indexes.len()))
@@ -1187,6 +1187,11 @@ impl StateController {
         sorted.append(&mut self.param_views);
 
         std::mem::swap(&mut sorted, &mut self.param_views);
+    }
+
+    pub fn clear_param_views(&mut self) {
+        self.param_views.clear();
+        self.param_view_param_lookup.clear();
     }
 
     pub async fn set_param_views(&mut self, mut views: Vec<ParamView>) {

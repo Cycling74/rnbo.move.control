@@ -652,6 +652,12 @@ async fn with_client(
                             *g = None;
                             let mut g = state.lock().await;
                             g.set_instances(inst).await;
+
+                            //look up views after instances have been looked up
+                            {
+                                let mut g = views_query.lock().await;
+                                *g = Some(Instant::now() + HTTP_INITIAL_QUERY_DELAY);
+                            }
                         }
                     }
                 }
