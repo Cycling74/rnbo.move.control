@@ -45,6 +45,8 @@ const PLAY_MIDI: u8 = 0x55;
 
 const MOVE_CTL_MIDI_CHAN: u8 = 15;
 
+const PARAM_Y_OFFSET: i32 = -6;
+
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 
@@ -1719,7 +1721,10 @@ impl StateController {
                         if let Some(focus) = &focus {
                             Text::with_alignment(
                                 focus.as_str(),
-                                Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
+                                Point::new(
+                                    DISPLAY_WIDTH as i32 / 2,
+                                    DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
+                                ),
                                 TEXT_STYLE,
                                 Alignment::Center,
                             )
@@ -1904,7 +1909,10 @@ impl StateController {
                         if let Some(focus) = &focus {
                             Text::with_alignment(
                                 focus.as_str(),
-                                Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
+                                Point::new(
+                                    DISPLAY_WIDTH as i32 / 2,
+                                    DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
+                                ),
                                 TEXT_STYLE,
                                 Alignment::Center,
                             )
