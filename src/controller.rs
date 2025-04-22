@@ -72,6 +72,9 @@ pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loade
 pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
 pub const SET_VIEWS_ORDER_ADDR: &str = "/rnbo/inst/control/sets/views/order";
 
+pub const SET_VIEW_SELECT: &str = "/rnboctl/view/display";
+pub const SET_VIEW_PAGE_SELECT: &str = "/rnboctl/view/page";
+
 const JOG_WHEEL_TOUCH: usize = 9;
 const VOLUME_WHEEL_TOUCH: usize = 8;
 
@@ -280,6 +283,9 @@ enum Events {
 
     Transport(bool),
     Tempo(f32),
+
+    SetViewSelected(usize),
+    SetViewPageSelected(usize),
 
     VisibleParamUpdated(usize),
 
@@ -536,6 +542,11 @@ mod top {
 
             _ + BtnDown(Button::Play) / ctx.emit(Cmd::ToggleTransport);,
 
+            Main + SetViewSelected(_) = ParamViews,
+            Main + SetViewPageSelected(_) = ParamViews,
+            VolumeEditor(LastView) + SetViewSelected(_) = ParamViews,
+            VolumeEditor(LastView) + SetViewPageSelected(_) = ParamViews,
+
             _ + ChildProcessError = DisplayChildProcessError,
             DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
         }
@@ -558,6 +569,11 @@ mod view {
             ViewParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1}); = ViewParams(state.with_focus(*event)),
             ViewParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1}); = ViewParams(state.with_focus(*event)),
             ViewParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = ViewParams(state.clone()), //redraw
+
+            ParamViewMenu(usize) + SetViewSelected(_) [*event < ctx.param_view_count()] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: *event, page: 0, focused: None }),
+            ViewParams(ParamPage) + SetViewSelected(_) [(state.index != *event || state.page != 0) && *event < ctx.param_view_count()] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: *event, page: 0, focused: state.focused }),
+
+            ViewParams(ParamPage) + SetViewPageSelected(_) [state.page != *event && *event < ctx.view_param_pages(state.index)] / ctx.emit(Cmd::RenderVisibleParams); = ViewParams(ParamPage { index: state.index, page: *event, focused: state.focused }),
 
             _ + SetViewListChanged = ParamViewMenu(0),
         }
@@ -994,6 +1010,7 @@ impl StateController {
             let inst = instances.remove(key).unwrap();
             let name = format!("{}: {}", inst.index(), inst.name());
 
+            let mut instindexes = Vec::new();
             if inst.params().len() > 0 {
                 self.patchers_params_instance_names.push(name.clone());
                 self.patchers_params_instance_indexes
@@ -1003,7 +1020,6 @@ impl StateController {
                     .instance_param_pages
                     .push(param_pages(inst.params().len()));
 
-                let mut instindexes = Vec::new();
                 for p in inst.params().iter() {
                     let index = self.params.len();
                     let local_param_index = instindexes.len();
@@ -1020,8 +1036,8 @@ impl StateController {
                         (local_instance_index, local_param_index),
                     );
                 }
-                self.instance_params.push(instindexes);
             }
+            self.instance_params.push(instindexes);
 
             {
                 let visible = inst.visible_datarefs();
@@ -1120,8 +1136,14 @@ impl StateController {
                     if let Some(instance) = self.instance_params.get(*instance) {
                         if let Some(index) = instance.get(*param) {
                             params.push(*index);
+                        } else {
+                            eprintln!("couldn't get param at local index {}", *param);
                         }
+                    } else {
+                        eprintln!("couldn't get instance at local index {}", *instance);
                     }
+                } else {
+                    eprintln!("couldn't find instance at index {:?}", sparce);
                 }
             }
             if params.len() > 0 {
@@ -1214,6 +1236,26 @@ impl StateController {
             //println!("got osc {}", msg.addr);
             //let mut update = None;
             match msg.addr.as_str() {
+                SET_VIEW_SELECT => {
+                    if let Some(index) = match &msg.args[0] {
+                        OscType::Double(v) => Some(v.max(0.0) as usize),
+                        OscType::Float(v) => Some(v.max(0.0) as usize),
+                        OscType::Int(v) => Some(*v.max(&0) as usize),
+                        _ => None,
+                    } {
+                        self.handle_event(Events::SetViewSelected(index)).await;
+                    }
+                }
+                SET_VIEW_PAGE_SELECT => {
+                    if let Some(index) = match &msg.args[0] {
+                        OscType::Double(v) => Some(v.max(0.0) as usize),
+                        OscType::Float(v) => Some(v.max(0.0) as usize),
+                        OscType::Int(v) => Some(*v.max(&0) as usize),
+                        _ => None,
+                    } {
+                        self.handle_event(Events::SetViewPageSelected(index)).await;
+                    }
+                }
                 TRANSPORT_ROLLING_ADDR => {
                     if let OscType::Bool(rolling) = msg.args[0] {
                         if self.rolling != rolling {
@@ -1998,6 +2040,13 @@ impl StateController {
                 }
             }
             top::States::ParamViews => {
+                match e {
+                    Events::SetViewSelected(_) | Events::SetViewPageSelected(_) => {
+                        touch = true; //hack to pass event thru
+                    }
+                    _ => (),
+                };
+
                 let render = if touch || !top_trans {
                     let ns = self.viewsm.process_event(e);
                     ns.is_some()
