@@ -1026,12 +1026,12 @@ impl StateController {
         common.dataref_count.clear();
 
         for key in indexes.iter() {
-            let local_instance_index = self.instances.len();
             let inst = instances.remove(key).unwrap();
             let name = format!("{}: {}", inst.index(), inst.name());
 
-            let mut instindexes = Vec::new();
             if inst.params().len() > 0 {
+                let mut instindexes = Vec::new();
+                let local_instance_index = self.patchers_params_instance_names.len();
                 self.patchers_params_instance_names.push(name.clone());
                 self.patchers_params_instance_indexes
                     .push(local_instance_index);
@@ -1056,10 +1056,11 @@ impl StateController {
                         (local_instance_index, local_param_index),
                     );
                 }
+                self.instance_params.push(instindexes);
             }
-            self.instance_params.push(instindexes);
 
             {
+                let local_instance_index = self.instances.len();
                 let visible = inst.visible_datarefs();
                 if visible.len() > 0 {
                     self.patchers_datarefs_instance_names.push(name.clone());
@@ -1384,78 +1385,87 @@ impl StateController {
                 _ => {
                     if let Some(index) = self.param_lookup.get(&msg.addr) {
                         if let Some(param) = self.params.get_mut(*index) {
-                            //ignore, we wait for normalized
-                            match &msg.args[0] {
-                                OscType::Double(v) => param.update_f64(*v),
-                                OscType::Float(v) => param.update_f64(*v as f64),
-                                OscType::Int(v) => param.update_f64(*v as f64),
-                                OscType::String(v) => param.update_s(v),
-                                _ => (),
-                            };
+                            if msg.args.len() == 1 {
+                                //ignore, we wait for normalized
+                                match &msg.args[0] {
+                                    OscType::Double(v) => param.update_f64(*v),
+                                    OscType::Float(v) => param.update_f64(*v as f64),
+                                    OscType::Int(v) => param.update_f64(*v as f64),
+                                    OscType::String(v) => param.update_s(v),
+                                    _ => (),
+                                };
+                            }
                         }
                     } else if let Some(index) = self.param_norm_lookup.get(&msg.addr) {
                         if let Some(param) = self.params.get_mut(*index) {
-                            let v = match &msg.args[0] {
-                                OscType::Double(v) => {
-                                    param.set_norm_pending(*v);
-                                    Some((param.instance_index(), param.index()))
-                                }
-                                OscType::Float(v) => {
-                                    let v = *v as f64;
-                                    param.set_norm_pending(v);
-                                    Some((param.instance_index(), param.index()))
-                                }
-                                _ => None,
-                            };
-                            if let Some(sparce) = v {
-                                //TODO throttle?
+                            if msg.args.len() == 1 {
+                                let v = match &msg.args[0] {
+                                    OscType::Double(v) => {
+                                        param.set_norm_pending(*v);
+                                        Some((param.instance_index(), param.index()))
+                                    }
+                                    OscType::Float(v) => {
+                                        let v = *v as f64;
+                                        param.set_norm_pending(v);
+                                        Some((param.instance_index(), param.index()))
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(sparce) = v {
+                                    //TODO throttle?
 
-                                let mut updates = Vec::new();
-                                //see if this param is visible, render it if so
-                                for (location, index) in self.visible_params.iter().enumerate() {
-                                    if let Some(param) = self.params.get(*index) {
-                                        if sparce.0 == param.instance_index()
-                                            && sparce.1 == param.index()
-                                        {
-                                            self.render_param(&param, location);
-                                            updates.push(location);
+                                    let mut updates = Vec::new();
+                                    //see if this param is visible, render it if so
+                                    for (location, index) in self.visible_params.iter().enumerate()
+                                    {
+                                        if let Some(param) = self.params.get(*index) {
+                                            if sparce.0 == param.instance_index()
+                                                && sparce.1 == param.index()
+                                            {
+                                                self.render_param(&param, location);
+                                                updates.push(location);
+                                            }
                                         }
                                     }
-                                }
-                                for location in updates {
-                                    self.handle_event(Events::VisibleParamUpdated(location))
-                                        .await;
+                                    for location in updates {
+                                        self.handle_event(Events::VisibleParamUpdated(location))
+                                            .await;
+                                    }
                                 }
                             }
                         }
                     } else if let Some((index, name)) = self.dataref_lookup.get(&msg.addr) {
-                        let mapping = match &msg.args[0] {
-                            OscType::String(v) => {
-                                if v.len() > 0 {
-                                    Some(v.clone())
-                                } else {
-                                    None
+                        if msg.args.len() == 1 {
+                            let mapping = match &msg.args[0] {
+                                OscType::String(v) => {
+                                    if v.len() > 0 {
+                                        Some(v.clone())
+                                    } else {
+                                        None
+                                    }
                                 }
-                            }
-                            _ => None,
-                        };
-                        if let Some(inst) = self.instances.get_mut(*index) {
-                            if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
-                                *d.mapping_mut() = mapping;
-                                self.handle_event(Events::DatarefMappingChanged).await;
+                                _ => None,
+                            };
+                            if let Some(inst) = self.instances.get_mut(*index) {
+                                if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
+                                    *d.mapping_mut() = mapping;
+                                    self.handle_event(Events::DatarefMappingChanged).await;
+                                }
                             }
                         }
                     } else if let Some((index, name)) = self.dataref_meta_lookup.get(&msg.addr) {
-                        let meta = match &msg.args[0] {
-                            OscType::String(v) => {
-                                serde_json::from_str(v).unwrap_or(serde_json::Value::Null)
-                            }
-                            _ => serde_json::Value::Null,
-                        };
-                        if let Some(inst) = self.instances.get_mut(*index) {
-                            if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
-                                if d.set_meta(&meta) {
-                                    self.handle_event(Events::DatarefVisibleChanged).await;
+                        if msg.args.len() == 1 {
+                            let meta = match &msg.args[0] {
+                                OscType::String(v) => {
+                                    serde_json::from_str(v).unwrap_or(serde_json::Value::Null)
+                                }
+                                _ => serde_json::Value::Null,
+                            };
+                            if let Some(inst) = self.instances.get_mut(*index) {
+                                if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
+                                    if d.set_meta(&meta) {
+                                        self.handle_event(Events::DatarefVisibleChanged).await;
+                                    }
                                 }
                             }
                         }
@@ -1868,6 +1878,7 @@ impl StateController {
                 let index = state.index;
                 let page = state.page;
                 let focused = state.focused.clone();
+
                 {
                     let pages = self.context().instance_param_pages(index);
 
@@ -1889,7 +1900,11 @@ impl StateController {
                                         param.display_name(),
                                         param.render_value()
                                     ))
+                                } else {
+                                    eprintln!("cannot get param at {}", *pindex);
                                 }
+                            } else {
+                                eprintln!("cannot get pinstance {}", pindex);
                             }
                         }
                     } else {
