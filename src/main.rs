@@ -1071,6 +1071,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::env::set_var("HOME", "/data/UserData/");
     }
 
+    //hack, for some reason running setcap on this executable will unset TMPDIR after it starts
+    //set it again
+    std::env::set_var("TMPDIR", "/data/UserData/Scratch/");
+
     let args = Args::parse();
     let homedir = home::home_dir().expect("to get home directory");
 
