@@ -5,10 +5,6 @@
 ```
 brew tap messense/macos-cross-toolchains
 brew install aarch64-unknown-linux-gnu
-mkdir -p ./target/aarch64-unknown-linux-gnu/debug/deps ./target/aarch64-unknown-linux-gnu/release/deps
-cp ../build/rnbo/lib/libjack.so* ./target/aarch64-unknown-linux-gnu/debug/deps/
-cp ./target/aarch64-unknown-linux-gnu/debug/deps/libjack.so* ./target/aarch64-unknown-linux-gnu/release/deps/
-
 rustup target add aarch64-unknown-linux-gnu
 ```
 
