@@ -427,6 +427,7 @@ async fn with_client(
             Alignment::Center,
         )
         .draw(&mut display)?;
+
     } else {
         let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
         Text::with_alignment(
@@ -438,6 +439,7 @@ async fn with_client(
         .draw(&mut display)?;
         let _ = logger.warning("could not get requested capabilites");
     }
+
 
     let driver = Driver {
         display: display_port,
@@ -527,6 +529,45 @@ async fn with_client(
             //frame rate
             tokio::time::sleep(Duration::from_millis(23)).await;
             let mut display = display.lock().await;
+
+			{
+				use mousefood::embedded_graphics::geometry;
+				use mousefood::prelude::*;
+				use mousefood::{fonts, EmbeddedBackend, EmbeddedBackendConfig};
+				use ratatui::widgets::{Block, Paragraph, Wrap};
+				use ratatui::{style::*, Frame, Terminal};
+				use std::ops::DerefMut;
+
+				/*
+				   let config = EmbeddedBackendConfig {
+				   font_regular: fonts::MONO_6X13,
+				   font_bold: fonts::MONO_6X13_BOLD,
+				   ..Default::default()
+				   };
+				   */
+
+
+				fn draw(frame: &mut Frame) {
+					let text = "Ratatui on embedded devices!";
+					let paragraph = Paragraph::new(text.dark_gray()).wrap(Wrap { trim: true });
+					let bordered_block = Block::bordered()
+						.border_style(Style::new().yellow())
+						.title("Mousefood");
+					frame.render_widget(paragraph.block(bordered_block), frame.area());
+				}
+
+				{
+					display.clear(BinaryColor::Off).unwrap();
+					let backend = EmbeddedBackend::new(display.deref_mut(), EmbeddedBackendConfig::default());
+					let mut terminal = Terminal::new(backend).expect("to create terminal");
+
+					terminal.draw(draw).expect("to draw");
+				}
+				display.draw_if(|data| {
+					draw_tx.send(DrawCommand { data: data.clone() }).unwrap();
+				});
+			}
+
             display.draw_if(|data| {
                 draw_tx.send(DrawCommand { data: data.clone() }).unwrap();
             });
