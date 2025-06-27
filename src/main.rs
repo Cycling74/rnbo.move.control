@@ -494,7 +494,6 @@ async fn with_client(
             .unwrap();
     }
 
-    let display = Rc::new(tokio::sync::Mutex::new(display));
 
     let version_path =
         PathBuf::from("/data/UserData/rnbo/share/rnbomovetakeover/package-version.txt");
@@ -518,59 +517,34 @@ async fn with_client(
     let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(StateController::new(
             midi_out_tx,
-            display.clone(),
             volume,
             package_version,
             config.clone(),
         )));
 
     let display_future = async {
+		use mousefood::prelude::*;
+
+		let config = EmbeddedBackendConfig {
+			flush_callback: Box::new(move |d: &mut MoveDisplay| { 
+                draw_tx.send(DrawCommand { data: d.framebuffer().clone() }).unwrap();
+			}),
+			..Default::default()
+		};
+
+		let backend = EmbeddedBackend::new(&mut display, config);
+		let mut terminal = ratatui::Terminal::new(backend).expect("to create terminal");
+        let state = state.clone();
+
         loop {
             //frame rate
             tokio::time::sleep(Duration::from_millis(23)).await;
-            let mut display = display.lock().await;
 
-			{
-				use mousefood::embedded_graphics::geometry;
-				use mousefood::prelude::*;
-				use mousefood::{fonts, EmbeddedBackend, EmbeddedBackendConfig};
-				use ratatui::widgets::{Block, Paragraph, Wrap};
-				use ratatui::{style::*, Frame, Terminal};
-				use std::ops::DerefMut;
+			let mut g = state.lock().await;
+			terminal.draw(|frame| {
+				g.render(frame);
+			}).expect("to render frame");
 
-				/*
-				   let config = EmbeddedBackendConfig {
-				   font_regular: fonts::MONO_6X13,
-				   font_bold: fonts::MONO_6X13_BOLD,
-				   ..Default::default()
-				   };
-				   */
-
-
-				fn draw(frame: &mut Frame) {
-					let text = "Ratatui on embedded devices!";
-					let paragraph = Paragraph::new(text.dark_gray()).wrap(Wrap { trim: true });
-					let bordered_block = Block::bordered()
-						.border_style(Style::new().yellow())
-						.title("Mousefood");
-					frame.render_widget(paragraph.block(bordered_block), frame.area());
-				}
-
-				{
-					display.clear(BinaryColor::Off).unwrap();
-					let backend = EmbeddedBackend::new(display.deref_mut(), EmbeddedBackendConfig::default());
-					let mut terminal = Terminal::new(backend).expect("to create terminal");
-
-					terminal.draw(draw).expect("to draw");
-				}
-				display.draw_if(|data| {
-					draw_tx.send(DrawCommand { data: data.clone() }).unwrap();
-				});
-			}
-
-            display.draw_if(|data| {
-                draw_tx.send(DrawCommand { data: data.clone() }).unwrap();
-            });
         }
     };
 

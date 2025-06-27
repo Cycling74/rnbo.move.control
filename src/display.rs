@@ -43,6 +43,10 @@ impl MoveDisplay {
         }
     }
 
+	pub fn framebuffer(&self) -> &[u8; BUFFER_LEN] { 
+		&self.framebuffer 
+	}
+
     /*
     pub fn dirty(&self) -> bool {
         self.dirty

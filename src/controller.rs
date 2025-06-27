@@ -1,7 +1,7 @@
 use {
     crate::{
         config::Config,
-        display::{MoveDisplay, DISPLAY_HEIGHT, DISPLAY_WIDTH},
+        display::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
         midi::Midi,
         param::Param,
         patcher::PatcherInst,
@@ -489,7 +489,7 @@ enum Cmd {
     ReportViewParamPage(usize, usize),
 }
 
-mod top {
+pub mod top {
     use super::{
         Button, Cmd, Context, Events, PowerCommand, EXIT_MENU, JOG_WHEEL_ENCODER, JOG_WHEEL_TOUCH,
         VOLUME_WHEEL_ENCODER, VOLUME_WHEEL_TOUCH,
@@ -560,7 +560,7 @@ mod top {
     }
 }
 
-mod view {
+pub mod view {
     use super::{Button, Cmd, Context, Events, ParamPage, JOG_WHEEL_ENCODER, PARAM_PAGE_SIZE};
     smlang::statemachine! {
         states_attr: #[derive(Clone, Debug)],
@@ -734,7 +734,6 @@ pub struct StateController {
 
     ws_tx: Option<SplitSink<WebSocket, Message>>,
     midi_out_queue: sync_mpsc::SyncSender<Midi>,
-    display: Rc<Mutex<MoveDisplay>>,
     volume: Arc<AtomicU8>,
 
     config: Config,
@@ -879,7 +878,6 @@ impl Context {
 impl StateController {
     pub fn new(
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
-        display: Rc<Mutex<MoveDisplay>>,
         volume: Arc<AtomicU8>,
         package_version: Option<String>,
         config_path: PathBuf,
@@ -919,7 +917,6 @@ impl StateController {
             topsm,
 
             midi_out_queue,
-            display,
             volume,
 
             config,
@@ -1630,6 +1627,7 @@ impl StateController {
         self.exit
     }
 
+	/*
     async fn display_centered(&mut self, text: &str) {
         self.with_display(|mut display| {
             display.clear(BinaryColor::Off).unwrap();
@@ -1638,6 +1636,7 @@ impl StateController {
         })
         .await;
     }
+	*/
 
     fn update_common(&mut self, common: CommonContext) {
         self.sm.context_mut().update_common(common.clone());
@@ -1661,12 +1660,14 @@ impl StateController {
         self.config.volume as f32 / 255.0
     }
 
+	/*
     async fn render_set_views(&mut self, s: &view::States) {
         use view::States;
         match s {
             States::ParamViewMenu(selected) => {
                 self.clear_visible_params();
                 let selected: usize = *selected;
+				/*
                 self.with_display(|display| {
                     draw_menu(
                         display,
@@ -1677,6 +1678,7 @@ impl StateController {
                     );
                 })
                 .await;
+				*/
                 self.light_button(BACK_MIDI, MoveColor::Black as _);
                 self.light_button(MENU_MIDI, MoveColor::LightGray as _);
             }
@@ -1723,6 +1725,7 @@ impl StateController {
                         title.push_str("..");
                     }
 
+					/*
                     self.with_display(|mut display| {
                         display.clear(BinaryColor::Off).unwrap();
 
@@ -1743,13 +1746,16 @@ impl StateController {
                         }
                     })
                     .await;
+					*/
                 } else {
                     self.visible_params.clear();
+					/*
                     self.with_display(|mut display| {
                         display.clear(BinaryColor::Off).unwrap();
                         draw_title(&mut display, "empty view");
                     })
                     .await;
+					*/
                 }
 
                 self.light_button(BACK_MIDI, MoveColor::LightGray as _);
@@ -1774,10 +1780,12 @@ impl StateController {
                 } else {
                     MenuIndicator::SubMenu(selected)
                 };
+				/*
                 self.with_display(|display| {
                     draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
                 })
                 .await;
+				*/
                 self.light_button(BACK_MIDI, 0);
             }
             States::TempoEditor => {
@@ -2004,6 +2012,35 @@ impl StateController {
             _ => (),
         }
     }
+*/
+
+	pub fn top_state(&self) -> &top::States {
+		self.topsm.state()
+	}
+
+	pub fn view_state(&self) -> &view::States {
+		self.viewsm.state()
+	}
+
+	pub fn state(&self) -> &States {
+		self.sm.state()
+	}
+
+	pub fn render(&mut self, frame: &mut ratatui::Frame) {
+		use mousefood::embedded_graphics::geometry;
+		use mousefood::prelude::*;
+		use mousefood::{fonts, EmbeddedBackend, EmbeddedBackendConfig};
+		use ratatui::widgets::{Block, Paragraph, Wrap};
+		use ratatui::{style::*, Frame, Terminal};
+		use std::ops::DerefMut;
+
+		let text = "Ratatui on embedded devices!";
+		let paragraph = Paragraph::new(text.dark_gray()).wrap(Wrap { trim: true });
+		let bordered_block = Block::bordered()
+			.border_style(Style::new().yellow())
+			.title("Mousefood");
+		frame.render_widget(paragraph.block(bordered_block), frame.area());
+	}
 
     async fn handle_event(&mut self, e: Events) {
         let top_last = self.topsm.state().clone();
@@ -2014,12 +2051,12 @@ impl StateController {
             use top::States;
             match top_cur {
                 States::LaunchMove => {
-                    self.display_centered("Launching Move").await;
+                    //self.display_centered("Launching Move").await;
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     self.exit = true;
                 }
                 States::PowerOff => {
-                    self.display_centered("Powering Down").await;
+                    //self.display_centered("Powering Down").await;
 
                     self.light_button(BACK_MIDI, 0);
                     self.light_button(MENU_MIDI, 0);
@@ -2030,6 +2067,7 @@ impl StateController {
                 }
                 States::PromptExit(selected) => {
                     self.clear_visible_params();
+					/*
                     self.with_display(|display| {
                         draw_menu(
                             display,
@@ -2040,6 +2078,7 @@ impl StateController {
                         );
                     })
                     .await;
+					*/
                     self.light_button(BACK_MIDI, MoveColor::LightGray as _);
                 }
                 States::VolumeEditor(_) => {
@@ -2048,6 +2087,7 @@ impl StateController {
                     }
                     let volume = self.volume();
                     self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+					/*
                     self.with_display(|mut display| {
                         display.clear(BinaryColor::Off).unwrap();
                         draw_title(&mut display, &"Volume");
@@ -2055,6 +2095,7 @@ impl StateController {
                         draw_centered(&mut display, volume.as_str(), TEXT_STYLE);
                     })
                     .await;
+					*/
                 }
                 States::DisplayChildProcessError => {
                     self.clear_visible_params();
@@ -2063,6 +2104,7 @@ impl StateController {
                     let prog = p.file_name().unwrap().to_str().unwrap();
                     let msg = format!("{}\ncrashed\nreport to beta list\nthen hit power button\nto power down\nor return to move", prog);
 
+					/*
                     self.with_display(|mut display| {
                         display.clear(BinaryColor::Off).unwrap();
                         Text::with_alignment(
@@ -2075,6 +2117,7 @@ impl StateController {
                         .unwrap();
                     })
                     .await;
+					*/
                 }
                 //transitions
                 States::Main | States::ParamViews => self.clear_visible_params(),
@@ -2116,7 +2159,7 @@ impl StateController {
                 };
                 if render {
                     let s = self.sm.state().clone();
-                    self.render_main(&s).await;
+                    //self.render_main(&s).await;
                 }
             }
             top::States::ParamViews => {
@@ -2136,7 +2179,7 @@ impl StateController {
                 };
                 if render {
                     let s = self.viewsm.state().clone();
-                    self.render_set_views(&s).await;
+                    //self.render_set_views(&s).await;
                 }
             }
             _ => (),
@@ -2368,11 +2411,6 @@ impl StateController {
         }
     }
 
-    async fn with_display<T, F: Fn(MutexGuard<'_, MoveDisplay>) -> T>(&self, f: F) -> T {
-        let g = self.display.lock().await;
-        f(g)
-    }
-
     async fn send_osc(&mut self, msg: OscMessage) {
         if let Some(ws) = self.ws_tx.as_mut() {
             let packet = OscPacket::Message(msg);
@@ -2387,6 +2425,7 @@ impl StateController {
     }
 }
 
+/********
 fn draw_title(display: &mut MoveDisplay, title: &str) {
     Text::with_alignment(
         title,
@@ -2500,6 +2539,7 @@ fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
     .draw(display.deref_mut())
     .unwrap();
 }
+*/
 
 impl Drop for StateController {
     fn drop(&mut self) {
