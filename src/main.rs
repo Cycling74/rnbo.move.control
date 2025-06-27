@@ -529,6 +529,8 @@ async fn with_client(
 			flush_callback: Box::new(move |d: &mut MoveDisplay| { 
                 draw_tx.send(DrawCommand { data: d.framebuffer().clone() }).unwrap();
 			}),
+			font_regular: mousefood::fonts::MONO_5X8,
+			font_bold: mousefood::fonts::MONO_5X8,
 			..Default::default()
 		};
 
@@ -544,7 +546,6 @@ async fn with_client(
 			terminal.draw(|frame| {
 				g.render(frame);
 			}).expect("to render frame");
-
         }
     };
 
@@ -552,6 +553,8 @@ async fn with_client(
         while let Some(midi) = midi_in_rx.recv().await {
             let mut c = state.lock().await;
             if c.handle_midi(midi.bytes()).await {
+				//exit, sleep for a little so we can update the display
+				tokio::time::sleep(Duration::from_millis(500)).await;
                 break;
             }
         }

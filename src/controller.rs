@@ -730,6 +730,8 @@ pub struct StateController {
     viewsm: view::StateMachine,
     topsm: top::StateMachine,
 
+	wants_render: bool,
+
     cmd_queue: sync_mpsc::Receiver<Cmd>,
 
     ws_tx: Option<SplitSink<WebSocket, Message>>,
@@ -915,6 +917,8 @@ impl StateController {
             sm,
             viewsm,
             topsm,
+
+			wants_render: true,
 
             midi_out_queue,
             volume,
@@ -2026,20 +2030,127 @@ impl StateController {
 		self.sm.state()
 	}
 
+	pub fn wants_render(&self) -> bool {
+		self.wants_render
+	}
+
+	fn render_buttons(&mut self, btncolor: &[(u8, u8)]) {
+		//render buttons if they haven't already been rendered
+	}
+
+	fn render_param_views(&mut self, frame: &mut ratatui::Frame) {
+		//TODO
+	}
+
+	fn render_main(&mut self, frame: &mut ratatui::Frame) {
+		//TODO
+	}
+
 	pub fn render(&mut self, frame: &mut ratatui::Frame) {
-		use mousefood::embedded_graphics::geometry;
-		use mousefood::prelude::*;
-		use mousefood::{fonts, EmbeddedBackend, EmbeddedBackendConfig};
 		use ratatui::widgets::{Block, Paragraph, Wrap};
 		use ratatui::{style::*, Frame, Terminal};
-		use std::ops::DerefMut;
+		use top::States;
 
+		/*
 		let text = "Ratatui on embedded devices!";
 		let paragraph = Paragraph::new(text.dark_gray()).wrap(Wrap { trim: true });
 		let bordered_block = Block::bordered()
 			.border_style(Style::new().yellow())
 			.title("Mousefood");
 		frame.render_widget(paragraph.block(bordered_block), frame.area());
+		*/
+
+
+		match self.topsm.state() {
+			States::Init => {
+				use ratatui::prelude::{Frame, Style, Stylize};
+				/*
+				use tui_big_text::{BigText, PixelSize};
+				let big_text = BigText::builder()
+					.pixel_size(PixelSize::Full)
+					.style(Style::new().black())
+					.lines(vec![
+						"RNBO".into(),
+						"ON".into(),
+						"MOVE".into(),
+					])
+					.build();
+				frame.render_widget(big_text, frame.size());
+				*/
+				let text = "Ratatui on embedded devices!";
+				let paragraph = Paragraph::new(text.white()).wrap(Wrap { trim: true }).on_black();
+				let bordered_block = Block::bordered()
+					.border_style(Style::new().white())
+					.title("Mousefood");
+				frame.render_widget(paragraph.block(bordered_block), frame.area());
+			}
+			States::LaunchMove => {
+				//TODO
+			}
+			States::PowerOff => {
+				//TODO
+				//self.display_centered("Powering Down").await;
+			}
+			States::PromptExit(selected) => {
+				//TODO
+				/*
+				self.clear_visible_params();
+				   self.with_display(|display| {
+				   draw_menu(
+				   display,
+				   &"Exit RNBO",
+				   &EXIT_MENU,
+				   MenuIndicator::Item(selected),
+				   None,
+				   );
+				   })
+				   .await;
+				*/
+				self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+			}
+			States::VolumeEditor(_) => {
+				/*
+				if top_last != top_cur {
+					self.clear_visible_params();
+				}
+				let volume = self.volume();
+				self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+				   self.with_display(|mut display| {
+				   display.clear(BinaryColor::Off).unwrap();
+				   draw_title(&mut display, &"Volume");
+				   let volume = format!("{:.2}", volume);
+				   draw_centered(&mut display, volume.as_str(), TEXT_STYLE);
+				   })
+				   .await;
+				*/
+			}
+			States::DisplayChildProcessError => {
+				/*
+				self.clear_visible_params();
+				let name = self.child_process_error.as_ref().unwrap().0.clone();
+				let p = std::path::Path::new(name.as_str());
+				let prog = p.file_name().unwrap().to_str().unwrap();
+				let msg = format!("{}\ncrashed\nreport to beta list\nthen hit power button\nto power down\nor return to move", prog);
+
+				   self.with_display(|mut display| {
+				   display.clear(BinaryColor::Off).unwrap();
+				   Text::with_alignment(
+				   msg.as_str(),
+				   Point::new(DISPLAY_WIDTH as i32 / 2, 6),
+				   SMALL_TEXT_STYLE,
+				   Alignment::Center,
+				   )
+				   .draw(display.deref_mut())
+				   .unwrap();
+					   })
+					   .await;
+				*/
+			}
+			States::Main => self.render_main(frame),
+			States::ParamViews => self.render_param_views(frame),
+		}
+
+		//self.wants_render = false;
 	}
 
     async fn handle_event(&mut self, e: Events) {
