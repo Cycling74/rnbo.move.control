@@ -28,6 +28,7 @@ home = "0.5.9"
 libc = "0.2.168"
 rlimit = "0.10.2"
 syslog = "7.0.0"
-mousefood = "0.2.1"
-ratatui = "0.29.0"
+#mousefood = "0.2.1"
+mousefood = { git = "https://github.com/x37v/mousefood", branch = "xnor/fixes" }
+ratatui = { version = "0.30.0-alpha.4", default-features = false }
 tui-big-text = "0.7.1"

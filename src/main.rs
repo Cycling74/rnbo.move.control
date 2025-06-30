@@ -427,7 +427,6 @@ async fn with_client(
             Alignment::Center,
         )
         .draw(&mut display)?;
-
     } else {
         let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
         Text::with_alignment(
@@ -439,7 +438,6 @@ async fn with_client(
         .draw(&mut display)?;
         let _ = logger.warning("could not get requested capabilites");
     }
-
 
     let driver = Driver {
         display: display_port,
@@ -494,7 +492,6 @@ async fn with_client(
             .unwrap();
     }
 
-
     let version_path =
         PathBuf::from("/data/UserData/rnbo/share/rnbomovetakeover/package-version.txt");
 
@@ -523,29 +520,36 @@ async fn with_client(
         )));
 
     let display_future = async {
-		use mousefood::prelude::*;
+        use mousefood::prelude::*;
 
-		let config = EmbeddedBackendConfig {
-			flush_callback: Box::new(move |d: &mut MoveDisplay| { 
-                draw_tx.send(DrawCommand { data: d.framebuffer().clone() }).unwrap();
-			}),
-			font_regular: mousefood::fonts::MONO_5X8,
-			font_bold: mousefood::fonts::MONO_5X8,
-			..Default::default()
-		};
+        let config = EmbeddedBackendConfig {
+            flush_callback: Box::new(move |d: &mut MoveDisplay| {
+                draw_tx
+                    .send(DrawCommand {
+                        data: d.framebuffer().clone(),
+                    })
+                    .unwrap();
+            }),
+            font_regular: mousefood::fonts::MONO_5X8,
+            font_bold: Some(mousefood::fonts::MONO_5X8),
+            ..Default::default()
+        };
 
-		let backend = EmbeddedBackend::new(&mut display, config);
-		let mut terminal = ratatui::Terminal::new(backend).expect("to create terminal");
+        let backend = EmbeddedBackend::new(&mut display, config);
+        let mut terminal = ratatui::Terminal::new(backend).expect("to create terminal");
         let state = state.clone();
 
         loop {
             //frame rate
             tokio::time::sleep(Duration::from_millis(23)).await;
 
-			let mut g = state.lock().await;
-			terminal.draw(|frame| {
-				g.render(frame);
-			}).expect("to render frame");
+            let mut g = state.lock().await;
+            let _ = terminal.clear();
+            terminal
+                .draw(|frame| {
+                    g.render(frame);
+                })
+                .expect("to render frame");
         }
     };
 
@@ -553,8 +557,8 @@ async fn with_client(
         while let Some(midi) = midi_in_rx.recv().await {
             let mut c = state.lock().await;
             if c.handle_midi(midi.bytes()).await {
-				//exit, sleep for a little so we can update the display
-				tokio::time::sleep(Duration::from_millis(500)).await;
+                //exit, sleep for a little so we can update the display
+                tokio::time::sleep(Duration::from_millis(500)).await;
                 break;
             }
         }
