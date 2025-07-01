@@ -69,6 +69,7 @@ mod midi;
 mod param;
 mod patcher;
 mod view;
+mod font;
 
 const HTTP_QUERY_DELAY: Duration = Duration::from_millis(200);
 const HTTP_INITIAL_QUERY_DELAY: Duration = Duration::from_millis(500);
@@ -530,8 +531,8 @@ async fn with_client(
                     })
                     .unwrap();
             }),
-            font_regular: mousefood::fonts::MONO_5X8,
-            font_bold: Some(mousefood::fonts::MONO_5X8),
+            font_regular: font::CGA_LIGHT_8X16,
+            font_bold: Some(font::CGA_8X16),
             ..Default::default()
         };
 
