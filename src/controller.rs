@@ -2043,8 +2043,7 @@ impl StateController {
     }
 
     pub fn render(&mut self, frame: &mut ratatui::Frame) {
-        use ratatui::widgets::{Block, Paragraph, Wrap};
-        use ratatui::{style::*, Frame, Terminal};
+        use ratatui::{widgets::{Block, Paragraph, Wrap}, text::{Text, Line}};
         use top::States;
 
         /*
@@ -2058,19 +2057,24 @@ impl StateController {
 
         match self.topsm.state() {
             States::Init => {
-                use ratatui::{
-                    prelude::{Frame, Style, Stylize},
-                    text::Line,
-                };
+				use pad::PadStr;
+				use std::collections::VecDeque;
+				let w = frame.area().width as usize;
+				let cnt = (self.render_counter / 10) % w;
 
-                let text = "Ratatui on embedded devices!";
-                let paragraph = Paragraph::new(text.white())
-                    .wrap(Wrap { trim: true })
-                    .on_black();
-                let bordered_block = Block::bordered()
-                    .border_style(Style::new().white())
-                    .title("Mousefood");
-                frame.render_widget(paragraph.block(bordered_block), frame.area());
+				let mut text: Text = Default::default();
+				let mut line: VecDeque<char> = "RNBO on Move!".pad_to_width(w).chars().collect();
+				for _ in 0..cnt {
+					let e = line.pop_front().unwrap();
+					line.push_back(e);
+				}
+				for _ in 0..4 {
+					text.push_line(Line::from(line.iter().collect::<String>()));
+					let e = line.pop_front().unwrap();
+					line.push_back(e);
+				}
+
+                frame.render_widget(Paragraph::new(text.centered()).centered(), frame.area());
             }
             States::LaunchMove => {
                 //TODO
