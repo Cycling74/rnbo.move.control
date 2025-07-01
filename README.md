@@ -10,6 +10,23 @@ rustup target add aarch64-unknown-linux-gnu
 
 Mount the AOS SDK, in this case: `SDK-toolchain-abletonos-aarch64-rpi4-v3.12`
 
+## Creating Font Files
+
+check out:
+
+* https://github.com/farsil/ibmfonts.git
+* https://github.com/embedded-graphics/bdf.git
+  * `cd location/of/bdf/eg-font-converter`
+  * `cargo build --release`
+* in the root of this current project, assuming these are both checked out in `~/local/src/`
+
+```
+mkdir -p src/font/
+~/local/src/bdf/target/release/eg-font-converter --data src/font/cga_8x16.data --rust src/font/cga8x16.rs ~/local/src/ibmfonts/bdf/ic8x16u.bdf CGA_8X16
+~/local/src/bdf/target/release/eg-font-converter --data src/font/cga_light_8x16.data --rust src/font/cgalight8x16.rs ~/local/src/ibmfonts/bdf/icl8x16u.bdf CGA_Light_8X16
+```
+
+
 ## Build
 
 debug:
