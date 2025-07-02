@@ -2040,7 +2040,99 @@ impl StateController {
     }
 
     fn render_main(&mut self, frame: &mut ratatui::Frame) {
-        //TODO
+        use ratatui::{
+            layout::Rect,
+            style::{Color, Style},
+            text::Line,
+            widgets::Widget,
+        };
+        use tui_widget_list::{ListBuilder, ListState, ListView};
+
+        #[derive(Debug, Clone)]
+        pub struct ListItem {
+            text: String,
+            style: Style,
+        }
+
+        impl ListItem {
+            pub fn new<T: Into<String>>(text: T) -> Self {
+                Self {
+                    text: text.into(),
+                    style: Style::default(),
+                }
+            }
+        }
+
+        impl Widget for ListItem {
+            fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
+                Line::from(self.text).style(self.style).render(area, buf);
+            }
+        }
+
+            match self.sm.state() {
+                States::Menu(selected) => {
+                    //self.clear_visible_params();
+                    let selected: usize = *selected;
+					/*
+                    let selected = if selected == TEMPO_INDEX
+                        || selected == ABOUT_INDEX
+                        || (selected == PATCHER_PARAMS_INDEX
+                            && self.context().instances_count(InstSelType::Params) < 2)
+                        || (selected == PATCHER_DATA_INDEX
+                            && self.context().instances_count(InstSelType::Datarefs) < 2)
+                    {
+                        MenuIndicator::Item(selected)
+                    } else {
+                        MenuIndicator::SubMenu(selected)
+                    };
+					*/
+
+					let builder = ListBuilder::new(|context| {
+						use crate::widget::menu::MenuItem;
+						let mut item = if context.is_selected {
+							MenuItem::new_selected(MENU_ITEMS[context.index], false, &'-')
+						} else {
+							MenuItem::new(MENU_ITEMS[context.index], false)
+						};
+
+						/*
+						// Alternating styles
+						if context.index % 2 == 0 {
+							item.style = Style::default().bg(Color::Black).fg(Color::White);
+						} else {
+							item.style = Style::default().bg(Color::White).fg(Color::Black);
+						}
+						*/
+
+						// Style the selected element
+						if context.is_selected {
+							item.style = item.style.add_modifier(ratatui::style::Modifier::BOLD);
+						} else {
+							item.style = item.style.add_modifier(ratatui::style::Modifier::CROSSED_OUT);
+						};
+
+						// Return the size of the widget along the main axis.
+						let main_axis_size = 1;
+
+						(item, main_axis_size)
+					});
+
+					let item_count = MENU_ITEMS.len();
+					let list = ListView::new(builder, item_count).scroll_padding(1);
+					let mut state = ListState::default();
+					state.select(Some(selected));
+					frame.render_stateful_widget(list, frame.area(), &mut state);
+
+                    /*
+                    self.with_display(|display| {
+                        draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
+                    })
+                    .await;
+                    */
+                    //TODO self.light_button(BACK_MIDI, 0);
+                }
+				_ => () //TODO
+			}
     }
 
     pub fn render(&mut self, frame: &mut ratatui::Frame) {
@@ -2085,13 +2177,22 @@ impl StateController {
                 frame.render_widget(Paragraph::new(text.centered()).centered(), frame.area());
             }
             States::LaunchMove => {
-                //TODO
+                frame.render_widget(
+                    Paragraph::new(Text::from("Launching Move").centered()).centered(),
+                    frame.area(),
+                );
             }
             States::PowerOff => {
-                //TODO
-                //self.display_centered("Powering Down").await;
+                frame.render_widget(
+                    Paragraph::new(Text::from("Powering Down").centered()).centered(),
+                    frame.area(),
+                );
             }
             States::PromptExit(selected) => {
+                frame.render_widget(
+                    Paragraph::new(Text::from("Prompt Exit TODO").centered()).centered(),
+                    frame.area(),
+                );
                 //TODO
                 /*
                 self.clear_visible_params();

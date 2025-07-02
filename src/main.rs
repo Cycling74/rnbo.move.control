@@ -70,6 +70,7 @@ mod param;
 mod patcher;
 mod view;
 mod font;
+mod widget;
 
 const HTTP_QUERY_DELAY: Duration = Duration::from_millis(200);
 const HTTP_INITIAL_QUERY_DELAY: Duration = Duration::from_millis(500);
