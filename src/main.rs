@@ -65,11 +65,11 @@ struct Args {
 mod config;
 mod controller;
 mod display;
+mod font;
 mod midi;
 mod param;
 mod patcher;
 mod view;
-mod font;
 mod widget;
 
 const HTTP_QUERY_DELAY: Duration = Duration::from_millis(200);
