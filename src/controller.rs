@@ -2070,14 +2070,10 @@ impl StateController {
                 let enabled = |index: usize| -> bool {
                     let ctx = self.context();
                     match index {
-                        PATCHER_PARAMS_INDEX if ctx.instances_count(InstSelType::Params) < 1 => {
-                            false
-                        }
-                        PATCHER_DATA_INDEX if ctx.instances_count(InstSelType::Datarefs) < 1 => {
-                            false
-                        }
-                        SETS_INDEX if ctx.sets_count() < 1 => false,
-                        SET_PRESETS_INDEX if ctx.set_presets_count() < 1 => false,
+                        PATCHER_PARAMS_INDEX => ctx.instances_count(InstSelType::Params) > 0,
+                        PATCHER_DATA_INDEX => ctx.instances_count(InstSelType::Datarefs) > 0,
+                        SETS_INDEX => ctx.sets_count() > 0,
+                        SET_PRESETS_INDEX => ctx.set_presets_count() > 0,
                         _ => true,
                     }
                 };
