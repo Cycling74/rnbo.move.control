@@ -119,6 +119,9 @@ enum MenuIndicator {
     Item(usize),
 }
 
+const SUB_MENU_INDICATOR: &'static char = &'>';
+const ITEM_INDICATOR: &'static char = &'-';
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum InstSelType {
     Params,
@@ -2048,91 +2051,85 @@ impl StateController {
         };
         use tui_widget_list::{ListBuilder, ListState, ListView};
 
-        #[derive(Debug, Clone)]
-        pub struct ListItem {
-            text: String,
-            style: Style,
-        }
+        match self.sm.state() {
+            States::Menu(selected) => {
+                let indicator = |index: usize| -> &'static char {
+                    let ctx = self.context();
+                    match index {
+                        TEMPO_INDEX | ABOUT_INDEX => ITEM_INDICATOR,
+                        PATCHER_PARAMS_INDEX if ctx.instances_count(InstSelType::Params) < 2 => {
+                            ITEM_INDICATOR
+                        }
+                        PATCHER_DATA_INDEX if ctx.instances_count(InstSelType::Datarefs) < 2 => {
+                            ITEM_INDICATOR
+                        }
+                        _ => SUB_MENU_INDICATOR,
+                    }
+                };
 
-        impl ListItem {
-            pub fn new<T: Into<String>>(text: T) -> Self {
-                Self {
-                    text: text.into(),
-                    style: Style::default(),
-                }
+                let enabled = |index: usize| -> bool {
+                    let ctx = self.context();
+                    match index {
+                        PATCHER_PARAMS_INDEX if ctx.instances_count(InstSelType::Params) < 1 => {
+                            false
+                        }
+                        PATCHER_DATA_INDEX if ctx.instances_count(InstSelType::Datarefs) < 1 => {
+                            false
+                        }
+                        SETS_INDEX if ctx.sets_count() < 1 => false,
+                        SET_PRESETS_INDEX if ctx.set_presets_count() < 1 => false,
+                        _ => true,
+                    }
+                };
+
+                self.render_menu(frame, &MENU_ITEMS, indicator, enabled, *selected, None);
+
+                //TODO self.light_button(BACK_MIDI, 0);
             }
+            _ => (), //TODO
         }
+    }
 
-        impl Widget for ListItem {
-            fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
-                Line::from(self.text).style(self.style).render(area, buf);
+    fn render_menu<S: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> bool>(
+        &self,
+        frame: &mut ratatui::Frame,
+        items: &[S],
+        selector: FS,
+        enabled: FE,
+        selected: usize,
+        indicated: Option<usize>,
+    ) {
+        use tui_widget_list::{ListBuilder, ListState, ListView};
+        let builder = ListBuilder::new(|context| {
+            use crate::widget::menu::MenuItem;
+            let indicated = Some(context.index) == indicated;
+            let s: &str = items[context.index].as_ref();
+            let mut item = if context.is_selected {
+                let selector = selector(context.index);
+                MenuItem::new_selected(s, indicated, selector)
+            } else {
+                MenuItem::new(s, indicated)
+            };
+
+            // Style the selected element
+            if context.is_selected {
+                item.style = item.style.add_modifier(ratatui::style::Modifier::BOLD);
             }
-        }
 
-            match self.sm.state() {
-                States::Menu(selected) => {
-                    //self.clear_visible_params();
-                    let selected: usize = *selected;
-					/*
-                    let selected = if selected == TEMPO_INDEX
-                        || selected == ABOUT_INDEX
-                        || (selected == PATCHER_PARAMS_INDEX
-                            && self.context().instances_count(InstSelType::Params) < 2)
-                        || (selected == PATCHER_DATA_INDEX
-                            && self.context().instances_count(InstSelType::Datarefs) < 2)
-                    {
-                        MenuIndicator::Item(selected)
-                    } else {
-                        MenuIndicator::SubMenu(selected)
-                    };
-					*/
+            if !enabled(context.index) {
+                item.style = item
+                    .style
+                    .add_modifier(ratatui::style::Modifier::CROSSED_OUT);
+            }
 
-					let builder = ListBuilder::new(|context| {
-						use crate::widget::menu::MenuItem;
-						let mut item = if context.is_selected {
-							MenuItem::new_selected(MENU_ITEMS[context.index], false, &'-')
-						} else {
-							MenuItem::new(MENU_ITEMS[context.index], false)
-						};
+            (item, 1)
+        });
 
-						/*
-						// Alternating styles
-						if context.index % 2 == 0 {
-							item.style = Style::default().bg(Color::Black).fg(Color::White);
-						} else {
-							item.style = Style::default().bg(Color::White).fg(Color::Black);
-						}
-						*/
-
-						// Style the selected element
-						if context.is_selected {
-							item.style = item.style.add_modifier(ratatui::style::Modifier::BOLD);
-						} else {
-							item.style = item.style.add_modifier(ratatui::style::Modifier::CROSSED_OUT);
-						};
-
-						// Return the size of the widget along the main axis.
-						let main_axis_size = 1;
-
-						(item, main_axis_size)
-					});
-
-					let item_count = MENU_ITEMS.len();
-					let list = ListView::new(builder, item_count).scroll_padding(1);
-					let mut state = ListState::default();
-					state.select(Some(selected));
-					frame.render_stateful_widget(list, frame.area(), &mut state);
-
-                    /*
-                    self.with_display(|display| {
-                        draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
-                    })
-                    .await;
-                    */
-                    //TODO self.light_button(BACK_MIDI, 0);
-                }
-				_ => () //TODO
-			}
+        let item_count = MENU_ITEMS.len();
+        let list = ListView::new(builder, item_count).scroll_padding(1);
+        let mut state = ListState::default();
+        state.select(Some(selected));
+        frame.render_stateful_widget(list, frame.area(), &mut state);
     }
 
     pub fn render(&mut self, frame: &mut ratatui::Frame) {
