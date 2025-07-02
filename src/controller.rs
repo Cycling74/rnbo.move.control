@@ -2063,15 +2063,14 @@ impl StateController {
 				let cnt = (self.render_counter / 10) % w;
 
 				let mut text: Text = Default::default();
-				let mut line: VecDeque<char> = "RNBO on Move!".pad_to_width(w).chars().collect();
-				for _ in 0..cnt {
-					let e = line.pop_front().unwrap();
-					line.push_back(e);
-				}
+
+				let heading = "RNBO on Move!".pad_to_width(w);
+				let (s, e) = heading.split_at(cnt);
+				let s = e.to_string() + s;
+				let mut line: VecDeque<char> = s.chars().collect();
 				for _ in 0..4 {
 					text.push_line(Line::from(line.iter().collect::<String>()));
-					let e = line.pop_front().unwrap();
-					line.push_back(e);
+					line.rotate_left(1);
 				}
 
                 frame.render_widget(Paragraph::new(text.centered()).centered(), frame.area());
