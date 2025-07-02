@@ -730,7 +730,6 @@ pub struct StateController {
     viewsm: view::StateMachine,
     topsm: top::StateMachine,
 
-    render_counter: usize, //use for animations
     has_all_capabilities: bool,
 
     cmd_queue: sync_mpsc::Receiver<Cmd>,
@@ -920,7 +919,6 @@ impl StateController {
             viewsm,
             topsm,
 
-            render_counter: 0,
             has_all_capabilities,
 
             midi_out_queue,
@@ -2066,7 +2064,7 @@ impl StateController {
                 use pad::PadStr;
                 use std::collections::VecDeque;
                 let w = frame.area().width as usize;
-                let cnt = (self.render_counter / 10) % w;
+                let cnt = (frame.count() / 10) % w;
 
                 let mut text: Text = Default::default();
 
@@ -2151,8 +2149,6 @@ impl StateController {
             States::Main => self.render_main(frame),
             States::ParamViews => self.render_param_views(frame),
         }
-
-        self.render_counter = self.render_counter.wrapping_add(1);
     }
 
     async fn handle_event(&mut self, e: Events) {
