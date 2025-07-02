@@ -419,24 +419,8 @@ async fn with_client(
     };
 
     let size = display.size();
-    if caps.all() {
-        let style = MonoTextStyle::new(&profont::PROFONT_24_POINT, BinaryColor::On);
-        Text::with_alignment(
-            "RNBO\non Move",
-            Point::new(size.width as i32 / 2, size.height as i32 / 2),
-            style,
-            Alignment::Center,
-        )
-        .draw(&mut display)?;
-    } else {
-        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-        Text::with_alignment(
-            "RNBO\non Move\nREDUCED\nCAPABILITIES",
-            Point::new(size.width as i32 / 2, size.height as i32 / 4),
-            style,
-            Alignment::Center,
-        )
-        .draw(&mut display)?;
+    let has_all_capabilities: bool = caps.all();
+    if !has_all_capabilities {
         let _ = logger.warning("could not get requested capabilites");
     }
 
@@ -518,6 +502,7 @@ async fn with_client(
             volume,
             package_version,
             config.clone(),
+            has_all_capabilities,
         )));
 
     let display_future = async {

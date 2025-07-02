@@ -731,6 +731,7 @@ pub struct StateController {
     topsm: top::StateMachine,
 
     render_counter: usize, //use for animations
+    has_all_capabilities: bool,
 
     cmd_queue: sync_mpsc::Receiver<Cmd>,
 
@@ -883,6 +884,7 @@ impl StateController {
         volume: Arc<AtomicU8>,
         package_version: Option<String>,
         config_path: PathBuf,
+        has_all_capabilities: bool,
     ) -> Self {
         let (tx, rx) = sync_mpsc::channel();
 
@@ -919,6 +921,7 @@ impl StateController {
             topsm,
 
             render_counter: 0,
+            has_all_capabilities,
 
             midi_out_queue,
             volume,
@@ -2043,7 +2046,10 @@ impl StateController {
     }
 
     pub fn render(&mut self, frame: &mut ratatui::Frame) {
-        use ratatui::{widgets::{Block, Paragraph, Wrap}, text::{Text, Line}};
+        use ratatui::{
+            text::{Line, Text},
+            widgets::{Block, Paragraph, Wrap},
+        };
         use top::States;
 
         /*
@@ -2057,21 +2063,26 @@ impl StateController {
 
         match self.topsm.state() {
             States::Init => {
-				use pad::PadStr;
-				use std::collections::VecDeque;
-				let w = frame.area().width as usize;
-				let cnt = (self.render_counter / 10) % w;
+                use pad::PadStr;
+                use std::collections::VecDeque;
+                let w = frame.area().width as usize;
+                let cnt = (self.render_counter / 10) % w;
 
-				let mut text: Text = Default::default();
+                let mut text: Text = Default::default();
 
-				let heading = "RNBO on Move!".pad_to_width(w);
-				let (s, e) = heading.split_at(cnt);
-				let s = e.to_string() + s;
-				let mut line: VecDeque<char> = s.chars().collect();
-				for _ in 0..4 {
-					text.push_line(Line::from(line.iter().collect::<String>()));
-					line.rotate_left(1);
-				}
+                let heading = "RNBO on Move!".pad_to_width(w);
+                let (s, e) = heading.split_at(cnt);
+                let s = e.to_string() + s;
+                let mut line: VecDeque<char> = s.chars().collect();
+                let e = if self.has_all_capabilities { 4 } else { 2 };
+                for _ in 0..e {
+                    text.push_line(Line::from(line.iter().collect::<String>()));
+                    line.rotate_left(1);
+                }
+                if !self.has_all_capabilities {
+                    text.push_line(Line::from("REDUCED"));
+                    text.push_line(Line::from("CAPABILITIES"));
+                }
 
                 frame.render_widget(Paragraph::new(text.centered()).centered(), frame.area());
             }
