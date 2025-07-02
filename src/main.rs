@@ -543,11 +543,11 @@ async fn with_client(
         while let Some(midi) = midi_in_rx.recv().await {
             let mut c = state.lock().await;
             if c.handle_midi(midi.bytes()).await {
-                //exit, sleep for a little so we can update the display
-                tokio::time::sleep(Duration::from_millis(500)).await;
                 break;
             }
         }
+        //exit, sleep for a little so we can update the display
+        tokio::time::sleep(Duration::from_millis(500)).await;
     };
 
     let inst_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
