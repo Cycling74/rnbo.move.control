@@ -7,6 +7,8 @@ use {
         patcher::PatcherInst,
         view::ParamView,
     },
+    embedded_graphics::pixelcolor::BinaryColor,
+    /*
     embedded_graphics::{
         mono_font::{MonoTextStyle, MonoTextStyleBuilder},
         pixelcolor::BinaryColor,
@@ -14,6 +16,7 @@ use {
         primitives::{PrimitiveStyleBuilder, Rectangle},
         text::{Alignment, Text},
     },
+    */
     futures_util::{stream::SplitSink, SinkExt},
     palette::{Darken, Srgb},
     reqwest_websocket::{Message, WebSocket},
@@ -33,6 +36,13 @@ use {
         time::Duration,
     },
     tokio::sync::{Mutex, MutexGuard},
+    ratatui::{
+        layout::{Alignment, Rect, Constraint, Flex, Direction, Layout},
+        style::{Color, Style, Modifier},
+        text::{Line, Text},
+        widgets::{Block, Paragraph, Wrap},
+    },
+    tui_widget_list::{ListBuilder, ListState, ListView},
 };
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
@@ -50,6 +60,7 @@ const PARAM_Y_OFFSET: i32 = -6;
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 
+/*
 const TITLE_TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyleBuilder::new()
     .font(&profont::PROFONT_12_POINT)
     .text_color(BinaryColor::On)
@@ -65,6 +76,7 @@ const SMALL_TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyleBuilder::new()
     .font(&profont::PROFONT_9_POINT)
     .text_color(BinaryColor::On)
     .build();
+*/
 
 pub const INST_UNLOAD_ADDR: &str = "/rnbo/inst/control/unload";
 pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
@@ -89,14 +101,17 @@ fn param_pages(params: usize) -> usize {
     params / PARAM_PAGE_SIZE + if params % PARAM_PAGE_SIZE == 0 { 0 } else { 1 }
 }
 
-fn all_enabled(_: usize) -> bool { true }
-fn default_indicator(_: usize) -> &'static char { ITEM_INDICATOR }
+fn all_enabled(_: usize) -> bool {
+    true
+}
+fn default_indicator(_: usize) -> &'static char {
+    ITEM_INDICATOR
+}
 
 fn format_title<'a, T>(content: T) -> ratatui::text::Line<'a>
 where
     T: Into<std::borrow::Cow<'a, str>>,
 {
-    use ratatui::style::{Color, Style, Modifier};
     let style = Style::default()
         .fg(Color::White)
         .add_modifier(Modifier::UNDERLINED);
@@ -104,7 +119,6 @@ where
 }
 
 fn titled_layout(rect: ratatui::layout::Rect) -> Rc<[ratatui::layout::Rect]> {
-    use ratatui::layout::{Layout, Direction, Constraint};
 
     Layout::default()
         .direction(Direction::Vertical)
@@ -115,7 +129,6 @@ fn titled_layout(rect: ratatui::layout::Rect) -> Rc<[ratatui::layout::Rect]> {
         .split(rect)
 }
 
-
 fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> bool>(
     frame: &mut ratatui::Frame,
     title: Option<&str>,
@@ -125,10 +138,6 @@ fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> 
     selected: usize,
     indicated: Option<usize>,
 ) {
-    use {
-        ratatui::layout::Direction,
-        tui_widget_list::{ListBuilder, ListState, ListView}
-    };
     let builder = ListBuilder::new(|context| {
         use crate::widget::menu::MenuItem;
         let indicated = Some(context.index) == indicated;
@@ -168,8 +177,6 @@ fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> 
     frame.render_stateful_widget(list, listrect, &mut state);
 }
 
-
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
 fn center_vertical(area: Rect, height: u16) -> Rect {
     let [area] = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
@@ -1022,10 +1029,8 @@ impl StateController {
         //reset
         let _ = midi_out_queue.send(Midi::reset());
 
-        let tracked_buttons = HashMap::from([
-            (MENU_MIDI, MoveColor::Black),
-            (BACK_MIDI, MoveColor::Black)
-        ]);
+        let tracked_buttons =
+            HashMap::from([(MENU_MIDI, MoveColor::Black), (BACK_MIDI, MoveColor::Black)]);
 
         let mut s = Self {
             line_token: 0,
@@ -2175,7 +2180,6 @@ impl StateController {
         }
         std::mem::swap(&mut tracked, &mut self.tracked_buttons);
 
-
         /*
         //render buttons if they haven't already been rendered
         for (btn, color) in btncolor.iter() {
@@ -2192,16 +2196,115 @@ impl StateController {
     }
 
     fn render_param_views(&mut self, frame: &mut ratatui::Frame) {
-        //TODO
+        use view::States;
+        let s = self.viewsm.state().clone();
+        match s {
+            States::ParamViewMenu(selected) => {
+                self.do_once(line!(), |s| {
+                    s.clear_visible_params();
+                    s.render_buttons([
+                        (MENU_MIDI, MoveColor::LightGray),
+                    ]);
+                });
+                render_menu(
+                    frame,
+                    Some("Param Views"),
+                    self.param_view_names.as_slice(),
+                    default_indicator,
+                    all_enabled,
+                    selected,
+                    None
+                );
+            }
+            States::ViewParams(state) => {
+                self.do_once(line!(), |s| {
+                    s.render_buttons([
+                        (MENU_MIDI, MoveColor::LightGray),
+                        (BACK_MIDI, MoveColor::LightGray),
+                    ]);
+                });
+
+                let index = state.index;
+                let page = state.page;
+                let focused = state.focused.clone();
+
+                //TODO how to compute this only when states change?
+                if let Some((name, params)) = self
+                    .param_view_names
+                        .iter()
+                        .zip(self.param_view_params.iter())
+                        .skip(index)
+                        .next()
+                {
+                    let mut focus: Option<String> = None;
+                    let offset = page * PARAM_PAGE_SIZE;
+                    if let Some(focused) = focused {
+                        let pindex = offset + focused;
+                        if let Some(pindex) = params.get(pindex) {
+                            if let Some(param) = self.params.get(*pindex) {
+                                focus = Some(format!(
+                                        "inst: {}\n{}\n{}",
+                                        param.instance_index(),
+                                        param.display_name(),
+                                        param.render_value()
+                                ));
+                            }
+                        }
+                    }
+
+                    self.visible_params = params
+                        .iter()
+                        .skip(offset)
+                        .take(PARAM_PAGE_SIZE)
+                        .map(|i| *i)
+                        .collect();
+
+                    let pages = self.context().view_param_pages(index);
+
+                    let mut title = format!("View: {}", name);
+                    if pages > 1 {
+                        title = format!("{} ({}/{})", title, page + 1, pages);
+                    }
+                    let title = format_title(title);
+                    let layout = titled_layout(frame.area());
+                    frame.render_widget(title, layout[0]);
+
+                    /*
+                       self.with_display(|mut display| {
+                       display.clear(BinaryColor::Off).unwrap();
+
+                       draw_title(&mut display, title.as_str());
+                       draw_pager(&mut display, pages, page);
+                       if let Some(focus) = &focus {
+                       Text::with_alignment(
+                       focus.as_str(),
+                       Point::new(
+                       DISPLAY_WIDTH as i32 / 2,
+                       DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
+                       ),
+                       TEXT_STYLE,
+                       Alignment::Center,
+                       )
+                       .draw(display.deref_mut())
+                       .unwrap();
+                       }
+                       })
+                       .await;
+                       */
+                } else {
+                    let title = format_title("Error");
+                    let content = vec![Line::default(), Line::from("Empty View").centered()];
+                    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+
+                    let layout = titled_layout(frame.area());
+                    frame.render_widget(title, layout[0]);
+                    frame.render_widget(paragraph, layout[1]);
+                }
+            }
+        }
     }
 
     fn render_main(&mut self, frame: &mut ratatui::Frame) {
-        use ratatui::{
-            layout::{Alignment, Rect},
-            style::{Color, Style},
-            text::{Line, Text},
-            widgets::{Block, Paragraph, Widget},
-        };
 
         let state = self.sm.state().clone();
 
@@ -2210,11 +2313,10 @@ impl StateController {
                 s.clear_visible_params();
                 s.render_buttons([
                     (MENU_MIDI, MoveColor::LightGray),
-                    (BACK_MIDI, MoveColor::LightGray)
+                    (BACK_MIDI, MoveColor::LightGray),
                 ]);
             });
         };
-
 
         match state {
             States::Menu(selected) => {
@@ -2249,13 +2351,10 @@ impl StateController {
             States::TempoEditor => {
                 setup_common(line!(), self);
 
-
                 let title = format_title("Tempo");
                 let bpm = format!("{:.1} BPM", self.bpm).to_string();
                 let content = vec![Line::default(), Line::from(bpm).centered()];
-                let paragraph = Paragraph::new(content)
-                    .alignment(Alignment::Center);
-
+                let paragraph = Paragraph::new(content).alignment(Alignment::Center);
 
                 let layout = titled_layout(frame.area());
                 frame.render_widget(title, layout[0]);
@@ -2265,10 +2364,15 @@ impl StateController {
                 setup_common(line!(), self);
 
                 let title = format_title("About");
-                let version = self.package_version.clone().unwrap_or("unknown".to_string());
-                let content = vec![Line::from("package version:"), Line::from(version) /*, Line::from("beta.cycling74.com") */];
-                let paragraph = Paragraph::new(content)
-                    .alignment(Alignment::Center);
+                let version = self
+                    .package_version
+                    .clone()
+                    .unwrap_or("unknown".to_string());
+                let content = vec![
+                    Line::from("package version:"),
+                    Line::from(version), /*, Line::from("beta.cycling74.com") */
+                ];
+                let paragraph = Paragraph::new(content).alignment(Alignment::Center);
 
                 let layout = titled_layout(frame.area());
                 frame.render_widget(title, layout[0]);
@@ -2276,11 +2380,27 @@ impl StateController {
             }
             States::SetsList(selected) => {
                 setup_common(line!(), self);
-                render_menu(frame, Some("Load Graph"), self.set_names.as_slice(), default_indicator, all_enabled, selected, self.set_current_index);
+                render_menu(
+                    frame,
+                    Some("Load Graph"),
+                    self.set_names.as_slice(),
+                    default_indicator,
+                    all_enabled,
+                    selected,
+                    self.set_current_index,
+                );
             }
             States::SetPresetsList(selected) => {
                 setup_common(line!(), self);
-                render_menu(frame, Some("Load Graph Preset"), self.set_preset_names.as_slice(), default_indicator, all_enabled, selected, self.set_preset_loaded_index);
+                render_menu(
+                    frame,
+                    Some("Load Graph Preset"),
+                    self.set_preset_names.as_slice(),
+                    default_indicator,
+                    all_enabled,
+                    selected,
+                    self.set_preset_loaded_index,
+                );
             }
             States::PatcherInstances(entry) => {
                 setup_common(line!(), self);
@@ -2290,81 +2410,87 @@ impl StateController {
                         (&"Device Data", &self.patchers_datarefs_instance_names)
                     }
                 };
-                render_menu(frame, Some(title), items.as_slice(), default_indicator, all_enabled, entry.selected(), None);
+                render_menu(
+                    frame,
+                    Some(title),
+                    items.as_slice(),
+                    default_indicator,
+                    all_enabled,
+                    entry.selected(),
+                    None,
+                );
             }
             States::PatcherParams(state) => {
-                setup_common(line!(), self);
-                /*
+                //setup_common(line!(), self);
                 let index = state.index;
                 let page = state.page;
                 let focused = state.focused.clone();
 
-                {
-                    let pages = self.context().instance_param_pages(index);
+                let pages = self.context().instance_param_pages(index);
 
-                    let mut focus: Option<String> = None;
-                    if let Some(instance) = self.instance_params.get(index) {
-                        let offset = page * PARAM_PAGE_SIZE;
-                        self.visible_params = instance
-                            .iter()
-                            .skip(offset)
-                            .take(PARAM_PAGE_SIZE)
-                            .map(|i| *i)
-                            .collect();
-                        if let Some(focused) = focused {
-                            let pindex = offset + focused;
-                            if let Some(pindex) = instance.get(pindex) {
-                                if let Some(param) = self.params.get(*pindex) {
-                                    focus = Some(format!(
-                                            "{}\n{}",
-                                            param.display_name(),
-                                            param.render_value()
-                                    ))
-                                } else {
-                                    eprintln!("cannot get param at {}", *pindex);
-                                }
+                //TODO how to compute once?
+                let mut focus: Option<String> = None;
+                if let Some(instance) = self.instance_params.get(index) {
+                    let offset = page * PARAM_PAGE_SIZE;
+                    self.visible_params = instance
+                        .iter()
+                        .skip(offset)
+                        .take(PARAM_PAGE_SIZE)
+                        .map(|i| *i)
+                        .collect();
+                    if let Some(focused) = focused {
+                        let pindex = offset + focused;
+                        if let Some(pindex) = instance.get(pindex) {
+                            if let Some(param) = self.params.get(*pindex) {
+                                focus = Some(format!(
+                                        "{}\n{}",
+                                        param.display_name(),
+                                        param.render_value()
+                                ))
                             } else {
-                                eprintln!("cannot get pinstance {}", pindex);
+                                //eprintln!("cannot get param at {}", *pindex);
                             }
+                        } else {
+                            //eprintln!("cannot get pinstance {}", pindex);
                         }
-                    } else {
-                        self.visible_params.clear();
                     }
+                } else {
+                    //self.visible_params.clear();
+                }
 
-                    let name = self.patchers_params_instance_names.get(index).unwrap();
+                let name = self.patchers_params_instance_names.get(index).unwrap();
 
-                    let title = format_title(format!("{} Params", name));
+                let title = format_title(format!("{} Params", name));
 
-                    self.with_display(|mut display| {
-                        display.clear(BinaryColor::Off).unwrap();
+                /*
+                   self.with_display(|mut display| {
+                   display.clear(BinaryColor::Off).unwrap();
 
-                        draw_title(&mut display, title.as_str());
-                        draw_pager(&mut display, pages, page);
+                   draw_title(&mut display, title.as_str());
+                   draw_pager(&mut display, pages, page);
 
-                        if let Some(focus) = &focus {
-                            Text::with_alignment(
-                                focus.as_str(),
-                                Point::new(
-                                    DISPLAY_WIDTH as i32 / 2,
-                                    DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
-                                ),
-                                TEXT_STYLE,
-                                Alignment::Center,
-                            )
-                                .draw(display.deref_mut())
-                                .unwrap();
-                        }
-                    })
-                    .await;
-                    }
-                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                */
+                   if let Some(focus) = &focus {
+                   Text::with_alignment(
+                   focus.as_str(),
+                   Point::new(
+                   DISPLAY_WIDTH as i32 / 2,
+                   DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
+                   ),
+                   TEXT_STYLE,
+                   Alignment::Center,
+                   )
+                   .draw(display.deref_mut())
+                   .unwrap();
+                   }
+                   })
+                   .await;
+                   */
             }
             States::PatcherDatarefs(entry) => {
                 setup_common(line!(), self);
                 if let Some(inst) = self
                     .instances
-                        .get(self.patchers_datarefs_instance_indexes[entry.instance()])
+                    .get(self.patchers_datarefs_instance_indexes[entry.instance()])
                 {
                     let name = self
                         .patchers_datarefs_instance_names
@@ -2373,14 +2499,22 @@ impl StateController {
                     let title = format!("{} Data", name);
                     let items: Vec<String> = inst.visible_datarefs().clone();
 
-                    render_menu(frame, Some(title.as_str()), inst.visible_datarefs().as_slice(), default_indicator, all_enabled, entry.selected(), None);
+                    render_menu(
+                        frame,
+                        Some(title.as_str()),
+                        inst.visible_datarefs().as_slice(),
+                        default_indicator,
+                        all_enabled,
+                        entry.selected(),
+                        None,
+                    );
                 }
             }
             States::PatcherDatarefLoad(entry) => {
                 setup_common(line!(), self);
                 if let Some(inst) = self
                     .instances
-                        .get(self.patchers_datarefs_instance_indexes[entry.dataref().instance()])
+                    .get(self.patchers_datarefs_instance_indexes[entry.dataref().instance()])
                 {
                     let indicated = inst
                         .visible_datarefs()
@@ -2399,7 +2533,15 @@ impl StateController {
                                 0
                             }
                         });
-                    render_menu(frame, Some("Load File"), self.datafile_menu.as_slice(), default_indicator, all_enabled, entry.selected(), indicated);
+                    render_menu(
+                        frame,
+                        Some("Load File"),
+                        self.datafile_menu.as_slice(),
+                        default_indicator,
+                        all_enabled,
+                        entry.selected(),
+                        indicated,
+                    );
                 }
             }
             _ => (), //TODO
@@ -2407,27 +2549,14 @@ impl StateController {
     }
 
     pub fn render(&mut self, frame: &mut ratatui::Frame) {
-        use ratatui::{
-            text::{Line, Text},
-            widgets::{Block, Paragraph, Wrap},
-        };
         use top::States;
-
-        /*
-        let text = "Ratatui on embedded devices!";
-        let paragraph = Paragraph::new(text.dark_gray()).wrap(Wrap { trim: true });
-        let bordered_block = Block::bordered()
-            .border_style(Style::new().yellow())
-            .title("Mousefood");
-        frame.render_widget(paragraph.block(bordered_block), frame.area());
-        */
 
         match self.topsm.state() {
             States::Init => {
                 self.do_once(line!(), |s| {
                     s.render_buttons([
                         (MENU_MIDI, MoveColor::LightGray),
-                        (BACK_MIDI, MoveColor::LightGray)
+                        (BACK_MIDI, MoveColor::LightGray),
                     ]);
                 });
 
@@ -2474,45 +2603,31 @@ impl StateController {
             }
             States::PromptExit(selected) => {
                 self.do_once(line!(), |s| {
-                    s.render_buttons([
-                        (BACK_MIDI, MoveColor::LightGray)
-                    ]);
+                    s.clear_visible_params();
+                    s.render_buttons([(BACK_MIDI, MoveColor::LightGray)]);
                 });
                 frame.render_widget(
                     Paragraph::new(Text::from("Prompt Exit TODO").centered()).centered(),
                     frame.area(),
                 );
-                //TODO
-                /*
-                self.clear_visible_params();
-                   self.with_display(|display| {
-                   draw_menu(
-                   display,
-                   &"Exit RNBO",
-                   &EXIT_MENU,
-                   MenuIndicator::Item(selected),
-                   None,
-                   );
-                   })
-                   .await;
-                */
-                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             States::VolumeEditor(_) => {
-                /*
-                if top_last != top_cur {
-                    self.clear_visible_params();
-                }
-                let volume = self.volume();
-                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                   self.with_display(|mut display| {
-                   display.clear(BinaryColor::Off).unwrap();
-                   draw_title(&mut display, &"Volume");
-                   let volume = format!("{:.2}", volume);
-                   draw_centered(&mut display, volume.as_str(), TEXT_STYLE);
-                   })
-                   .await;
-                */
+                self.do_once(line!(), |s| {
+                    s.clear_visible_params();
+                    s.render_buttons([
+                        (BACK_MIDI, MoveColor::LightGray),
+                        (MENU_MIDI, MoveColor::LightGray),
+                    ]);
+                });
+
+                let title = format_title("Volume");
+                let volume = format!("{:.2}", self.volume());
+                let content = vec![Line::default(), Line::from(volume).centered()];
+                let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+
+                let layout = titled_layout(frame.area());
+                frame.render_widget(title, layout[0]);
+                frame.render_widget(paragraph, layout[1]);
             }
             States::DisplayChildProcessError => {
                 /*
@@ -2550,73 +2665,11 @@ impl StateController {
             use top::States;
             match top_cur {
                 States::LaunchMove => {
-                    //self.display_centered("Launching Move").await;
-                    tokio::time::sleep(Duration::from_millis(500)).await;
                     self.exit = true;
                 }
                 States::PowerOff => {
-                    //self.display_centered("Powering Down").await;
-
-                    self.light_button(BACK_MIDI, 0);
-                    self.light_button(MENU_MIDI, 0);
-
-                    //leave some time for it do draw
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    //XXX add time to display this?
                     self.send_power_cmd(PowerCommand::PowerOff);
-                }
-                States::PromptExit(selected) => {
-                    self.clear_visible_params();
-                    /*
-                    self.with_display(|display| {
-                        draw_menu(
-                            display,
-                            &"Exit RNBO",
-                            &EXIT_MENU,
-                            MenuIndicator::Item(selected),
-                            None,
-                        );
-                    })
-                    .await;
-                    */
-                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::VolumeEditor(_) => {
-                    if top_last != top_cur {
-                        self.clear_visible_params();
-                    }
-                    let volume = self.volume();
-                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                    /*
-                    self.with_display(|mut display| {
-                        display.clear(BinaryColor::Off).unwrap();
-                        draw_title(&mut display, &"Volume");
-                        let volume = format!("{:.2}", volume);
-                        draw_centered(&mut display, volume.as_str(), TEXT_STYLE);
-                    })
-                    .await;
-                    */
-                }
-                States::DisplayChildProcessError => {
-                    self.clear_visible_params();
-                    let name = self.child_process_error.as_ref().unwrap().0.clone();
-                    let p = std::path::Path::new(name.as_str());
-                    let prog = p.file_name().unwrap().to_str().unwrap();
-                    let msg = format!("{}\ncrashed\nreport to beta list\nthen hit power button\nto power down\nor return to move", prog);
-
-                    /*
-                    self.with_display(|mut display| {
-                        display.clear(BinaryColor::Off).unwrap();
-                        Text::with_alignment(
-                            msg.as_str(),
-                            Point::new(DISPLAY_WIDTH as i32 / 2, 6),
-                            SMALL_TEXT_STYLE,
-                            Alignment::Center,
-                        )
-                        .draw(display.deref_mut())
-                        .unwrap();
-                    })
-                    .await;
-                    */
                 }
                 //transitions
                 States::Main | States::ParamViews => self.clear_visible_params(),
@@ -2649,16 +2702,8 @@ impl StateController {
 
         match top_cur {
             top::States::Main => {
-                let render = if touch || !top_trans {
-                    let ns = self.sm.process_event(e);
-                    ns.is_some()
-                } else {
-                    //if top transitioned, we don't process an event but we do render
-                    true
-                };
-                if render {
-                    let s = self.sm.state().clone();
-                    //self.render_main(&s).await;
+                if touch || !top_trans {
+                    let _ = self.sm.process_event(e);
                 }
             }
             top::States::ParamViews => {
@@ -2669,22 +2714,12 @@ impl StateController {
                     _ => (),
                 };
 
-                let render = if touch || !top_trans {
-                    let ns = self.viewsm.process_event(e);
-                    ns.is_some()
-                } else {
-                    //if top transitioned, we don't process an event but we do render
-                    true
-                };
-                if render {
-                    let s = self.viewsm.state().clone();
-                    //self.render_set_views(&s).await;
+                if touch || !top_trans {
+                    let _ = self.viewsm.process_event(e);
                 }
             }
             _ => (),
         };
-
-        self.process_cmds().await;
     }
 
     fn render_param(&self, param: &Param, location: usize) {
@@ -2747,7 +2782,7 @@ impl StateController {
         }
     }
 
-    async fn process_cmds(&mut self) {
+    pub async fn process_cmds(&mut self) {
         while let Ok(cmd) = self.cmd_queue.try_recv() {
             match cmd {
                 Cmd::Power(cmd) => self.send_power_cmd(cmd),

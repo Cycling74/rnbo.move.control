@@ -537,6 +537,7 @@ async fn with_client(
                     g.render(frame);
                 })
                 .expect("to render frame");
+            g.process_cmds().await;
         }
     };
 
