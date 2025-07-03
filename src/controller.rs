@@ -89,6 +89,28 @@ fn param_pages(params: usize) -> usize {
     params / PARAM_PAGE_SIZE + if params % PARAM_PAGE_SIZE == 0 { 0 } else { 1 }
 }
 
+use ratatui::layout::{Constraint, Flex, Layout, Rect};
+fn center_vertical(area: Rect, height: u16) -> Rect {
+    let [area] = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .areas(area);
+    area
+}
+
+fn center_horizontal(area: Rect, width: u16) -> Rect {
+    let [area] = Layout::horizontal([Constraint::Length(width)])
+        .flex(Flex::Center)
+        .areas(area);
+    area
+}
+fn center(area: Rect, horizontal: Constraint, vertical: Constraint) -> Rect {
+    let [area] = Layout::horizontal([horizontal])
+        .flex(Flex::Center)
+        .areas(area);
+    let [area] = Layout::vertical([vertical]).flex(Flex::Center).areas(area);
+    area
+}
+
 fn format_title(mut title: String) -> String {
     if title.len() > 16 {
         title.truncate(14);
@@ -719,6 +741,9 @@ impl Caps {
 }
 
 pub struct StateController {
+    line_token: u32, //used for "once" actions (lighting leds from render methods)
+    tracked_buttons: HashMap<u8, u8>,
+
     set_current_name: Option<String>,
     set_preset_loaded_name: Option<String>,
 
@@ -915,7 +940,15 @@ impl StateController {
         //reset
         let _ = midi_out_queue.send(Midi::reset());
 
+        let tracked_buttons = HashMap::from([
+            (MENU_MIDI, 0),
+            (BACK_MIDI, 0)
+        ]);
+
         let mut s = Self {
+            line_token: 0,
+            tracked_buttons,
+
             sysex: Vec::new(),
 
             sm,
@@ -984,9 +1017,6 @@ impl StateController {
             datafile_menu: Vec::new(),
         };
 
-        //States::Init not transitioned to so, do setup here
-        s.light_button(MENU_MIDI, MoveColor::LightGray as _);
-        s.light_button(BACK_MIDI, MoveColor::LightGray as _);
         s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
 
         s
@@ -2034,8 +2064,25 @@ impl StateController {
         self.sm.state()
     }
 
-    fn render_buttons(&mut self, btncolor: &[(u8, u8)]) {
+    fn do_once<F: Fn(&mut Self)>(&mut self, line: u32, func: F) {
+        if self.line_token != line {
+            func(self);
+        }
+        self.line_token = line;
+    }
+
+    fn render_buttons(&mut self, btncolor: &[(u8, MoveColor)]) {
         //render buttons if they haven't already been rendered
+        for (btn, color) in btncolor.iter() {
+            let color = *color as _;
+            let c = self.tracked_buttons.get_mut(btn).expect("button to be in tracked_buttons list");
+            if *c != color {
+                *c = color;
+            } else {
+                continue;
+            }
+            self.light_button(*btn, color);
+        }
     }
 
     fn render_param_views(&mut self, frame: &mut ratatui::Frame) {
@@ -2044,15 +2091,22 @@ impl StateController {
 
     fn render_main(&mut self, frame: &mut ratatui::Frame) {
         use ratatui::{
-            layout::Rect,
+            layout::{Alignment, Rect},
             style::{Color, Style},
-            text::Line,
-            widgets::Widget,
+            text::{Line, Text},
+            widgets::{Block, Paragraph, Widget},
         };
         use tui_widget_list::{ListBuilder, ListState, ListView};
 
-        match self.sm.state() {
+        let state = self.sm.state().clone();
+        match state {
             States::Menu(selected) => {
+                self.do_once(line!(), |s| {
+                    s.clear_visible_params();
+                    s.render_buttons(&[
+                        (MENU_MIDI, MoveColor::LightGray)
+                    ]);
+                });
                 let indicator = |index: usize| -> &'static char {
                     let ctx = self.context();
                     match index {
@@ -2078,9 +2132,50 @@ impl StateController {
                     }
                 };
 
-                self.render_menu(frame, &MENU_ITEMS, indicator, enabled, *selected, None);
+                self.render_menu(frame, &MENU_ITEMS, indicator, enabled, selected, None);
 
                 //TODO self.light_button(BACK_MIDI, 0);
+            }
+            States::TempoEditor => {
+                let bpm = Text::from(format!("{:.1}", self.bpm).to_string()).centered();
+                let paragraph = Paragraph::new(bpm)
+                    .alignment(Alignment::Center);
+                let bordered_block = Block::bordered()
+                    .border_style(Style::new().white())
+                    .title(Line::from("Tempo (BPM)"));
+                frame.render_widget(paragraph.block(bordered_block), frame.area());
+
+                //TODO self.clear_visible_params();
+                //TODO self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+            }
+            States::About => {
+                /*
+                //TODO self.clear_visible_params();
+                //TODO self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                self.with_display(|mut display| {
+                display.clear(BinaryColor::Off).unwrap();
+
+                let info = format!(
+                "package version:\n{}\nwebsite:\nbeta.cycling74.com\n",
+                self.package_version
+                .clone()
+                .unwrap_or("unknown".to_string())
+                );
+
+                display.clear(BinaryColor::Off).unwrap();
+
+                draw_title(&mut display, "About");
+                Text::with_alignment(
+                info.as_str(),
+                Point::new(DISPLAY_WIDTH as i32 / 2, 24),
+                SMALL_TEXT_STYLE,
+                Alignment::Center,
+                )
+                .draw(display.deref_mut())
+                .unwrap();
+                })
+                .await;
+                */
             }
             _ => (), //TODO
         }
