@@ -89,6 +89,17 @@ fn param_pages(params: usize) -> usize {
     params / PARAM_PAGE_SIZE + if params % PARAM_PAGE_SIZE == 0 { 0 } else { 1 }
 }
 
+pub fn format_title<'a, T>(content: T) -> ratatui::text::Line<'a>
+where
+    T: Into<std::borrow::Cow<'a, str>>,
+{
+    use ratatui::style::{Color, Style, Modifier};
+    let style = Style::default()
+        .fg(Color::White)
+        .add_modifier(Modifier::UNDERLINED);
+    ratatui::text::Line::styled(content, style).centered()
+}
+
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 fn center_vertical(area: Rect, height: u16) -> Rect {
     let [area] = Layout::vertical([Constraint::Length(height)])
@@ -111,6 +122,7 @@ fn center(area: Rect, horizontal: Constraint, vertical: Constraint) -> Rect {
     area
 }
 
+/*
 fn format_title(mut title: String) -> String {
     if title.len() > 16 {
         title.truncate(14);
@@ -118,6 +130,7 @@ fn format_title(mut title: String) -> String {
     }
     title
 }
+*/
 
 fn format_menu_item(mut item: String) -> String {
     //make strings all length 16
@@ -2120,7 +2133,6 @@ impl StateController {
             text::{Line, Text},
             widgets::{Block, Paragraph, Widget},
         };
-        use tui_widget_list::{ListBuilder, ListState, ListView};
 
         let state = self.sm.state().clone();
         match state {
@@ -2157,49 +2169,41 @@ impl StateController {
                 };
 
                 self.render_menu(frame, &MENU_ITEMS, indicator, enabled, selected, None);
-
-                //TODO self.light_button(BACK_MIDI, 0);
             }
             States::TempoEditor => {
-                let bpm = Text::from(format!("{:.1}", self.bpm).to_string()).centered();
-                let paragraph = Paragraph::new(bpm)
+                self.do_once(line!(), |s| {
+                    s.clear_visible_params();
+                    s.render_buttons([
+                        (MENU_MIDI, MoveColor::LightGray),
+                        (BACK_MIDI, MoveColor::LightGray)
+                    ]);
+                });
+                let title = format_title("Tempo");
+                let bpm = format!("{:.1} BPM", self.bpm).to_string();
+                let content = vec![Line::default(), Line::from(bpm).centered()];
+                let paragraph = Paragraph::new(content)
                     .alignment(Alignment::Center);
-                let bordered_block = Block::bordered()
-                    .border_style(Style::new().white())
-                    .title(Line::from("Tempo (BPM)"));
+                let bordered_block = Block::new()
+                    .title(title);
                 frame.render_widget(paragraph.block(bordered_block), frame.area());
-
-                //TODO self.clear_visible_params();
-                //TODO self.light_button(BACK_MIDI, MoveColor::LightGray as _);
             }
             States::About => {
-                /*
-                //TODO self.clear_visible_params();
-                //TODO self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                self.with_display(|mut display| {
-                display.clear(BinaryColor::Off).unwrap();
+                self.do_once(line!(), |s| {
+                    s.clear_visible_params();
+                    s.render_buttons([
+                        (MENU_MIDI, MoveColor::LightGray),
+                        (BACK_MIDI, MoveColor::LightGray)
+                    ]);
+                });
 
-                let info = format!(
-                "package version:\n{}\nwebsite:\nbeta.cycling74.com\n",
-                self.package_version
-                .clone()
-                .unwrap_or("unknown".to_string())
-                );
-
-                display.clear(BinaryColor::Off).unwrap();
-
-                draw_title(&mut display, "About");
-                Text::with_alignment(
-                info.as_str(),
-                Point::new(DISPLAY_WIDTH as i32 / 2, 24),
-                SMALL_TEXT_STYLE,
-                Alignment::Center,
-                )
-                .draw(display.deref_mut())
-                .unwrap();
-                })
-                .await;
-                */
+                let title = format_title("About");
+                let version = self.package_version.clone().unwrap_or("unknown".to_string());
+                let content = vec![Line::from("package version:"), Line::from(version) /*, Line::from("beta.cycling74.com") */];
+                let paragraph = Paragraph::new(content)
+                    .alignment(Alignment::Center);
+                let bordered_block = Block::new()
+                    .title(title);
+                frame.render_widget(paragraph.block(bordered_block), frame.area());
             }
             _ => (), //TODO
         }
