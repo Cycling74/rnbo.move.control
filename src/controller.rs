@@ -89,7 +89,10 @@ fn param_pages(params: usize) -> usize {
     params / PARAM_PAGE_SIZE + if params % PARAM_PAGE_SIZE == 0 { 0 } else { 1 }
 }
 
-pub fn format_title<'a, T>(content: T) -> ratatui::text::Line<'a>
+fn all_enabled(_: usize) -> bool { true }
+fn default_indicator(_: usize) -> &'static char { ITEM_INDICATOR }
+
+fn format_title<'a, T>(content: T) -> ratatui::text::Line<'a>
 where
     T: Into<std::borrow::Cow<'a, str>>,
 {
@@ -99,6 +102,72 @@ where
         .add_modifier(Modifier::UNDERLINED);
     ratatui::text::Line::styled(content, style).centered()
 }
+
+fn titled_layout(rect: ratatui::layout::Rect) -> Rc<[ratatui::layout::Rect]> {
+    use ratatui::layout::{Layout, Direction, Constraint};
+
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![
+            Constraint::Length(1),
+            Constraint::Length(rect.height - 1),
+        ])
+        .split(rect)
+}
+
+
+fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> bool>(
+    frame: &mut ratatui::Frame,
+    title: Option<&str>,
+    items: &[SI],
+    selector: FS,
+    enabled: FE,
+    selected: usize,
+    indicated: Option<usize>,
+) {
+    use {
+        ratatui::layout::Direction,
+        tui_widget_list::{ListBuilder, ListState, ListView}
+    };
+    let builder = ListBuilder::new(|context| {
+        use crate::widget::menu::MenuItem;
+        let indicated = Some(context.index) == indicated;
+        let s: &str = items[context.index].as_ref();
+        let mut item = if context.is_selected {
+            let selector = selector(context.index);
+            MenuItem::new_selected(s, indicated, selector)
+        } else {
+            MenuItem::new(s, indicated)
+        };
+
+        // Style the selected element
+        if context.is_selected {
+            item.style = item.style.add_modifier(ratatui::style::Modifier::BOLD);
+        }
+
+        if !enabled(context.index) {
+            item.style = item
+                .style
+                .add_modifier(ratatui::style::Modifier::CROSSED_OUT);
+        }
+
+        (item, 1)
+    });
+
+    let list = ListView::new(builder, items.len()).scroll_padding(1);
+    let mut state = ListState::default();
+    state.select(Some(selected));
+
+    let mut listrect = frame.area().clone();
+    if let Some(title) = title {
+        let layout = titled_layout(frame.area());
+        let title = format_title(title);
+        frame.render_widget(title, layout[0]);
+        listrect = layout[1];
+    }
+    frame.render_stateful_widget(list, listrect, &mut state);
+}
+
 
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 fn center_vertical(area: Rect, height: u16) -> Rect {
@@ -2135,14 +2204,21 @@ impl StateController {
         };
 
         let state = self.sm.state().clone();
+
+        let setup_common = |line: u32, s: &mut Self| {
+            s.do_once(line, |s| {
+                s.clear_visible_params();
+                s.render_buttons([
+                    (MENU_MIDI, MoveColor::LightGray),
+                    (BACK_MIDI, MoveColor::LightGray)
+                ]);
+            });
+        };
+
+
         match state {
             States::Menu(selected) => {
-                self.do_once(line!(), |s| {
-                    s.clear_visible_params();
-                    s.render_buttons([
-                        (MENU_MIDI, MoveColor::LightGray)
-                    ]);
-                });
+                setup_common(line!(), self);
                 let indicator = |index: usize| -> &'static char {
                     let ctx = self.context();
                     match index {
@@ -2168,87 +2244,166 @@ impl StateController {
                     }
                 };
 
-                self.render_menu(frame, &MENU_ITEMS, indicator, enabled, selected, None);
+                render_menu(frame, None, &MENU_ITEMS, indicator, enabled, selected, None);
             }
             States::TempoEditor => {
-                self.do_once(line!(), |s| {
-                    s.clear_visible_params();
-                    s.render_buttons([
-                        (MENU_MIDI, MoveColor::LightGray),
-                        (BACK_MIDI, MoveColor::LightGray)
-                    ]);
-                });
+                setup_common(line!(), self);
+
+
                 let title = format_title("Tempo");
                 let bpm = format!("{:.1} BPM", self.bpm).to_string();
                 let content = vec![Line::default(), Line::from(bpm).centered()];
                 let paragraph = Paragraph::new(content)
                     .alignment(Alignment::Center);
-                let bordered_block = Block::new()
-                    .title(title);
-                frame.render_widget(paragraph.block(bordered_block), frame.area());
+
+
+                let layout = titled_layout(frame.area());
+                frame.render_widget(title, layout[0]);
+                frame.render_widget(paragraph, layout[1]);
             }
             States::About => {
-                self.do_once(line!(), |s| {
-                    s.clear_visible_params();
-                    s.render_buttons([
-                        (MENU_MIDI, MoveColor::LightGray),
-                        (BACK_MIDI, MoveColor::LightGray)
-                    ]);
-                });
+                setup_common(line!(), self);
 
                 let title = format_title("About");
                 let version = self.package_version.clone().unwrap_or("unknown".to_string());
                 let content = vec![Line::from("package version:"), Line::from(version) /*, Line::from("beta.cycling74.com") */];
                 let paragraph = Paragraph::new(content)
                     .alignment(Alignment::Center);
-                let bordered_block = Block::new()
-                    .title(title);
-                frame.render_widget(paragraph.block(bordered_block), frame.area());
+
+                let layout = titled_layout(frame.area());
+                frame.render_widget(title, layout[0]);
+                frame.render_widget(paragraph, layout[1]);
+            }
+            States::SetsList(selected) => {
+                setup_common(line!(), self);
+                render_menu(frame, Some("Load Graph"), self.set_names.as_slice(), default_indicator, all_enabled, selected, self.set_current_index);
+            }
+            States::SetPresetsList(selected) => {
+                setup_common(line!(), self);
+                render_menu(frame, Some("Load Graph Preset"), self.set_preset_names.as_slice(), default_indicator, all_enabled, selected, self.set_preset_loaded_index);
+            }
+            States::PatcherInstances(entry) => {
+                setup_common(line!(), self);
+                let (title, items) = match entry.typ() {
+                    InstSelType::Params => (&"Device Params", &self.patchers_params_instance_names),
+                    InstSelType::Datarefs => {
+                        (&"Device Data", &self.patchers_datarefs_instance_names)
+                    }
+                };
+                render_menu(frame, Some(title), items.as_slice(), default_indicator, all_enabled, entry.selected(), None);
+            }
+            States::PatcherParams(state) => {
+                setup_common(line!(), self);
+                /*
+                let index = state.index;
+                let page = state.page;
+                let focused = state.focused.clone();
+
+                {
+                    let pages = self.context().instance_param_pages(index);
+
+                    let mut focus: Option<String> = None;
+                    if let Some(instance) = self.instance_params.get(index) {
+                        let offset = page * PARAM_PAGE_SIZE;
+                        self.visible_params = instance
+                            .iter()
+                            .skip(offset)
+                            .take(PARAM_PAGE_SIZE)
+                            .map(|i| *i)
+                            .collect();
+                        if let Some(focused) = focused {
+                            let pindex = offset + focused;
+                            if let Some(pindex) = instance.get(pindex) {
+                                if let Some(param) = self.params.get(*pindex) {
+                                    focus = Some(format!(
+                                            "{}\n{}",
+                                            param.display_name(),
+                                            param.render_value()
+                                    ))
+                                } else {
+                                    eprintln!("cannot get param at {}", *pindex);
+                                }
+                            } else {
+                                eprintln!("cannot get pinstance {}", pindex);
+                            }
+                        }
+                    } else {
+                        self.visible_params.clear();
+                    }
+
+                    let name = self.patchers_params_instance_names.get(index).unwrap();
+
+                    let title = format_title(format!("{} Params", name));
+
+                    self.with_display(|mut display| {
+                        display.clear(BinaryColor::Off).unwrap();
+
+                        draw_title(&mut display, title.as_str());
+                        draw_pager(&mut display, pages, page);
+
+                        if let Some(focus) = &focus {
+                            Text::with_alignment(
+                                focus.as_str(),
+                                Point::new(
+                                    DISPLAY_WIDTH as i32 / 2,
+                                    DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
+                                ),
+                                TEXT_STYLE,
+                                Alignment::Center,
+                            )
+                                .draw(display.deref_mut())
+                                .unwrap();
+                        }
+                    })
+                    .await;
+                    }
+                self.light_button(BACK_MIDI, MoveColor::LightGray as _);
+                */
+            }
+            States::PatcherDatarefs(entry) => {
+                setup_common(line!(), self);
+                if let Some(inst) = self
+                    .instances
+                        .get(self.patchers_datarefs_instance_indexes[entry.instance()])
+                {
+                    let name = self
+                        .patchers_datarefs_instance_names
+                        .get(entry.instance())
+                        .unwrap();
+                    let title = format!("{} Data", name);
+                    let items: Vec<String> = inst.visible_datarefs().clone();
+
+                    render_menu(frame, Some(title.as_str()), inst.visible_datarefs().as_slice(), default_indicator, all_enabled, entry.selected(), None);
+                }
+            }
+            States::PatcherDatarefLoad(entry) => {
+                setup_common(line!(), self);
+                if let Some(inst) = self
+                    .instances
+                        .get(self.patchers_datarefs_instance_indexes[entry.dataref().instance()])
+                {
+                    let indicated = inst
+                        .visible_datarefs()
+                        .iter()
+                        .skip(entry.dataref().selected())
+                        .next()
+                        .map(|key| {
+                            let dr = inst.dataref_mappings().get(key).unwrap();
+                            if let Some(filename) = dr.mapping() {
+                                self.datafile_list
+                                    .iter()
+                                    .position(|item| item == filename)
+                                    .map(|index| index + 1) //+ 1 because of (unload) being first item
+                                    .unwrap_or(0)
+                            } else {
+                                0
+                            }
+                        });
+                    render_menu(frame, Some("Load File"), self.datafile_menu.as_slice(), default_indicator, all_enabled, entry.selected(), indicated);
+                }
             }
             _ => (), //TODO
         }
-    }
-
-    fn render_menu<S: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> bool>(
-        &self,
-        frame: &mut ratatui::Frame,
-        items: &[S],
-        selector: FS,
-        enabled: FE,
-        selected: usize,
-        indicated: Option<usize>,
-    ) {
-        use tui_widget_list::{ListBuilder, ListState, ListView};
-        let builder = ListBuilder::new(|context| {
-            use crate::widget::menu::MenuItem;
-            let indicated = Some(context.index) == indicated;
-            let s: &str = items[context.index].as_ref();
-            let mut item = if context.is_selected {
-                let selector = selector(context.index);
-                MenuItem::new_selected(s, indicated, selector)
-            } else {
-                MenuItem::new(s, indicated)
-            };
-
-            // Style the selected element
-            if context.is_selected {
-                item.style = item.style.add_modifier(ratatui::style::Modifier::BOLD);
-            }
-
-            if !enabled(context.index) {
-                item.style = item
-                    .style
-                    .add_modifier(ratatui::style::Modifier::CROSSED_OUT);
-            }
-
-            (item, 1)
-        });
-
-        let item_count = MENU_ITEMS.len();
-        let list = ListView::new(builder, item_count).scroll_padding(1);
-        let mut state = ListState::default();
-        state.select(Some(selected));
-        frame.render_stateful_widget(list, frame.area(), &mut state);
     }
 
     pub fn render(&mut self, frame: &mut ratatui::Frame) {
