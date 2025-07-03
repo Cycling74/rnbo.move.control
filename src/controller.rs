@@ -742,7 +742,7 @@ impl Caps {
 
 pub struct StateController {
     line_token: u32, //used for "once" actions (lighting leds from render methods)
-    tracked_buttons: HashMap<u8, u8>,
+    tracked_buttons: HashMap<u8, MoveColor>,
 
     set_current_name: Option<String>,
     set_preset_loaded_name: Option<String>,
@@ -941,8 +941,8 @@ impl StateController {
         let _ = midi_out_queue.send(Midi::reset());
 
         let tracked_buttons = HashMap::from([
-            (MENU_MIDI, 0),
-            (BACK_MIDI, 0)
+            (MENU_MIDI, MoveColor::Black),
+            (BACK_MIDI, MoveColor::Black)
         ]);
 
         let mut s = Self {
@@ -2071,7 +2071,30 @@ impl StateController {
         self.line_token = line;
     }
 
-    fn render_buttons(&mut self, btncolor: &[(u8, MoveColor)]) {
+    fn render_buttons<const N: usize>(&mut self, btncolor: [(u8, MoveColor); N]) {
+        let updated = HashMap::from(btncolor);
+        let mut tracked = std::mem::take(&mut self.tracked_buttons);
+
+        //check our tracked buttons and look for diffs
+        for (btn, cur) in tracked.iter_mut() {
+            let mut v = MoveColor::Black;
+            if let Some(u) = updated.get(btn) {
+                if cur == u {
+                    continue;
+                }
+                v = *u;
+            } else if cur == &MoveColor::Black {
+                continue;
+            }
+
+            //update
+            *cur = v;
+            self.light_button(*btn, v as _);
+        }
+        std::mem::swap(&mut tracked, &mut self.tracked_buttons);
+
+
+        /*
         //render buttons if they haven't already been rendered
         for (btn, color) in btncolor.iter() {
             let color = *color as _;
@@ -2083,6 +2106,7 @@ impl StateController {
             }
             self.light_button(*btn, color);
         }
+        */
     }
 
     fn render_param_views(&mut self, frame: &mut ratatui::Frame) {
@@ -2103,7 +2127,7 @@ impl StateController {
             States::Menu(selected) => {
                 self.do_once(line!(), |s| {
                     s.clear_visible_params();
-                    s.render_buttons(&[
+                    s.render_buttons([
                         (MENU_MIDI, MoveColor::LightGray)
                     ]);
                 });
@@ -2241,6 +2265,13 @@ impl StateController {
 
         match self.topsm.state() {
             States::Init => {
+                self.do_once(line!(), |s| {
+                    s.render_buttons([
+                        (MENU_MIDI, MoveColor::LightGray),
+                        (BACK_MIDI, MoveColor::LightGray)
+                    ]);
+                });
+
                 use pad::PadStr;
                 use std::collections::VecDeque;
                 let w = frame.area().width as usize;
@@ -2265,18 +2296,29 @@ impl StateController {
                 frame.render_widget(Paragraph::new(text.centered()).centered(), frame.area());
             }
             States::LaunchMove => {
+                self.do_once(line!(), |s| {
+                    s.render_buttons([]);
+                });
                 frame.render_widget(
                     Paragraph::new(Text::from("Launching Move").centered()).centered(),
                     frame.area(),
                 );
             }
             States::PowerOff => {
+                self.do_once(line!(), |s| {
+                    s.render_buttons([]);
+                });
                 frame.render_widget(
                     Paragraph::new(Text::from("Powering Down").centered()).centered(),
                     frame.area(),
                 );
             }
             States::PromptExit(selected) => {
+                self.do_once(line!(), |s| {
+                    s.render_buttons([
+                        (BACK_MIDI, MoveColor::LightGray)
+                    ]);
+                });
                 frame.render_widget(
                     Paragraph::new(Text::from("Prompt Exit TODO").centered()).centered(),
                     frame.area(),
