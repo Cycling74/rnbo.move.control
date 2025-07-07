@@ -961,7 +961,7 @@ struct CommonContext {
     pub(crate) dataref_count: Vec<usize>,
     pub(crate) datafile_count: usize,
 
-    pub(crate) can_exit_powermenu: bool
+    pub(crate) can_exit_powermenu: bool,
 }
 
 impl Default for CommonContext {
@@ -978,7 +978,7 @@ impl Default for CommonContext {
             dataref_count: Vec::new(),
             datafile_count: 0,
 
-            can_exit_powermenu: true
+            can_exit_powermenu: true,
         }
     }
 }
@@ -2265,7 +2265,11 @@ impl StateController {
                 let name = self.child_process_error.as_ref().unwrap().0.clone();
                 let p = std::path::Path::new(name.as_str());
                 let prog = p.file_name().unwrap().to_str().unwrap();
-                let content = vec![Line::from(prog), Line::from("please report"), Line::from("then hit power")];
+                let content = vec![
+                    Line::from(prog),
+                    Line::from("please report"),
+                    Line::from("then hit power"),
+                ];
                 let paragraph = Paragraph::new(content).alignment(Alignment::Center);
 
                 let layout = titled_layout(frame.area());
