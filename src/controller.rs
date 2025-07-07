@@ -175,6 +175,64 @@ fn param_layout(rect: ratatui::layout::Rect) -> Rc<[ratatui::layout::Rect]> {
         .split(rect)
 }
 
+struct ParamFocus {
+    label: String,
+    value: String,
+    norm: f64
+}
+
+fn render_param_page(
+    frame: &mut ratatui::Frame,
+    title: &str,
+    focus: Option<ParamFocus>,
+    page: usize, 
+    pages: usize,
+) {
+    let layout = param_layout(frame.area());
+
+    let width = frame.area().width;
+    let title = format_title(animate_text(title, width, frame.count()));
+    frame.render_widget(title, layout[0]);
+
+    if let Some(focus) = focus {
+        let name = Line::from(animate_text(focus.label, width, frame.count()));
+        frame.render_widget(name, layout[1]);
+
+        let label = Span::raw(focus.value);
+        /*
+           let gauge = Gauge::default()
+           .label(label)
+           .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
+           .ratio(focus.norm)
+           .use_unicode(false) //XXX when we get a better font?
+           ;
+           */
+
+        let gauge = LineGauge::default()
+            .label(label)
+            .filled_style(Style::new().white().on_black().bold())
+            .unfilled_style(Style::new().black().on_black().bold())
+            .ratio(focus.norm)
+            ;
+        frame.render_widget(gauge, layout[2]);
+    }
+
+
+    if pages > 1 {
+        let width: usize = (pages as f64).log10().floor() as usize + 1;
+        let label = format!("{:0width$}/{}", page + 1, pages, width = width);
+        let label = Span::raw(label);
+        let ratio = (page as f64 + 1.0) / (pages as f64);
+        let gauge = LineGauge::default()
+            .label(label)
+            .filled_style(Style::new().white().on_black().bold())
+            .unfilled_style(Style::new().black().on_black().bold())
+            .ratio(ratio)
+            ;
+        frame.render_widget(gauge, layout[3]);
+    }
+}
+
 fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> bool>(
     frame: &mut ratatui::Frame,
     title: Option<&str>,
@@ -2258,7 +2316,6 @@ impl StateController {
                     .skip(index)
                     .next()
                 {
-                    let mut focus: Option<String> = None;
                     let offset = page * PARAM_PAGE_SIZE;
 
                     self.visible_params = params
@@ -2269,64 +2326,26 @@ impl StateController {
                         .collect();
 
                     let pages = self.context().view_param_pages(index);
-
-                    let layout = param_layout(frame.area());
-
-                    let width = frame.area().width;
                     let title = format!("View: {}", name);
-                    let title = format_title(animate_text(title, width, frame.count()));
-                    frame.render_widget(title, layout[0]);
 
+                    let mut focus: Option<ParamFocus> = None;
                     if let Some(focused) = focused {
                         let pindex = offset + focused;
                         if let Some(pindex) = params.get(pindex) {
                             if let Some(param) = self.params.get(*pindex) {
-                                let name = format!(
+                                let label = format!(
                                     "inst: {} - {}",
                                     param.instance_index(),
                                     param.display_name(),
                                 );
+                                let value = param.render_value();
+                                let norm = param.norm_prefer_pending();
 
-                                let name = Line::from(animate_text(name, width, frame.count()));
-                                frame.render_widget(name, layout[1]);
-
-                                let label = param.render_value();
-                                let label = Span::raw(label);
-
-                                let ratio = param.norm_prefer_pending();
-                                /*
-                                let gauge = Gauge::default()
-                                    .label(label)
-                                    .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
-                                    .ratio(ratio)
-                                    .use_unicode(false) //XXX when we get a better font?
-                                    ;
-                                */
-
-                                let gauge = LineGauge::default()
-                                    .label(label)
-                                    .filled_style(Style::new().white().on_black().bold())
-                                    .unfilled_style(Style::new().black().on_black().bold())
-                                    .ratio(ratio)
-                                    ;
-                                frame.render_widget(gauge, layout[2]);
+                                focus = Some(ParamFocus { label, value, norm });
                             }
                         }
                     }
-
-                    if pages > 1 {
-                        let width: usize = (pages as f64).log10().floor() as usize + 1;
-                        let label = format!("{:0width$}/{}", page + 1, pages, width = width);
-                        let label = Span::raw(label);
-                        let ratio = (page as f64 + 1.0) / (pages as f64);
-                        let gauge = LineGauge::default()
-                            .label(label)
-                            .filled_style(Style::new().white().on_black().bold())
-                            .unfilled_style(Style::new().black().on_black().bold())
-                            .ratio(ratio)
-                            ;
-                        frame.render_widget(gauge, layout[3]);
-                    }
+                    render_param_page(frame, &title, focus, page, pages);
                 } else {
                     let title = format_title("Error");
                     let content = vec![Line::default(), Line::from("Empty View").centered()];
@@ -2464,7 +2483,7 @@ impl StateController {
                 let pages = self.context().instance_param_pages(index);
 
                 //TODO how to compute this only when states change?
-                let mut focus: Option<String> = None;
+                let mut focus: Option<ParamFocus> = None;
                 if let Some(instance) = self.instance_params.get(index) {
                     let offset = page * PARAM_PAGE_SIZE;
                     self.visible_params = instance
@@ -2477,11 +2496,10 @@ impl StateController {
                         let pindex = offset + focused;
                         if let Some(pindex) = instance.get(pindex) {
                             if let Some(param) = self.params.get(*pindex) {
-                                focus = Some(format!(
-                                    "{}\n{}",
-                                    param.display_name(),
-                                    param.render_value()
-                                ))
+                                let label = param.display_name().to_string();
+                                let value = param.render_value();
+                                let norm = param.norm_prefer_pending();
+                                focus = Some(ParamFocus { label, value, norm });
                             } else {
                                 //eprintln!("cannot get param at {}", *pindex);
                             }
@@ -2494,32 +2512,9 @@ impl StateController {
                 }
 
                 let name = self.patchers_params_instance_names.get(index).unwrap();
+                let title = format!("{} Params", name);
 
-                let title = format_title(format!("{} Params", name));
-
-                /*
-                self.with_display(|mut display| {
-                display.clear(BinaryColor::Off).unwrap();
-
-                draw_title(&mut display, title.as_str());
-                draw_pager(&mut display, pages, page);
-
-                if let Some(focus) = &focus {
-                Text::with_alignment(
-                focus.as_str(),
-                Point::new(
-                DISPLAY_WIDTH as i32 / 2,
-                DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
-                ),
-                TEXT_STYLE,
-                Alignment::Center,
-                )
-                .draw(display.deref_mut())
-                .unwrap();
-                }
-                })
-                .await;
-                */
+                render_param_page(frame, &title, focus, page, pages);
             }
             States::PatcherDatarefs(entry) => {
                 setup_common(line!(), self);
