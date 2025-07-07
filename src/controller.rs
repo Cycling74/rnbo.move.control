@@ -699,8 +699,8 @@ pub mod top {
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == LAUNCH_MOVE_INDEX] = LaunchMove,
             PromptExit(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < EXIT_MENU.len()] = PromptExit(*state + 1),
             PromptExit(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PromptExit(*state - 1),
-            PromptExit(usize) + BtnDown(Button::Back) / ctx.emit(Cmd::RenderVisibleParams); = Main,
-            PromptExit(usize) + BtnDown(Button::Menu) / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            PromptExit(usize) + BtnDown(Button::Back) [ctx.can_exit_powermenu()] / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            PromptExit(usize) + BtnDown(Button::Menu) [ctx.can_exit_powermenu()] / ctx.emit(Cmd::RenderVisibleParams); = Main,
 
             _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
             _ + BtnDown(Button::PowerLong) / ctx.emit(Cmd::Power(PowerCommand::ClearLongPress)); = PowerOff,
@@ -960,6 +960,8 @@ struct CommonContext {
     //sorted list of instances that have datarefs, and the count of datarefs
     pub(crate) dataref_count: Vec<usize>,
     pub(crate) datafile_count: usize,
+
+    pub(crate) can_exit_powermenu: bool
 }
 
 impl Default for CommonContext {
@@ -975,6 +977,8 @@ impl Default for CommonContext {
 
             dataref_count: Vec::new(),
             datafile_count: 0,
+
+            can_exit_powermenu: true
         }
     }
 }
@@ -1035,6 +1039,10 @@ impl Context {
 
     fn datafile_count(&self) -> usize {
         self.common.datafile_count
+    }
+
+    fn can_exit_powermenu(&self) -> bool {
+        self.common.can_exit_powermenu
     }
 }
 
@@ -1385,6 +1393,10 @@ impl StateController {
         name: &str,
         status: std::io::Result<std::process::ExitStatus>,
     ) {
+        let mut common = self.sm.context().common();
+        common.can_exit_powermenu = false;
+        self.update_common(common);
+
         self.child_process_error = Some((name.to_string(), status));
         self.handle_event(Events::ChildProcessError).await;
     }
@@ -2204,9 +2216,14 @@ impl StateController {
                 );
             }
             States::PromptExit(selected) => {
+                let can_exit = !self.child_process_error.is_some();
                 self.do_once(line!(), |s| {
                     s.clear_visible_params();
-                    s.render_buttons([(BACK_MIDI, MoveColor::LightGray)]);
+                    if can_exit {
+                        s.render_buttons([(BACK_MIDI, MoveColor::LightGray)]);
+                    } else {
+                        s.render_buttons([]);
+                    }
                 });
 
                 render_menu(
