@@ -22,8 +22,8 @@ use {
     ratatui::{
         layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
         style::{Color, Modifier, Style},
-        text::{Line, Text},
-        widgets::{Block, Paragraph, Wrap},
+        text::{Line, Text, Span},
+        widgets::{Block, Paragraph, Wrap, Gauge, LineGauge, Borders, Padding},
     },
     reqwest_websocket::{Message, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
@@ -108,6 +108,15 @@ fn default_indicator(_: usize) -> &'static char {
     ITEM_INDICATOR
 }
 
+fn guage_title_block(title: &str) -> Block {
+    let title = Line::from(title).centered();
+    Block::new()
+        .borders(Borders::NONE)
+        .padding(Padding::vertical(0))
+        .title(title)
+}
+
+
 fn format_title<'a, T>(content: T) -> ratatui::text::Line<'a>
 where
     T: Into<std::borrow::Cow<'a, str>>,
@@ -124,6 +133,18 @@ fn titled_layout(rect: ratatui::layout::Rect) -> Rc<[ratatui::layout::Rect]> {
         .constraints(vec![
             Constraint::Length(1),
             Constraint::Length(rect.height - 1),
+        ])
+        .split(rect)
+}
+
+fn param_layout(rect: ratatui::layout::Rect) -> Rc<[ratatui::layout::Rect]> {
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
         ])
         .split(rect)
 }
@@ -2235,19 +2256,6 @@ impl StateController {
                 {
                     let mut focus: Option<String> = None;
                     let offset = page * PARAM_PAGE_SIZE;
-                    if let Some(focused) = focused {
-                        let pindex = offset + focused;
-                        if let Some(pindex) = params.get(pindex) {
-                            if let Some(param) = self.params.get(*pindex) {
-                                focus = Some(format!(
-                                    "inst: {}\n{}\n{}",
-                                    param.instance_index(),
-                                    param.display_name(),
-                                    param.render_value()
-                                ));
-                            }
-                        }
-                    }
 
                     self.visible_params = params
                         .iter()
@@ -2258,36 +2266,63 @@ impl StateController {
 
                     let pages = self.context().view_param_pages(index);
 
-                    let mut title = format!("View: {}", name);
-                    if pages > 1 {
-                        title = format!("{} ({}/{})", title, page + 1, pages);
-                    }
+                    let layout = param_layout(frame.area());
+
+                    let title = format!("View: {}", name);
                     let title = format_title(title);
-                    let layout = titled_layout(frame.area());
                     frame.render_widget(title, layout[0]);
 
-                    /*
-                    self.with_display(|mut display| {
-                    display.clear(BinaryColor::Off).unwrap();
 
-                    draw_title(&mut display, title.as_str());
-                    draw_pager(&mut display, pages, page);
-                    if let Some(focus) = &focus {
-                    Text::with_alignment(
-                    focus.as_str(),
-                    Point::new(
-                    DISPLAY_WIDTH as i32 / 2,
-                    DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
-                    ),
-                    TEXT_STYLE,
-                    Alignment::Center,
-                    )
-                    .draw(display.deref_mut())
-                    .unwrap();
+                    if let Some(focused) = focused {
+                        let pindex = offset + focused;
+                        if let Some(pindex) = params.get(pindex) {
+                            if let Some(param) = self.params.get(*pindex) {
+                                let name = format!(
+                                    "inst: {} {}",
+                                    param.instance_index(),
+                                    param.display_name(),
+                                );
+
+                                let name = Line::from(name);
+                                frame.render_widget(name, layout[1]);
+
+                                let label = param.render_value();
+                                let label = Span::raw(label);
+
+                                let ratio = param.norm_prefer_pending();
+                                /*
+                                let gauge = Gauge::default()
+                                    .label(label)
+                                    .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
+                                    .ratio(ratio)
+                                    .use_unicode(false) //XXX when we get a better font?
+                                    ;
+                                */
+
+                                let gauge = LineGauge::default()
+                                    .label(label)
+                                    .filled_style(Style::new().white().on_black().bold())
+                                    .unfilled_style(Style::new().black().on_black().bold())
+                                    .ratio(ratio)
+                                    ;
+                                frame.render_widget(gauge, layout[2]);
+                            }
+                        }
                     }
-                    })
-                    .await;
-                    */
+
+                    if pages > 1 {
+                        let width: usize = (pages as f64).log10().floor() as usize + 1;
+                        let label = format!("{:0width$}/{}", page + 1, pages, width = width);
+                        let label = Span::raw(label);
+                        let ratio = (page as f64 + 1.0) / (pages as f64);
+                        let gauge = LineGauge::default()
+                            .label(label)
+                            .filled_style(Style::new().white().on_black().bold())
+                            .unfilled_style(Style::new().black().on_black().bold())
+                            .ratio(ratio)
+                            ;
+                        frame.render_widget(gauge, layout[3]);
+                    }
                 } else {
                     let title = format_title("Error");
                     let content = vec![Line::default(), Line::from("Empty View").centered()];
