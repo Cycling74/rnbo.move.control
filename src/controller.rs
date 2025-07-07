@@ -19,6 +19,12 @@ use {
     */
     futures_util::{stream::SplitSink, SinkExt},
     palette::{Darken, Srgb},
+    ratatui::{
+        layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
+        style::{Color, Modifier, Style},
+        text::{Line, Text},
+        widgets::{Block, Paragraph, Wrap},
+    },
     reqwest_websocket::{Message, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
     std::{
@@ -36,12 +42,6 @@ use {
         time::Duration,
     },
     tokio::sync::{Mutex, MutexGuard},
-    ratatui::{
-        layout::{Alignment, Rect, Constraint, Flex, Direction, Layout},
-        style::{Color, Style, Modifier},
-        text::{Line, Text},
-        widgets::{Block, Paragraph, Wrap},
-    },
     tui_widget_list::{ListBuilder, ListState, ListView},
 };
 
@@ -119,7 +119,6 @@ where
 }
 
 fn titled_layout(rect: ratatui::layout::Rect) -> Rc<[ratatui::layout::Rect]> {
-
     Layout::default()
         .direction(Direction::Vertical)
         .constraints(vec![
@@ -2202,9 +2201,7 @@ impl StateController {
             States::ParamViewMenu(selected) => {
                 self.do_once(line!(), |s| {
                     s.clear_visible_params();
-                    s.render_buttons([
-                        (MENU_MIDI, MoveColor::LightGray),
-                    ]);
+                    s.render_buttons([(MENU_MIDI, MoveColor::LightGray)]);
                 });
                 render_menu(
                     frame,
@@ -2213,7 +2210,7 @@ impl StateController {
                     default_indicator,
                     all_enabled,
                     selected,
-                    None
+                    None,
                 );
             }
             States::ViewParams(state) => {
@@ -2231,10 +2228,10 @@ impl StateController {
                 //TODO how to compute this only when states change?
                 if let Some((name, params)) = self
                     .param_view_names
-                        .iter()
-                        .zip(self.param_view_params.iter())
-                        .skip(index)
-                        .next()
+                    .iter()
+                    .zip(self.param_view_params.iter())
+                    .skip(index)
+                    .next()
                 {
                     let mut focus: Option<String> = None;
                     let offset = page * PARAM_PAGE_SIZE;
@@ -2243,10 +2240,10 @@ impl StateController {
                         if let Some(pindex) = params.get(pindex) {
                             if let Some(param) = self.params.get(*pindex) {
                                 focus = Some(format!(
-                                        "inst: {}\n{}\n{}",
-                                        param.instance_index(),
-                                        param.display_name(),
-                                        param.render_value()
+                                    "inst: {}\n{}\n{}",
+                                    param.instance_index(),
+                                    param.display_name(),
+                                    param.render_value()
                                 ));
                             }
                         }
@@ -2270,27 +2267,27 @@ impl StateController {
                     frame.render_widget(title, layout[0]);
 
                     /*
-                       self.with_display(|mut display| {
-                       display.clear(BinaryColor::Off).unwrap();
+                    self.with_display(|mut display| {
+                    display.clear(BinaryColor::Off).unwrap();
 
-                       draw_title(&mut display, title.as_str());
-                       draw_pager(&mut display, pages, page);
-                       if let Some(focus) = &focus {
-                       Text::with_alignment(
-                       focus.as_str(),
-                       Point::new(
-                       DISPLAY_WIDTH as i32 / 2,
-                       DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
-                       ),
-                       TEXT_STYLE,
-                       Alignment::Center,
-                       )
-                       .draw(display.deref_mut())
-                       .unwrap();
-                       }
-                       })
-                       .await;
-                       */
+                    draw_title(&mut display, title.as_str());
+                    draw_pager(&mut display, pages, page);
+                    if let Some(focus) = &focus {
+                    Text::with_alignment(
+                    focus.as_str(),
+                    Point::new(
+                    DISPLAY_WIDTH as i32 / 2,
+                    DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
+                    ),
+                    TEXT_STYLE,
+                    Alignment::Center,
+                    )
+                    .draw(display.deref_mut())
+                    .unwrap();
+                    }
+                    })
+                    .await;
+                    */
                 } else {
                     let title = format_title("Error");
                     let content = vec![Line::default(), Line::from("Empty View").centered()];
@@ -2305,7 +2302,6 @@ impl StateController {
     }
 
     fn render_main(&mut self, frame: &mut ratatui::Frame) {
-
         let state = self.sm.state().clone();
 
         let setup_common = |line: u32, s: &mut Self| {
@@ -2428,7 +2424,7 @@ impl StateController {
 
                 let pages = self.context().instance_param_pages(index);
 
-                //TODO how to compute once?
+                //TODO how to compute this only when states change?
                 let mut focus: Option<String> = None;
                 if let Some(instance) = self.instance_params.get(index) {
                     let offset = page * PARAM_PAGE_SIZE;
@@ -2443,9 +2439,9 @@ impl StateController {
                         if let Some(pindex) = instance.get(pindex) {
                             if let Some(param) = self.params.get(*pindex) {
                                 focus = Some(format!(
-                                        "{}\n{}",
-                                        param.display_name(),
-                                        param.render_value()
+                                    "{}\n{}",
+                                    param.display_name(),
+                                    param.render_value()
                                 ))
                             } else {
                                 //eprintln!("cannot get param at {}", *pindex);
@@ -2463,28 +2459,28 @@ impl StateController {
                 let title = format_title(format!("{} Params", name));
 
                 /*
-                   self.with_display(|mut display| {
-                   display.clear(BinaryColor::Off).unwrap();
+                self.with_display(|mut display| {
+                display.clear(BinaryColor::Off).unwrap();
 
-                   draw_title(&mut display, title.as_str());
-                   draw_pager(&mut display, pages, page);
+                draw_title(&mut display, title.as_str());
+                draw_pager(&mut display, pages, page);
 
-                   if let Some(focus) = &focus {
-                   Text::with_alignment(
-                   focus.as_str(),
-                   Point::new(
-                   DISPLAY_WIDTH as i32 / 2,
-                   DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
-                   ),
-                   TEXT_STYLE,
-                   Alignment::Center,
-                   )
-                   .draw(display.deref_mut())
-                   .unwrap();
-                   }
-                   })
-                   .await;
-                   */
+                if let Some(focus) = &focus {
+                Text::with_alignment(
+                focus.as_str(),
+                Point::new(
+                DISPLAY_WIDTH as i32 / 2,
+                DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
+                ),
+                TEXT_STYLE,
+                Alignment::Center,
+                )
+                .draw(display.deref_mut())
+                .unwrap();
+                }
+                })
+                .await;
+                */
             }
             States::PatcherDatarefs(entry) => {
                 setup_common(line!(), self);
