@@ -53,6 +53,9 @@ const MENU_MIDI: u8 = 0x32;
 const BACK_MIDI: u8 = 0x33;
 const PLAY_MIDI: u8 = 0x55;
 
+const ANIMATION_FRAME_FREEZE: usize = 4;
+const ANIMATION_FRAME_DIV: usize = 10;
+
 const MOVE_CTL_MIDI_CHAN: u8 = 15;
 
 const PARAM_Y_OFFSET: i32 = -6;
@@ -106,6 +109,38 @@ fn all_enabled(_: usize) -> bool {
 }
 fn default_indicator(_: usize) -> &'static char {
     ITEM_INDICATOR
+}
+
+fn animate_text<'a, T>(content: T, width: u16, frame: usize) -> String 
+where
+    T: Into<std::borrow::Cow<'a, str>>,
+{
+    let line = content.into().into_owned();
+    let width: usize = width.into();
+    if line.len() > width {
+        let movelen = line.len() - width;
+        let fmovelen = movelen as f64;
+        let animlen = 2 * (ANIMATION_FRAME_FREEZE + movelen);
+        let index = (frame / ANIMATION_FRAME_DIV) % animlen;
+        let index = if index < ANIMATION_FRAME_FREEZE + movelen {
+            (index.saturating_sub(ANIMATION_FRAME_FREEZE) as f64) / fmovelen
+        } else if index < ANIMATION_FRAME_FREEZE * 2 + movelen {
+            1.0
+        } else {
+            1.0 - (index - (ANIMATION_FRAME_FREEZE * 2 + movelen)) as f64 / fmovelen
+        } * fmovelen;
+
+        let index = index as usize;
+
+        let line = line.split_at(index).1;
+        if line.len() > width {
+            line.split_at(width).0
+        } else {
+            line
+        }.to_string()
+    } else {
+        line
+    }
 }
 
 fn format_title<'a, T>(content: T) -> ratatui::text::Line<'a>
@@ -209,31 +244,6 @@ fn center(area: Rect, horizontal: Constraint, vertical: Constraint) -> Rect {
     area
 }
 
-/*
-fn format_title(mut title: String) -> String {
-    if title.len() > 16 {
-        title.truncate(14);
-        title.push_str("..");
-    }
-    title
-}
-*/
-
-fn format_menu_item(mut item: String) -> String {
-    //make strings all length 16
-    if item.len() > 16 {
-        //add ellipsis
-        item.truncate(14);
-        item.push_str("..");
-    } else if item.len() < 16 {
-        //add whitespace
-        item.reserve(16 - item.len());
-        while item.len() < 16 {
-            item.push(' ');
-        }
-    }
-    item
-}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum MenuIndicator {
@@ -2259,22 +2269,22 @@ impl StateController {
 
                     let layout = param_layout(frame.area());
 
+                    let width = frame.area().width;
                     let title = format!("View: {}", name);
-                    let title = format_title(title);
+                    let title = format_title(animate_text(title, width, frame.count()));
                     frame.render_widget(title, layout[0]);
-
 
                     if let Some(focused) = focused {
                         let pindex = offset + focused;
                         if let Some(pindex) = params.get(pindex) {
                             if let Some(param) = self.params.get(*pindex) {
                                 let name = format!(
-                                    "inst: {} {}",
+                                    "inst: {} - {}",
                                     param.instance_index(),
                                     param.display_name(),
                                 );
 
-                                let name = Line::from(name);
+                                let name = Line::from(animate_text(name, width, frame.count()));
                                 frame.render_widget(name, layout[1]);
 
                                 let label = param.render_value();
@@ -2585,7 +2595,7 @@ impl StateController {
                 use pad::PadStr;
                 use std::collections::VecDeque;
                 let w = frame.area().width as usize;
-                let cnt = (frame.count() / 10) % w;
+                let cnt = (frame.count() / ANIMATION_FRAME_DIV) % w;
 
                 let mut text: Text = Default::default();
 
