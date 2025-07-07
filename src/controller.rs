@@ -108,15 +108,6 @@ fn default_indicator(_: usize) -> &'static char {
     ITEM_INDICATOR
 }
 
-fn guage_title_block(title: &str) -> Block {
-    let title = Line::from(title).centered();
-    Block::new()
-        .borders(Borders::NONE)
-        .padding(Padding::vertical(0))
-        .title(title)
-}
-
-
 fn format_title<'a, T>(content: T) -> ratatui::text::Line<'a>
 where
     T: Into<std::borrow::Cow<'a, str>>,
