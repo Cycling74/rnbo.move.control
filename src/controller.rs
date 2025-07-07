@@ -184,12 +184,15 @@ fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> 
     selected: usize,
     indicated: Option<usize>,
 ) {
+    let label_width = frame.area().width - 2;
+    let frame_index = frame.count();
     let builder = ListBuilder::new(|context| {
         use crate::widget::menu::MenuItem;
         let indicated = Some(context.index) == indicated;
         let s: &str = items[context.index].as_ref();
         let mut item = if context.is_selected {
             let selector = selector(context.index);
+            let s = animate_text(s, label_width, frame_index);
             MenuItem::new_selected(s, indicated, selector)
         } else {
             MenuItem::new(s, indicated)
