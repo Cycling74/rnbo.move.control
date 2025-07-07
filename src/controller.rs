@@ -2152,7 +2152,8 @@ impl StateController {
     pub fn render(&mut self, frame: &mut ratatui::Frame) {
         use top::States;
 
-        match self.topsm.state() {
+        let state = self.topsm.state().clone();
+        match state {
             States::Init => {
                 self.do_once(line!(), |s| {
                     s.render_buttons([
@@ -2207,9 +2208,15 @@ impl StateController {
                     s.clear_visible_params();
                     s.render_buttons([(BACK_MIDI, MoveColor::LightGray)]);
                 });
-                frame.render_widget(
-                    Paragraph::new(Text::from("Prompt Exit TODO").centered()).centered(),
-                    frame.area(),
+
+                render_menu(
+                    frame,
+                    Some(&"Exit"),
+                    &EXIT_MENU,
+                    default_indicator,
+                    all_enabled,
+                    selected,
+                    None,
                 );
             }
             States::VolumeEditor(_) => {
@@ -2231,27 +2238,22 @@ impl StateController {
                 frame.render_widget(paragraph, layout[1]);
             }
             States::DisplayChildProcessError => {
-                //TODO
-                /*
-                self.clear_visible_params();
+                self.do_once(line!(), |s| {
+                    s.clear_visible_params();
+                    s.render_buttons([]);
+                });
+
+                let title = format_title("Crashed");
+
                 let name = self.child_process_error.as_ref().unwrap().0.clone();
                 let p = std::path::Path::new(name.as_str());
                 let prog = p.file_name().unwrap().to_str().unwrap();
-                let msg = format!("{}\ncrashed\nreport to beta list\nthen hit power button\nto power down\nor return to move", prog);
+                let content = vec![Line::from(prog), Line::from("please report"), Line::from("then hit power")];
+                let paragraph = Paragraph::new(content).alignment(Alignment::Center);
 
-                   self.with_display(|mut display| {
-                   display.clear(BinaryColor::Off).unwrap();
-                   Text::with_alignment(
-                   msg.as_str(),
-                   Point::new(DISPLAY_WIDTH as i32 / 2, 6),
-                   SMALL_TEXT_STYLE,
-                   Alignment::Center,
-                   )
-                   .draw(display.deref_mut())
-                   .unwrap();
-                       })
-                       .await;
-                */
+                let layout = titled_layout(frame.area());
+                frame.render_widget(title, layout[0]);
+                frame.render_widget(paragraph, layout[1]);
             }
             States::Main => self.render_main(frame),
             States::ParamViews => self.render_param_views(frame),
