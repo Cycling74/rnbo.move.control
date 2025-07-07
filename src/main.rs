@@ -7,12 +7,7 @@ use {
         view::ParamView,
     },
     clap::Parser,
-    embedded_graphics::{
-        mono_font::MonoTextStyle,
-        pixelcolor::BinaryColor,
-        prelude::*,
-        text::{Alignment, Text},
-    },
+    embedded_graphics::prelude::*,
     futures_util::{StreamExt, TryStreamExt},
     jack::{
         AudioIn, AudioOut, Client, ClientOptions, Control, MidiIn, MidiOut, Port, PortId,
@@ -30,7 +25,6 @@ use {
         error::Error,
         ops::Deref,
         path::PathBuf,
-        rc::Rc,
         sync::{
             atomic::{AtomicU8, Ordering},
             mpsc as sync_mpsc, Arc,
@@ -456,7 +450,7 @@ async fn with_client(
         ] {
             let p = c
                 .port_by_name(name.as_str())
-                .expect(format!("to get {} port", name).as_str());
+                .unwrap_or_else(|| panic!("to get {} port", name));
             for n in p.get_connections() {
                 let _ = if is_source {
                     c.disconnect_ports_by_name(name.as_str(), n.as_str())
@@ -513,7 +507,7 @@ async fn with_client(
             flush_callback: Box::new(move |d: &mut MoveDisplay| {
                 draw_tx
                     .send(DrawCommand {
-                        data: d.framebuffer().clone(),
+                        data: *d.framebuffer(),
                     })
                     .unwrap();
             }),
@@ -792,8 +786,7 @@ async fn with_client(
                                                     "ATTRIBUTES_CHANGED" => {
                                                         match data
                                                             .get("FULL_PATH")
-                                                            .map(|p| p.as_str())
-                                                            .flatten()
+                                                            .and_then(|p| p.as_str())
                                                         {
                                                             Some(controller::SET_LOAD_ADDR) => {
                                                                 let range: Result<StringRange, _> =
@@ -852,12 +845,11 @@ async fn with_client(
                                         }
                                     }
                                     Message::Binary(vec) => {
-                                        match rosc::decoder::decode_udp(vec.as_slice()) {
-                                            Ok((_, OscPacket::Message(m))) => {
-                                                let mut g = state.lock().await;
-                                                g.handle_osc(&m).await;
-                                            }
-                                            _ => (),
+                                        if let Ok((_, OscPacket::Message(m))) =
+                                            rosc::decoder::decode_udp(vec.as_slice())
+                                        {
+                                            let mut g = state.lock().await;
+                                            g.handle_osc(&m).await;
                                         }
                                     }
                                 }

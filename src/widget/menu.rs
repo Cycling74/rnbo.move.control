@@ -1,16 +1,13 @@
 //based off example from https://github.com/preiter93/tui-widget-list
 
-use {
-    ratatui::{
-        layout::Rect,
-        style::{Color, Style},
-        text::{Line, Span},
-        widgets::Widget,
-    },
-    tui_widget_list::{ListBuilder, ListState, ListView},
+use ratatui::{
+    layout::Rect,
+    style::Style,
+    text::{Line, Span},
+    widgets::Widget,
 };
 
-const INDICATOR: &'static char = &'*';
+const INDICATOR: &char = &'*';
 
 #[derive(Debug, Clone)]
 pub struct MenuItem {

@@ -15,22 +15,19 @@ use {
         collections::HashMap,
         fs::File,
         io::BufReader,
-        ops::DerefMut,
-        path::{Path, PathBuf},
+        path::PathBuf,
         rc::Rc,
         sync::{
             atomic::{AtomicU8, Ordering as AtomicOrdering},
             mpsc as sync_mpsc, Arc,
         },
-        time::Duration,
     },
-    tokio::sync::{Mutex, MutexGuard},
     tui_widget_list::{ListBuilder, ListState, ListView},
 };
 
-const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const DATFILE_DIR: &'static str = "/data/UserData/Documents/rnbo/datafiles";
+const DATFILE_DIR: &str = "/data/UserData/Documents/rnbo/datafiles";
 
 const MENU_MIDI: u8 = 0x32;
 const BACK_MIDI: u8 = 0x33;
@@ -237,7 +234,7 @@ fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> 
     let mut state = ListState::default();
     state.select(Some(selected));
 
-    let mut listrect = frame.area().clone();
+    let mut listrect = frame.area();
     if let Some(title) = title {
         let layout = titled_layout(frame.area());
         let title = format_title(title);
@@ -274,8 +271,8 @@ enum MenuIndicator {
     Item(usize),
 }
 
-const SUB_MENU_INDICATOR: &'static char = &'>';
-const ITEM_INDICATOR: &'static char = &'-';
+const SUB_MENU_INDICATOR: &char = &'>';
+const ITEM_INDICATOR: &char = &'-';
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum InstSelType {
@@ -320,7 +317,7 @@ impl InstSel {
     }
 
     pub fn next(&self) -> Self {
-        let mut v = self.clone();
+        let mut v = *self;
         let selected = v.selected + 1;
         if selected < v.count {
             v.selected = selected;
@@ -328,15 +325,15 @@ impl InstSel {
         v
     }
     pub fn prev(&self) -> Self {
-        let mut v = self.clone();
+        let mut v = *self;
         if v.selected > 0 {
-            v.selected = v.selected - 1;
+            v.selected -= 1;
         }
         v
     }
 
     pub fn restart(&self) -> Self {
-        let mut v = self.clone();
+        let mut v = *self;
         v.selected = 0;
         v
     }
@@ -389,7 +386,7 @@ fn _brightness_sysex(level: u8) -> [Midi; 3] {
     [
         Midi::new(&[0xF0, 0x00, 0x21]),
         Midi::new(&[0x1D, 0x01, 0x01]),
-        Midi::new(&[0x06, level.max(127) as u8, 0xF7]),
+        Midi::new(&[0x06, level.max(127), 0xF7]),
     ]
 }
 
@@ -522,7 +519,7 @@ impl DataSel {
     pub fn prev(&self) -> DataSel {
         let mut v = self.clone();
         if self.can_go_prev() {
-            v.selected = v.selected - 1;
+            v.selected -= 1;
         }
         v
     }
@@ -530,7 +527,7 @@ impl DataSel {
     pub fn next(&self) -> DataSel {
         let mut v = self.clone();
         if self.can_go_next() {
-            v.selected = v.selected + 1;
+            v.selected += 1;
         }
         v
     }
@@ -579,7 +576,7 @@ impl DataLoad {
     pub fn prev(&self) -> Self {
         let mut v = self.clone();
         if self.can_go_prev() {
-            v.selected = v.selected - 1;
+            v.selected -= 1;
         }
         v
     }
@@ -587,13 +584,13 @@ impl DataLoad {
     pub fn next(&self) -> Self {
         let mut v = self.clone();
         if self.can_go_next() {
-            v.selected = v.selected + 1;
+            v.selected += 1;
         }
         v
     }
 }
 
-const MENU_ITEMS: [&'static str; 6] = [
+const MENU_ITEMS: [&str; 6] = [
     "Device Params",
     "Device Data",
     "Graphs",
@@ -601,7 +598,7 @@ const MENU_ITEMS: [&'static str; 6] = [
     "Tempo",
     "About",
 ];
-const EXIT_MENU: [&'static str; 2] = ["Power Down", "Launch Move"];
+const EXIT_MENU: [&str; 2] = ["Power Down", "Launch Move"];
 
 const PATCHER_PARAMS_INDEX: usize = 0;
 const PATCHER_DATA_INDEX: usize = 1;
@@ -1177,7 +1174,7 @@ impl StateController {
     }
 
     pub async fn set_instances(&mut self, mut instances: HashMap<usize, PatcherInst>) {
-        let mut indexes: Vec<usize> = instances.keys().map(|k| *k).collect();
+        let mut indexes: Vec<usize> = instances.keys().copied().collect();
         indexes.sort();
 
         //XXX what about visible params?
@@ -1203,7 +1200,7 @@ impl StateController {
             let inst = instances.remove(key).unwrap();
             let name = format!("{}: {}", inst.index(), inst.name());
 
-            if inst.params().len() > 0 {
+            if !inst.params().is_empty() {
                 let mut instindexes = Vec::new();
                 let local_instance_index = self.patchers_params_instance_names.len();
                 self.patchers_params_instance_names.push(name.clone());
@@ -1236,7 +1233,7 @@ impl StateController {
             {
                 let local_instance_index = self.instances.len();
                 let visible = inst.visible_datarefs();
-                if visible.len() > 0 {
+                if !visible.is_empty() {
                     self.patchers_datarefs_instance_names.push(name.clone());
                     self.patchers_datarefs_instance_indexes
                         .push(local_instance_index);
@@ -1308,7 +1305,7 @@ impl StateController {
         //TODO look for changes and only add/remove update those instead of clearing everything
 
         //if there are no views, add a default that has all the params in it
-        if self.param_views.len() == 0 && self.params.len() > 0 {
+        if self.param_views.is_empty() && !self.params.is_empty() {
             let params = self
                 .params
                 .iter()
@@ -1327,7 +1324,7 @@ impl StateController {
             //find the param indexes indicated by the sparse (instance, param) pair
             let mut params = Vec::new();
             for sparce in v.params().iter() {
-                if let Some((instance, param)) = self.instance_param_map.get(&sparce) {
+                if let Some((instance, param)) = self.instance_param_map.get(sparce) {
                     if let Some(instance) = self.instance_params.get(*instance) {
                         if let Some(index) = instance.get(*param) {
                             params.push(*index);
@@ -1341,7 +1338,7 @@ impl StateController {
                     eprintln!("couldn't find instance at index {:?}", sparce);
                 }
             }
-            if params.len() > 0 {
+            if !params.is_empty() {
                 self.param_view_names.push(v.name().to_string());
                 common.param_view_pages.push(param_pages(params.len()));
                 self.param_view_params.push(params);
@@ -1371,7 +1368,7 @@ impl StateController {
         self.param_view_param_lookup.clear();
     }
 
-    pub async fn set_param_views(&mut self, mut views: Vec<ParamView>) {
+    pub async fn set_param_views(&mut self, views: Vec<ParamView>) {
         self.param_views = views;
         self.sort_param_views();
 
@@ -1511,7 +1508,7 @@ impl StateController {
                     self.handle_event(Events::SetViewListChanged).await;
                 }
                 SET_VIEW_DISPLAY => {
-                    if msg.args.len() > 0 {
+                    if !msg.args.is_empty() {
                         if let Some(mut index) = match &msg.args[0] {
                             OscType::Double(v) => Some(v.max(0.0) as usize),
                             OscType::Float(v) => Some(v.max(0.0) as usize),
@@ -1600,7 +1597,7 @@ impl StateController {
                                             if sparce.0 == param.instance_index()
                                                 && sparce.1 == param.index()
                                             {
-                                                self.render_param(&param, location);
+                                                self.render_param(param, location);
                                                 updates.push(location);
                                             }
                                         }
@@ -1616,7 +1613,7 @@ impl StateController {
                         if msg.args.len() == 1 {
                             let mapping = match &msg.args[0] {
                                 OscType::String(v) => {
-                                    if v.len() > 0 {
+                                    if !v.is_empty() {
                                         Some(v.clone())
                                     } else {
                                         None
@@ -1689,7 +1686,7 @@ impl StateController {
                     self.handle_sysex().await;
                 } else if bytes[0] & 0x80 != 0 {
                     self.sysex.clear();
-                } else if self.sysex.len() > 0 {
+                } else if !self.sysex.is_empty() {
                     self.sysex.extend_from_slice(bytes);
                 }
             }
@@ -1702,7 +1699,7 @@ impl StateController {
                     self.handle_sysex().await;
                 } else if bytes[0] & 0x80 != 0 {
                     self.sysex.clear();
-                } else if self.sysex.len() > 0 {
+                } else if !self.sysex.is_empty() {
                     self.sysex.extend_from_slice(bytes);
                 }
             }
@@ -1786,7 +1783,7 @@ impl StateController {
                 _ => {
                     if bytes[0] & 0x80 != 0 {
                         self.sysex.clear();
-                    } else if self.sysex.len() > 0 {
+                    } else if !self.sysex.is_empty() {
                         //active sysex
                         if bytes[1] == 0xF7 {
                             self.sysex.push(bytes[0]);
@@ -1889,15 +1886,14 @@ impl StateController {
 
                 let index = state.index;
                 let page = state.page;
-                let focused = state.focused.clone();
+                let focused = state.focused;
 
                 //TODO how to compute this only when states change?
                 if let Some((name, params)) = self
                     .param_view_names
                     .iter()
                     .zip(self.param_view_params.iter())
-                    .skip(index)
-                    .next()
+                    .nth(index)
                 {
                     let offset = page * PARAM_PAGE_SIZE;
 
@@ -1905,7 +1901,7 @@ impl StateController {
                         .iter()
                         .skip(offset)
                         .take(PARAM_PAGE_SIZE)
-                        .map(|i| *i)
+                        .copied()
                         .collect();
 
                     let pages = self.context().view_param_pages(index);
@@ -2061,7 +2057,7 @@ impl StateController {
                 //setup_common(line!(), self);
                 let index = state.index;
                 let page = state.page;
-                let focused = state.focused.clone();
+                let focused = state.focused;
 
                 let pages = self.context().instance_param_pages(index);
 
@@ -2073,7 +2069,7 @@ impl StateController {
                         .iter()
                         .skip(offset)
                         .take(PARAM_PAGE_SIZE)
-                        .map(|i| *i)
+                        .copied()
                         .collect();
                     if let Some(focused) = focused {
                         let pindex = offset + focused;
@@ -2129,23 +2125,21 @@ impl StateController {
                     .instances
                     .get(self.patchers_datarefs_instance_indexes[entry.dataref().instance()])
                 {
-                    let indicated = inst
-                        .visible_datarefs()
-                        .iter()
-                        .skip(entry.dataref().selected())
-                        .next()
-                        .map(|key| {
-                            let dr = inst.dataref_mappings().get(key).unwrap();
-                            if let Some(filename) = dr.mapping() {
-                                self.datafile_list
-                                    .iter()
-                                    .position(|item| item == filename)
-                                    .map(|index| index + 1) //+ 1 because of (unload) being first item
-                                    .unwrap_or(0)
-                            } else {
-                                0
-                            }
-                        });
+                    let indicated =
+                        inst.visible_datarefs()
+                            .get(entry.dataref().selected())
+                            .map(|key| {
+                                let dr = inst.dataref_mappings().get(key).unwrap();
+                                if let Some(filename) = dr.mapping() {
+                                    self.datafile_list
+                                        .iter()
+                                        .position(|item| item == filename)
+                                        .map(|index| index + 1) //+ 1 because of (unload) being first item
+                                        .unwrap_or(0)
+                                } else {
+                                    0
+                                }
+                            });
                     render_menu(
                         frame,
                         Some("Load File"),
@@ -2216,7 +2210,7 @@ impl StateController {
                 );
             }
             States::PromptExit(selected) => {
-                let can_exit = !self.child_process_error.is_some();
+                let can_exit = self.child_process_error.is_none();
                 self.do_once(line!(), |s| {
                     s.clear_visible_params();
                     if can_exit {
@@ -2228,7 +2222,7 @@ impl StateController {
 
                 render_menu(
                     frame,
-                    Some(&"Exit"),
+                    Some("Exit"),
                     &EXIT_MENU,
                     default_indicator,
                     all_enabled,
@@ -2483,15 +2477,13 @@ impl StateController {
                             args: vec![OscType::Int(-1)],
                         };
                         self.send_osc(msg).await;
-                    } else {
-                        if let Some(name) = self.set_names.get(index) {
-                            let msg = OscMessage {
-                                addr: SET_LOAD_ADDR.to_string(),
-                                args: vec![OscType::String(name.clone())],
-                            };
-                            self.send_osc(msg).await;
-                            //wait for `/loaded` to actually indicate load?
-                        }
+                    } else if let Some(name) = self.set_names.get(index) {
+                        let msg = OscMessage {
+                            addr: SET_LOAD_ADDR.to_string(),
+                            args: vec![OscType::String(name.clone())],
+                        };
+                        self.send_osc(msg).await;
+                        //wait for `/loaded` to actually indicate load?
                     }
                 }
                 Cmd::LoadSetPreset(index) => {
@@ -2518,8 +2510,7 @@ impl StateController {
                     };
                     self.datafile_list.sort();
                     self.datafile_menu = vec!["(empty)".into()];
-                    self.datafile_menu
-                        .append(&mut self.datafile_list.iter().map(|v| v.clone()).collect());
+                    self.datafile_menu.append(&mut self.datafile_list.to_vec());
 
                     let mut common = self.sm.context().common();
                     common.datafile_count = self.datafile_menu.len();
@@ -2529,18 +2520,14 @@ impl StateController {
                     //0 == unload
                     let filename = if fileindex == 0 {
                         ""
+                    } else if let Some(filename) = self.datafile_list.get(fileindex - 1) {
+                        filename.as_str()
                     } else {
-                        if let Some(filename) = self.datafile_list.get(fileindex - 1) {
-                            filename.as_str()
-                        } else {
-                            return;
-                        }
+                        return;
                     };
                     if let Some(instance) = self.patchers_datarefs_instance_indexes.get(instance) {
                         if let Some(instance) = self.instances.get(*instance) {
-                            if let Some(name) =
-                                instance.visible_datarefs().iter().skip(datarefindex).next()
-                            {
+                            if let Some(name) = instance.visible_datarefs().get(datarefindex) {
                                 let addr =
                                     format!("/rnbo/inst/{}/data_refs/{}", instance.index(), name);
                                 let msg = OscMessage {
@@ -2564,7 +2551,7 @@ impl StateController {
     }
 
     fn clear_visible_params(&mut self) {
-        if self.visible_params.len() > 0 {
+        if !self.visible_params.is_empty() {
             self.visible_params.clear();
             self.clear_params();
         }

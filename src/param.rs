@@ -183,7 +183,7 @@ impl Param {
 
     pub fn parse(instance_index: usize, json: &serde_json::Value) -> Option<Self> {
         if let serde_json::Value::Object(obj) = json {
-            let range = obj.get("RANGE")?.as_array()?.get(0)?.as_object()?;
+            let range = obj.get("RANGE")?.as_array()?.first()?.as_object()?;
             let addr = obj.get("FULL_PATH")?.as_str()?.to_string();
             let name = addr.split("/params/").nth(1)?.to_string();
             let contents = obj.get("CONTENTS")?;
@@ -199,7 +199,7 @@ impl Param {
 
             let display_name = if let Some(n) = contents.get("display_name") {
                 let v = n.get("VALUE")?.as_str()?;
-                if v.len() == 0 {
+                if v.is_empty() {
                     None
                 } else {
                     Some(v.to_string())
