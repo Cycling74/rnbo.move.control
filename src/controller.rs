@@ -1,29 +1,12 @@
 use {
-    crate::{
-        config::Config,
-        display::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
-        midi::Midi,
-        param::Param,
-        patcher::PatcherInst,
-        view::ParamView,
-    },
-    embedded_graphics::pixelcolor::BinaryColor,
-    /*
-    embedded_graphics::{
-        mono_font::{MonoTextStyle, MonoTextStyleBuilder},
-        pixelcolor::BinaryColor,
-        prelude::*,
-        primitives::{PrimitiveStyleBuilder, Rectangle},
-        text::{Alignment, Text},
-    },
-    */
+    crate::{config::Config, midi::Midi, param::Param, patcher::PatcherInst, view::ParamView},
     futures_util::{stream::SplitSink, SinkExt},
     palette::{Darken, Srgb},
     ratatui::{
         layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
         style::{Color, Modifier, Style},
-        text::{Line, Text, Span},
-        widgets::{Block, Paragraph, Wrap, Gauge, LineGauge, Borders, Padding},
+        text::{Line, Span, Text},
+        widgets::{LineGauge, Paragraph},
     },
     reqwest_websocket::{Message, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
@@ -63,24 +46,6 @@ const PARAM_Y_OFFSET: i32 = -6;
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 
-/*
-const TITLE_TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyleBuilder::new()
-    .font(&profont::PROFONT_12_POINT)
-    .text_color(BinaryColor::On)
-    .underline_with_color(BinaryColor::On)
-    .build();
-
-const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyleBuilder::new()
-    .font(&profont::PROFONT_12_POINT)
-    .text_color(BinaryColor::On)
-    .build();
-
-const SMALL_TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyleBuilder::new()
-    .font(&profont::PROFONT_9_POINT)
-    .text_color(BinaryColor::On)
-    .build();
-*/
-
 pub const INST_UNLOAD_ADDR: &str = "/rnbo/inst/control/unload";
 pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
 pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
@@ -111,7 +76,7 @@ fn default_indicator(_: usize) -> &'static char {
     ITEM_INDICATOR
 }
 
-fn animate_text<'a, T>(content: T, width: u16, frame: usize) -> String 
+fn animate_text<'a, T>(content: T, width: u16, frame: usize) -> String
 where
     T: Into<std::borrow::Cow<'a, str>>,
 {
@@ -137,7 +102,8 @@ where
             line.split_at(width).0
         } else {
             line
-        }.to_string()
+        }
+        .to_string()
     } else {
         line
     }
@@ -178,14 +144,14 @@ fn param_layout(rect: ratatui::layout::Rect) -> Rc<[ratatui::layout::Rect]> {
 struct ParamFocus {
     label: String,
     value: String,
-    norm: f64
+    norm: f64,
 }
 
 fn render_param_page(
     frame: &mut ratatui::Frame,
     title: &str,
     focus: Option<ParamFocus>,
-    page: usize, 
+    page: usize,
     pages: usize,
 ) {
     let layout = param_layout(frame.area());
@@ -200,23 +166,21 @@ fn render_param_page(
 
         let label = Span::raw(focus.value);
         /*
-           let gauge = Gauge::default()
-           .label(label)
-           .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
-           .ratio(focus.norm)
-           .use_unicode(false) //XXX when we get a better font?
-           ;
-           */
+        let gauge = Gauge::default()
+        .label(label)
+        .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
+        .ratio(focus.norm)
+        .use_unicode(false) //XXX when we get a better font?
+        ;
+        */
 
         let gauge = LineGauge::default()
             .label(label)
             .filled_style(Style::new().white().on_black().bold())
             .unfilled_style(Style::new().black().on_black().bold())
-            .ratio(focus.norm)
-            ;
+            .ratio(focus.norm);
         frame.render_widget(gauge, layout[2]);
     }
-
 
     if pages > 1 {
         let width: usize = (pages as f64).log10().floor() as usize + 1;
@@ -227,8 +191,7 @@ fn render_param_page(
             .label(label)
             .filled_style(Style::new().white().on_black().bold())
             .unfilled_style(Style::new().black().on_black().bold())
-            .ratio(ratio)
-            ;
+            .ratio(ratio);
         frame.render_widget(gauge, layout[3]);
     }
 }
@@ -304,7 +267,6 @@ fn center(area: Rect, horizontal: Constraint, vertical: Constraint) -> Rect {
     let [area] = Layout::vertical([vertical]).flex(Flex::Center).areas(area);
     area
 }
-
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum MenuIndicator {
@@ -1834,17 +1796,6 @@ impl StateController {
         self.exit
     }
 
-    /*
-    async fn display_centered(&mut self, text: &str) {
-        self.with_display(|mut display| {
-            display.clear(BinaryColor::Off).unwrap();
-
-            draw_centered(&mut display, text, TEXT_STYLE);
-        })
-        .await;
-    }
-    */
-
     fn update_common(&mut self, common: CommonContext) {
         self.sm.context_mut().update_common(common.clone());
         self.viewsm.context_mut().update_common(common.clone());
@@ -1865,372 +1816,6 @@ impl StateController {
 
     fn volume(&self) -> f32 {
         self.config.volume as f32 / 255.0
-    }
-
-    /*
-        async fn render_set_views(&mut self, s: &view::States) {
-            use view::States;
-            match s {
-                States::ParamViewMenu(selected) => {
-                    self.clear_visible_params();
-                    let selected: usize = *selected;
-                    /*
-                    self.with_display(|display| {
-                        draw_menu(
-                            display,
-                            &"Param Views",
-                            &self.param_view_names,
-                            MenuIndicator::Item(selected),
-                            None,
-                        );
-                    })
-                    .await;
-                    */
-                    self.light_button(BACK_MIDI, MoveColor::Black as _);
-                    self.light_button(MENU_MIDI, MoveColor::LightGray as _);
-                }
-                States::ViewParams(state) => {
-                    let index = state.index;
-                    let page = state.page;
-                    let focused = state.focused.clone();
-
-                    if let Some((name, params)) = self
-                        .param_view_names
-                        .iter()
-                        .zip(self.param_view_params.iter())
-                        .skip(index)
-                        .next()
-                    {
-                        let mut focus: Option<String> = None;
-                        let offset = page * PARAM_PAGE_SIZE;
-                        if let Some(focused) = focused {
-                            let pindex = offset + focused;
-                            if let Some(pindex) = params.get(pindex) {
-                                if let Some(param) = self.params.get(*pindex) {
-                                    focus = Some(format!(
-                                        "inst: {}\n{}\n{}",
-                                        param.instance_index(),
-                                        param.display_name(),
-                                        param.render_value()
-                                    ));
-                                }
-                            }
-                        }
-
-                        self.visible_params = params
-                            .iter()
-                            .skip(offset)
-                            .take(PARAM_PAGE_SIZE)
-                            .map(|i| *i)
-                            .collect();
-
-                        let pages = self.context().view_param_pages(index);
-
-                        let mut title = format!("view: {}", name);
-                        if title.len() > 16 {
-                            title.truncate(14);
-                            title.push_str("..");
-                        }
-
-                        /*
-                        self.with_display(|mut display| {
-                            display.clear(BinaryColor::Off).unwrap();
-
-                            draw_title(&mut display, title.as_str());
-                            draw_pager(&mut display, pages, page);
-                            if let Some(focus) = &focus {
-                                Text::with_alignment(
-                                    focus.as_str(),
-                                    Point::new(
-                                        DISPLAY_WIDTH as i32 / 2,
-                                        DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
-                                    ),
-                                    TEXT_STYLE,
-                                    Alignment::Center,
-                                )
-                                .draw(display.deref_mut())
-                                .unwrap();
-                            }
-                        })
-                        .await;
-                        */
-                    } else {
-                        self.visible_params.clear();
-                        /*
-                        self.with_display(|mut display| {
-                            display.clear(BinaryColor::Off).unwrap();
-                            draw_title(&mut display, "empty view");
-                        })
-                        .await;
-                        */
-                    }
-
-                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                    self.light_button(MENU_MIDI, MoveColor::LightGray as _);
-                }
-            }
-        }
-
-        async fn render_main(&mut self, s: &States) {
-            match s {
-                States::Menu(selected) => {
-                    self.clear_visible_params();
-                    let selected: usize = *selected;
-                    let selected = if selected == TEMPO_INDEX
-                        || selected == ABOUT_INDEX
-                        || (selected == PATCHER_PARAMS_INDEX
-                            && self.context().instances_count(InstSelType::Params) < 2)
-                        || (selected == PATCHER_DATA_INDEX
-                            && self.context().instances_count(InstSelType::Datarefs) < 2)
-                    {
-                        MenuIndicator::Item(selected)
-                    } else {
-                        MenuIndicator::SubMenu(selected)
-                    };
-                    /*
-                    self.with_display(|display| {
-                        draw_menu(display, &"RNBO On Move", &MENU_ITEMS, selected, None);
-                    })
-                    .await;
-                    */
-                    self.light_button(BACK_MIDI, 0);
-                }
-                States::TempoEditor => {
-                    self.clear_visible_params();
-                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                    self.with_display(|mut display| {
-                        display.clear(BinaryColor::Off).unwrap();
-                        draw_title(&mut display, &"Tempo (bpm)");
-                        let bpm = format!("{:.1}", self.bpm);
-                        draw_centered(&mut display, bpm.as_str(), TEXT_STYLE);
-                    })
-                    .await;
-                }
-                States::About => {
-                    self.clear_visible_params();
-                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                    self.with_display(|mut display| {
-                        display.clear(BinaryColor::Off).unwrap();
-
-                        let info = format!(
-                            "package version:\n{}\nwebsite:\nbeta.cycling74.com\n",
-                            self.package_version
-                                .clone()
-                                .unwrap_or("unknown".to_string())
-                        );
-
-                        display.clear(BinaryColor::Off).unwrap();
-
-                        draw_title(&mut display, "About");
-                        Text::with_alignment(
-                            info.as_str(),
-                            Point::new(DISPLAY_WIDTH as i32 / 2, 24),
-                            SMALL_TEXT_STYLE,
-                            Alignment::Center,
-                        )
-                        .draw(display.deref_mut())
-                        .unwrap();
-                    })
-                    .await;
-                }
-                States::SetsList(selected) => {
-                    self.clear_visible_params();
-                    let selected = *selected;
-                    let indicated = self.set_current_index;
-                    self.with_display(|display| {
-                        draw_menu(
-                            display,
-                            &"Load Graph",
-                            self.set_names.as_slice(),
-                            MenuIndicator::Item(selected),
-                            indicated,
-                        );
-                    })
-                    .await;
-
-                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::SetPresetsList(selected) => {
-                    self.clear_visible_params();
-                    let selected = *selected;
-                    let indicated = self.set_preset_loaded_index;
-                    self.with_display(|display| {
-                        draw_menu(
-                            display,
-                            &"Load Graph Preset",
-                            self.set_preset_names.as_slice(),
-                            MenuIndicator::Item(selected),
-                            indicated,
-                        );
-                    })
-                    .await;
-
-                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::PatcherInstances(entry) => {
-                    self.clear_visible_params();
-                    let (title, items) = match entry.typ() {
-                        InstSelType::Params => (&"Device Params", &self.patchers_params_instance_names),
-                        InstSelType::Datarefs => {
-                            (&"Device Data", &self.patchers_datarefs_instance_names)
-                        }
-                    };
-
-                    self.with_display(|display| {
-                        draw_menu(
-                            display,
-                            title,
-                            items.as_slice(),
-                            MenuIndicator::Item(entry.selected()),
-                            None,
-                        );
-                    })
-                    .await;
-
-                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::PatcherParams(state) => {
-                    let index = state.index;
-                    let page = state.page;
-                    let focused = state.focused.clone();
-
-                    {
-                        let pages = self.context().instance_param_pages(index);
-
-                        let mut focus: Option<String> = None;
-                        if let Some(instance) = self.instance_params.get(index) {
-                            let offset = page * PARAM_PAGE_SIZE;
-                            self.visible_params = instance
-                                .iter()
-                                .skip(offset)
-                                .take(PARAM_PAGE_SIZE)
-                                .map(|i| *i)
-                                .collect();
-                            if let Some(focused) = focused {
-                                let pindex = offset + focused;
-                                if let Some(pindex) = instance.get(pindex) {
-                                    if let Some(param) = self.params.get(*pindex) {
-                                        focus = Some(format!(
-                                            "{}\n{}",
-                                            param.display_name(),
-                                            param.render_value()
-                                        ))
-                                    } else {
-                                        eprintln!("cannot get param at {}", *pindex);
-                                    }
-                                } else {
-                                    eprintln!("cannot get pinstance {}", pindex);
-                                }
-                            }
-                        } else {
-                            self.visible_params.clear();
-                        }
-
-                        let name = self.patchers_params_instance_names.get(index).unwrap();
-
-                        let title = format_title(format!("{} Params", name));
-
-                        self.with_display(|mut display| {
-                            display.clear(BinaryColor::Off).unwrap();
-
-                            draw_title(&mut display, title.as_str());
-                            draw_pager(&mut display, pages, page);
-
-                            if let Some(focus) = &focus {
-                                Text::with_alignment(
-                                    focus.as_str(),
-                                    Point::new(
-                                        DISPLAY_WIDTH as i32 / 2,
-                                        DISPLAY_HEIGHT as i32 / 2 + PARAM_Y_OFFSET,
-                                    ),
-                                    TEXT_STYLE,
-                                    Alignment::Center,
-                                )
-                                .draw(display.deref_mut())
-                                .unwrap();
-                            }
-                        })
-                        .await;
-                    }
-                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::PatcherDatarefs(entry) => {
-                    if let Some(inst) = self
-                        .instances
-                        .get(self.patchers_datarefs_instance_indexes[entry.instance()])
-                    {
-                        let name = self
-                            .patchers_datarefs_instance_names
-                            .get(entry.instance())
-                            .unwrap();
-                        let title = format_title(format!("{} Data", name));
-                        let items: Vec<String> = inst.visible_datarefs().clone();
-
-                        self.with_display(|display| {
-                            draw_menu(
-                                display,
-                                title.as_str(),
-                                items.as_slice(),
-                                MenuIndicator::Item(entry.selected()),
-                                None,
-                            );
-                        })
-                        .await;
-                    }
-                    self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                }
-                States::PatcherDatarefLoad(entry) => {
-                    if let Some(inst) = self
-                        .instances
-                        .get(self.patchers_datarefs_instance_indexes[entry.dataref().instance()])
-                    {
-                        let indicated = inst
-                            .visible_datarefs()
-                            .iter()
-                            .skip(entry.dataref().selected())
-                            .next()
-                            .map(|key| {
-                                let dr = inst.dataref_mappings().get(key).unwrap();
-                                if let Some(filename) = dr.mapping() {
-                                    self.datafile_list
-                                        .iter()
-                                        .position(|item| item == filename)
-                                        .map(|index| index + 1) //+ 1 because of (unload) being first item
-                                        .unwrap_or(0)
-                                } else {
-                                    0
-                                }
-                            });
-
-                        self.with_display(|display| {
-                            draw_menu(
-                                display,
-                                "Data Mapping",
-                                self.datafile_menu.as_slice(),
-                                MenuIndicator::Item(entry.selected()),
-                                indicated,
-                            );
-                        })
-                        .await;
-                        //TODO
-                        self.light_button(BACK_MIDI, MoveColor::LightGray as _);
-                    }
-                }
-                _ => (),
-            }
-        }
-    */
-
-    pub fn top_state(&self) -> &top::States {
-        self.topsm.state()
-    }
-
-    pub fn view_state(&self) -> &view::States {
-        self.viewsm.state()
-    }
-
-    pub fn state(&self) -> &States {
-        self.sm.state()
     }
 
     fn do_once<F: Fn(&mut Self)>(&mut self, line: u32, func: F) {
@@ -2261,20 +1846,6 @@ impl StateController {
             self.light_button(*btn, v as _);
         }
         std::mem::swap(&mut tracked, &mut self.tracked_buttons);
-
-        /*
-        //render buttons if they haven't already been rendered
-        for (btn, color) in btncolor.iter() {
-            let color = *color as _;
-            let c = self.tracked_buttons.get_mut(btn).expect("button to be in tracked_buttons list");
-            if *c != color {
-                *c = color;
-            } else {
-                continue;
-            }
-            self.light_button(*btn, color);
-        }
-        */
     }
 
     fn render_param_views(&mut self, frame: &mut ratatui::Frame) {
@@ -2660,6 +2231,7 @@ impl StateController {
                 frame.render_widget(paragraph, layout[1]);
             }
             States::DisplayChildProcessError => {
+                //TODO
                 /*
                 self.clear_visible_params();
                 let name = self.child_process_error.as_ref().unwrap().0.clone();
@@ -2988,122 +2560,6 @@ impl StateController {
         self.sm.context()
     }
 }
-
-/********
-fn draw_title(display: &mut MoveDisplay, title: &str) {
-    Text::with_alignment(
-        title,
-        Point::new(DISPLAY_WIDTH as i32 / 2, 11),
-        TITLE_TEXT_STYLE,
-        Alignment::Center,
-    )
-    .draw(display)
-    .unwrap();
-}
-
-fn draw_pager(display: &mut MoveDisplay, pages: usize, page: usize) {
-    if pages > 1 {
-        let style = PrimitiveStyleBuilder::new()
-            .stroke_color(BinaryColor::On)
-            .stroke_width(1)
-            .fill_color(BinaryColor::On)
-            .build();
-
-        let step = DISPLAY_WIDTH / pages as u32;
-        let width = step - 4;
-
-        let y = (DISPLAY_HEIGHT - 3) as i32;
-        let mut x = (step / 2) as i32;
-
-        //TODO assert that we can actually draw these
-
-        for p in 0..pages {
-            let height = if p == page { 3 } else { 1 };
-            Rectangle::with_center(Point::new(x, y), Size::new(width, height))
-                .into_styled(style)
-                .draw(display)
-                .unwrap();
-            x = x + (step as i32);
-        }
-    }
-}
-
-fn draw_centered(display: &mut MoveDisplay, text: &str, style: MonoTextStyle<BinaryColor>) {
-    Text::with_alignment(
-        text,
-        Point::new(DISPLAY_WIDTH as i32 / 2, DISPLAY_HEIGHT as i32 / 2),
-        style,
-        Alignment::Center,
-    )
-    .draw(display)
-    .unwrap();
-}
-
-fn draw_menu<D: DerefMut<Target = MoveDisplay>, S: AsRef<str>>(
-    mut display: D,
-    title: &str,
-    items: &[S],
-    selected: MenuIndicator,
-    indicated: Option<usize>,
-) {
-    use embedded_layout::{layout::linear::LinearLayout, prelude::*};
-
-    display.clear(BinaryColor::Off).unwrap();
-    let display_area = display.bounding_box();
-
-    let mut list: [String; 3] = Default::default();
-
-    let (selected_indicator, selected) = match selected {
-        MenuIndicator::Item(index) => ("-", index),
-        MenuIndicator::SubMenu(index) => (">", index),
-    };
-
-    //try to keep 3 on screen, select indicator may need to move to first or last item depending
-    let start = if selected == 0 || items.len() <= 3 {
-        0
-    } else if selected + 1 >= items.len() {
-        items.len() - 3
-    } else {
-        selected - 1
-    };
-
-    for (index, (l, item)) in list
-        .iter_mut()
-        .zip(items.iter().skip(start).take(3))
-        .enumerate()
-    {
-        let off = index + start;
-        let indicator = if Some(off) == indicated { &"*" } else { &" " };
-
-        *l = format_menu_item(
-            if off == selected {
-                format!("{}{}{}", selected_indicator, indicator, item.as_ref())
-            } else {
-                format!(" {}{}", indicator, item.as_ref())
-            }
-            .to_string(),
-        );
-    }
-
-    LinearLayout::vertical(
-        Chain::new(Text::new(title, Point::zero(), TITLE_TEXT_STYLE)).append(
-            LinearLayout::vertical(
-                Chain::new(Text::new(list[0].as_str(), Point::zero(), TEXT_STYLE))
-                    .append(Text::new(list[1].as_str(), Point::zero(), TEXT_STYLE))
-                    .append(Text::new(list[2].as_str(), Point::zero(), TEXT_STYLE)),
-            )
-            .with_alignment(horizontal::Left)
-            .align_to(&display_area, horizontal::Left, vertical::Center)
-            .arrange(),
-        ),
-    )
-    .with_alignment(horizontal::Center)
-    .arrange()
-    .align_to(&display_area, horizontal::Left, vertical::Top)
-    .draw(display.deref_mut())
-    .unwrap();
-}
-*/
 
 impl Drop for StateController {
     fn drop(&mut self) {
