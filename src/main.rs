@@ -501,7 +501,7 @@ async fn with_client(
         )));
 
     let display_future = async {
-        use mousefood::prelude::*;
+        use mousefood::{prelude::*, TerminalAlignment};
 
         let config = EmbeddedBackendConfig {
             flush_callback: Box::new(move |d: &mut MoveDisplay| {
@@ -513,6 +513,8 @@ async fn with_client(
             }),
             font_regular: font::CGA_LIGHT_8X16,
             font_bold: Some(font::CGA_8X16),
+            vertical_alignment: TerminalAlignment::Center,
+            horizontal_alignment: TerminalAlignment::Center,
             ..Default::default()
         };
 
