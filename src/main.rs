@@ -737,7 +737,6 @@ async fn with_client(
                     .await
                 {
                     if let Ok(websocket) = res.into_websocket().await {
-                        println!("got websocket");
                         let (tx, mut rx) = websocket.split();
 
                         {
