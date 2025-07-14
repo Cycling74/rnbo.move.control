@@ -2054,7 +2054,12 @@ impl StateController {
                 );
             }
             States::PatcherParams(state) => {
-                //setup_common(line!(), self);
+                self.do_once(line!(), |s| {
+                    s.render_buttons([
+                        (MENU_MIDI, MoveColor::LightGray),
+                        (BACK_MIDI, MoveColor::LightGray),
+                    ]);
+                });
                 let index = state.index;
                 let page = state.page;
                 let focused = state.focused;
