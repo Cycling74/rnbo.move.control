@@ -1,5 +1,10 @@
 # rnbo-move-control
 
+## Attribution
+
+* fonts:
+    * [spleen](https://github.com/fcambus/spleen)
+
 ## Setting up dev on osx
 
 ```
@@ -24,6 +29,7 @@ check out:
 mkdir -p src/font/
 ~/local/src/bdf/target/release/eg-font-converter --data src/font/cga_8x16.data --rust src/font/cga8x16.rs ~/local/src/ibmfonts/bdf/ic8x16u.bdf CGA_8X16
 ~/local/src/bdf/target/release/eg-font-converter --data src/font/cga_light_8x16.data --rust src/font/cgalight8x16.rs ~/local/src/ibmfonts/bdf/icl8x16u.bdf CGA_LIGHT_8X16
+~/local/src/bdf/target/release/eg-font-converter --data src/font/spleen_8x16.data --rust src/font/spleen8x16.rs ~/local/src/spleen/spleen-8x16.bdf SPLEEN_8X16
 ```
 
 
