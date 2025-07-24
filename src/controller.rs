@@ -6,7 +6,7 @@ use {
         layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
         style::{Color, Modifier, Style},
         text::{Line, Span, Text},
-        widgets::{LineGauge, Paragraph},
+        widgets::Paragraph,
     },
     reqwest_websocket::{Message, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
@@ -162,20 +162,20 @@ fn render_param_page(
         frame.render_widget(name, layout[1]);
 
         let label = Span::raw(focus.value);
-        /*
-        let gauge = Gauge::default()
+        let gauge = ratatui::widgets::Gauge::default()
         .label(label)
         .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
         .ratio(focus.norm)
-        .use_unicode(false) //XXX when we get a better font?
+        .use_unicode(true)
         ;
-        */
 
-        let gauge = LineGauge::default()
+        /*
+        let gauge = ratatui::widgets::LineGauge::default()
             .label(label)
             .filled_style(Style::new().white().on_black().bold())
             .unfilled_style(Style::new().black().on_black().bold())
             .ratio(focus.norm);
+        */
         frame.render_widget(gauge, layout[2]);
     }
 
@@ -184,11 +184,19 @@ fn render_param_page(
         let label = format!("{:0width$}/{}", page + 1, pages, width = width);
         let label = Span::raw(label);
         let ratio = (page as f64 + 1.0) / (pages as f64);
-        let gauge = LineGauge::default()
+        /*
+        let gauge = ratatui::widgets::LineGauge::default()
             .label(label)
             .filled_style(Style::new().white().on_black().bold())
             .unfilled_style(Style::new().black().on_black().bold())
             .ratio(ratio);
+        */
+        let gauge = ratatui::widgets::Gauge::default()
+        .label(label)
+        .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
+        .ratio(ratio)
+        .use_unicode(true)
+        ;
         frame.render_widget(gauge, layout[3]);
     }
 }

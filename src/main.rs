@@ -511,8 +511,8 @@ async fn with_client(
                     })
                     .unwrap();
             }),
-            font_regular: font::CGA_LIGHT_8X16,
-            font_bold: Some(font::CGA_8X16),
+            font_regular: font::SPLEEN_8X16,
+            font_bold: None,
             vertical_alignment: TerminalAlignment::Center,
             horizontal_alignment: TerminalAlignment::Center,
             ..Default::default()
