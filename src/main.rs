@@ -7,12 +7,7 @@ use {
         view::ParamView,
     },
     clap::Parser,
-    embedded_graphics::{
-        mono_font::MonoTextStyle,
-        pixelcolor::BinaryColor,
-        prelude::*,
-        text::{Alignment, Text},
-    },
+    embedded_graphics::prelude::*,
     futures_util::{StreamExt, TryStreamExt},
     jack::{
         AudioIn, AudioOut, Client, ClientOptions, Control, MidiIn, MidiOut, Port, PortId,
@@ -30,7 +25,6 @@ use {
         error::Error,
         ops::Deref,
         path::PathBuf,
-        rc::Rc,
         sync::{
             atomic::{AtomicU8, Ordering},
             mpsc as sync_mpsc, Arc,
@@ -65,10 +59,12 @@ struct Args {
 mod config;
 mod controller;
 mod display;
+mod font;
 mod midi;
 mod param;
 mod patcher;
 mod view;
+mod widget;
 
 const HTTP_QUERY_DELAY: Duration = Duration::from_millis(200);
 const HTTP_INITIAL_QUERY_DELAY: Duration = Duration::from_millis(500);
@@ -418,24 +414,8 @@ async fn with_client(
     };
 
     let size = display.size();
-    if caps.all() {
-        let style = MonoTextStyle::new(&profont::PROFONT_24_POINT, BinaryColor::On);
-        Text::with_alignment(
-            "RNBO\non Move",
-            Point::new(size.width as i32 / 2, size.height as i32 / 2),
-            style,
-            Alignment::Center,
-        )
-        .draw(&mut display)?;
-    } else {
-        let style = MonoTextStyle::new(&profont::PROFONT_12_POINT, BinaryColor::On);
-        Text::with_alignment(
-            "RNBO\non Move\nREDUCED\nCAPABILITIES",
-            Point::new(size.width as i32 / 2, size.height as i32 / 4),
-            style,
-            Alignment::Center,
-        )
-        .draw(&mut display)?;
+    let has_all_capabilities: bool = caps.all();
+    if !has_all_capabilities {
         let _ = logger.warning("could not get requested capabilites");
     }
 
@@ -470,7 +450,7 @@ async fn with_client(
         ] {
             let p = c
                 .port_by_name(name.as_str())
-                .expect(format!("to get {} port", name).as_str());
+                .unwrap_or_else(|| panic!("to get {} port", name));
             for n in p.get_connections() {
                 let _ = if is_source {
                     c.disconnect_ports_by_name(name.as_str(), n.as_str())
@@ -491,8 +471,6 @@ async fn with_client(
         c.connect_ports_by_name("system:midi_capture", format!("{}:midi_in", name).as_str())
             .unwrap();
     }
-
-    let display = Rc::new(tokio::sync::Mutex::new(display));
 
     let version_path =
         PathBuf::from("/data/UserData/rnbo/share/rnbomovetakeover/package-version.txt");
@@ -516,20 +494,46 @@ async fn with_client(
     let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(StateController::new(
             midi_out_tx,
-            display.clone(),
             volume,
             package_version,
             config.clone(),
+            has_all_capabilities,
         )));
 
     let display_future = async {
+        use mousefood::{prelude::*, TerminalAlignment};
+
+        let config = EmbeddedBackendConfig {
+            flush_callback: Box::new(move |d: &mut MoveDisplay| {
+                draw_tx
+                    .send(DrawCommand {
+                        data: *d.framebuffer(),
+                    })
+                    .unwrap();
+            }),
+            font_regular: font::SPLEEN_8X16,
+            font_bold: None,
+            vertical_alignment: TerminalAlignment::Center,
+            horizontal_alignment: TerminalAlignment::Center,
+            ..Default::default()
+        };
+
+        let backend = EmbeddedBackend::new(&mut display, config);
+        let mut terminal = ratatui::Terminal::new(backend).expect("to create terminal");
+        let state = state.clone();
+
         loop {
             //frame rate
             tokio::time::sleep(Duration::from_millis(23)).await;
-            let mut display = display.lock().await;
-            display.draw_if(|data| {
-                draw_tx.send(DrawCommand { data: data.clone() }).unwrap();
-            });
+
+            let mut g = state.lock().await;
+            let _ = terminal.clear();
+            terminal
+                .draw(|frame| {
+                    g.render(frame);
+                })
+                .expect("to render frame");
+            g.process_cmds().await;
         }
     };
 
@@ -540,6 +544,8 @@ async fn with_client(
                 break;
             }
         }
+        //exit, sleep for a little so we can update the display
+        tokio::time::sleep(Duration::from_millis(500)).await;
     };
 
     let inst_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
@@ -733,7 +739,6 @@ async fn with_client(
                     .await
                 {
                     if let Ok(websocket) = res.into_websocket().await {
-                        println!("got websocket");
                         let (tx, mut rx) = websocket.split();
 
                         {
@@ -782,8 +787,7 @@ async fn with_client(
                                                     "ATTRIBUTES_CHANGED" => {
                                                         match data
                                                             .get("FULL_PATH")
-                                                            .map(|p| p.as_str())
-                                                            .flatten()
+                                                            .and_then(|p| p.as_str())
                                                         {
                                                             Some(controller::SET_LOAD_ADDR) => {
                                                                 let range: Result<StringRange, _> =
@@ -842,12 +846,11 @@ async fn with_client(
                                         }
                                     }
                                     Message::Binary(vec) => {
-                                        match rosc::decoder::decode_udp(vec.as_slice()) {
-                                            Ok((_, OscPacket::Message(m))) => {
-                                                let mut g = state.lock().await;
-                                                g.handle_osc(&m).await;
-                                            }
-                                            _ => (),
+                                        if let Ok((_, OscPacket::Message(m))) =
+                                            rosc::decoder::decode_udp(vec.as_slice())
+                                        {
+                                            let mut g = state.lock().await;
+                                            g.handle_osc(&m).await;
                                         }
                                     }
                                 }

@@ -1,18 +1,37 @@
 # rnbo-move-control
 
+## Attribution
+
+* fonts:
+    * [spleen](https://github.com/fcambus/spleen)
+
 ## Setting up dev on osx
 
 ```
 brew tap messense/macos-cross-toolchains
 brew install aarch64-unknown-linux-gnu
-mkdir -p ./target/aarch64-unknown-linux-gnu/debug/deps ./target/aarch64-unknown-linux-gnu/release/deps
-cp ../build/rnbo/lib/libjack.so* ./target/aarch64-unknown-linux-gnu/debug/deps/
-cp ./target/aarch64-unknown-linux-gnu/debug/deps/libjack.so* ./target/aarch64-unknown-linux-gnu/release/deps/
-
 rustup target add aarch64-unknown-linux-gnu
 ```
 
 Mount the AOS SDK, in this case: `SDK-toolchain-abletonos-aarch64-rpi4-v3.12`
+
+## Creating Font Files
+
+check out:
+
+* https://github.com/farsil/ibmfonts.git
+* https://github.com/embedded-graphics/bdf.git
+  * `cd location/of/bdf/eg-font-converter`
+  * `cargo build --release`
+* in the root of this current project, assuming these are both checked out in `~/local/src/`
+
+```
+mkdir -p src/font/
+~/local/src/bdf/target/release/eg-font-converter --data src/font/cga_8x16.data --rust src/font/cga8x16.rs ~/local/src/ibmfonts/bdf/ic8x16u.bdf CGA_8X16
+~/local/src/bdf/target/release/eg-font-converter --data src/font/cga_light_8x16.data --rust src/font/cgalight8x16.rs ~/local/src/ibmfonts/bdf/icl8x16u.bdf CGA_LIGHT_8X16
+~/local/src/bdf/target/release/eg-font-converter --data src/font/spleen_8x16.data --rust src/font/spleen8x16.rs ~/local/src/spleen/spleen-8x16.bdf SPLEEN_8X16
+```
+
 
 ## Build
 

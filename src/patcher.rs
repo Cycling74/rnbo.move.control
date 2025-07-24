@@ -57,7 +57,7 @@ fn parse_datarefs(
         .iter()
     {
         let mapping = body.get("VALUE")?.as_str()?;
-        let mapping = if mapping.len() > 0 {
+        let mapping = if !mapping.is_empty() {
             Some(mapping.to_string())
         } else {
             None
@@ -189,8 +189,8 @@ impl PatcherInst {
             .as_str()?
             .to_string();
         let params = Param::parse_all(index, contents.get("params")?).unwrap_or_default();
-        let presets = parse_presets(&contents).unwrap_or_default();
-        let datarefs = parse_datarefs(&contents).unwrap_or_default();
+        let presets = parse_presets(contents).unwrap_or_default();
+        let datarefs = parse_datarefs(contents).unwrap_or_default();
 
         let mut inst = PatcherInst {
             index,
