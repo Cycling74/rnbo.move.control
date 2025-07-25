@@ -1320,6 +1320,17 @@ impl StateController {
         self.handle_event(Events::SetNamesChanged).await;
     }
 
+    pub async fn set_patcher_names(&mut self, names: Vec<String>) {
+        self.patcher_names = names;
+        self.patcher_names.sort();
+
+        let mut common = self.sm.context().common();
+        common.patchers_count = self.patcher_names.len();
+        self.update_common(common);
+
+        self.handle_event(Events::PatcherNamesChanged).await;
+    }
+
     pub async fn set_set_preset_names(&mut self, names: Vec<String>) {
         let mut common = self.sm.context().common();
         common.set_presets_count = names.len();

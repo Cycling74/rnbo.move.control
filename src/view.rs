@@ -1,23 +1,14 @@
-use {serde::Deserialize, std::collections::HashMap};
+use {
+    crate::oscquery::{OSCQueryContents, OSCQueryItem},
+    serde::Deserialize,
+    std::collections::HashMap,
+};
 
 #[derive(Debug, Clone)]
 pub struct ParamView {
     name: String,
     params: Vec<(usize, String)>,
     index: usize,
-}
-
-#[derive(Deserialize, Debug, Default)]
-struct OSCQueryItem<T> {
-    #[serde(rename = "VALUE")]
-    value: T,
-    //XXX plenty of other fields but we don't need them right now
-}
-
-#[derive(Deserialize, Debug, Default)]
-struct OSCQueryContents<T> {
-    #[serde(rename = "CONTENTS")]
-    contents: Option<T>,
 }
 
 #[derive(Deserialize, Debug, Default)]

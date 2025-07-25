@@ -61,6 +61,7 @@ mod controller;
 mod display;
 mod font;
 mod midi;
+mod oscquery;
 mod param;
 mod patcher;
 mod view;
@@ -550,12 +551,14 @@ async fn with_client(
 
     let inst_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
     let sets_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
+    let patchers_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
     let views_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
     let set_current_query: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::new(None);
 
     let inst_path_regex = Regex::new(r"^/rnbo/inst/\d+$").expect("to create instance regex");
     let set_view_regex =
         Regex::new(r"^/rnbo/inst/control/sets/views/list/\d+$").expect("to create set view regex");
+    let patchers_path_regex = Regex::new(r"^/rnbo/patchers/\s+$").expect("to create patchers regex");
 
     //http://c74rpi.local:5678
 
@@ -619,7 +622,33 @@ async fn with_client(
         Ok(views)
     }
 
-    let inst_query_future = async {
+    async fn get_patcher_names() -> Result<Vec<String>, ()> {
+        use crate::oscquery::{OSCQueryContents, OSCQueryItem};
+
+        #[derive(Deserialize, Debug, Default)]
+        struct PatcherListItem {
+            created_at: OSCQueryItem<String>,
+            //TODO plenty of others, but do we care?
+        }
+
+        if let Ok(res) = reqwest::Client::new()
+            .get("http://127.0.0.1:5678/rnbo/patchers")
+            .send()
+            .await
+        {
+            let json: serde_json::Value = res.json().await.map_err(|_| ())?;
+            let parsed: Result<
+                OSCQueryContents<HashMap<String, OSCQueryContents<PatcherListItem>>>,
+                _,
+                > = serde_json::from_value(json.clone());
+            let contents = parsed.map_err(|_| ())?.contents.ok_or(())?;
+            Ok(contents.into_keys().collect())
+        } else {
+            Err(())
+        }
+    }
+
+    let http_query_future = async {
         loop {
             tokio::time::sleep(HTTP_QUERY_DELAY).await;
             {
@@ -692,6 +721,18 @@ async fn with_client(
                     }
                 }
             }
+            {
+                let mut g = patchers_query.lock().await;
+                if let Some(v) = g.deref() {
+                    if *v <= Instant::now() {
+                        if let Ok(names) = get_patcher_names().await {
+                            *g = None;
+                            let mut g = state.lock().await;
+                            g.set_patcher_names(names).await;
+                        }
+                    }
+                }
+            }
         }
     };
 
@@ -749,13 +790,12 @@ async fn with_client(
 
                         let timeout = Instant::now() + HTTP_INITIAL_QUERY_DELAY;
 
-                        //do inst query
+                        //do initial queries
                         {
                             let mut g = inst_query.lock().await;
                             *g = Some(timeout);
                         }
 
-                        //do sets query
                         {
                             let mut g = sets_query.lock().await;
                             *g = Some(timeout);
@@ -766,7 +806,11 @@ async fn with_client(
                             *g = Some(timeout + HTTP_INITIAL_QUERY_DELAY);
                         }
 
-                        //do set current query
+                        {
+                            let mut g = patchers_query.lock().await;
+                            *g = Some(timeout + HTTP_INITIAL_QUERY_DELAY);
+                        }
+
                         {
                             let mut g = set_current_query.lock().await;
                             *g = Some(timeout);
@@ -833,6 +877,9 @@ async fn with_client(
                                                     //added or removed
                                                     if inst_path_regex.is_match(path) {
                                                         let mut g = inst_query.lock().await;
+                                                        *g = Some(Instant::now());
+                                                    } else if patchers_path_regex.is_match(path) {
+                                                        let mut g = patchers_query.lock().await;
                                                         *g = Some(Instant::now());
                                                     } else if set_view_regex.is_match(path) {
                                                         let mut g = views_query.lock().await;
@@ -983,7 +1030,7 @@ async fn with_client(
         tokio::signal::ctrl_c().await.unwrap();
     };
     tokio::select! {
-        _ = display_future => (), _ = web_future => (),  _ = inst_query_future => (),
+        _ = display_future => (), _ = web_future => (),  _ = http_query_future => (),
         _ = signal_future => (), _ = process_midi => (), _ = disconnect_future => (),
         _ = children_future => ()
     };
