@@ -461,6 +461,8 @@ enum Events {
     SetNamesChanged,
     SetPresetNamesChanged,
 
+    PatcherNamesChanged,
+
     SetCurrentChanged,
     SetPresetLoadedChanged,
 
@@ -598,22 +600,24 @@ impl DataLoad {
     }
 }
 
-const MENU_ITEMS: [&str; 6] = [
+const MENU_ITEMS: [&str; 7] = [
     "Device Params",
     "Device Data",
     "Graphs",
     "Graph Presets",
+    "Patchers",
     "Tempo",
     "About",
 ];
 const EXIT_MENU: [&str; 2] = ["Power Down", "Launch Move"];
 
-const PATCHER_PARAMS_INDEX: usize = 0;
-const PATCHER_DATA_INDEX: usize = 1;
-const SETS_INDEX: usize = 2;
-const SET_PRESETS_INDEX: usize = 3;
-const TEMPO_INDEX: usize = 4;
-const ABOUT_INDEX: usize = 5;
+const DEVICE_PARAMS_INDEX: usize = 0;
+const DEVICE_DATA_INDEX: usize = 1;
+const GRAPHS_INDEX: usize = 2;
+const GRAPH_PRESETS_INDEX: usize = 3;
+const PATCHERS_INDEX: usize = 4;
+const TEMPO_INDEX: usize = 5;
+const ABOUT_INDEX: usize = 6;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Cmd {
@@ -648,6 +652,8 @@ enum Cmd {
 
     LoadSet(usize),
     LoadSetPreset(usize),
+
+    LoadPatcher(usize),
 
     ReportViewParamPage(usize, usize),
 }
@@ -773,34 +779,35 @@ smlang::statemachine! {
         Menu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = Menu(*state - 1),
 
         //select
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == SETS_INDEX && ctx.sets_count() > 0] = SetsList(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == SET_PRESETS_INDEX && ctx.set_presets_count() > 0] = SetPresetsList(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == GRAPHS_INDEX && ctx.sets_count() > 0] = SetsList(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == GRAPH_PRESETS_INDEX && ctx.set_presets_count() > 0] = SetPresetsList(0),
         //skip patcher instances menu if there is only 1 instance
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) > 1] = PatcherInstances(InstSel::enter(InstSelType::Params, ctx.instances_count(InstSelType::Params))),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) == 1] / ctx.emit(Cmd::RenderVisibleParams);
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) > 1] = PatcherInstances(InstSel::enter(InstSelType::Params, ctx.instances_count(InstSelType::Params))),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) == 1] / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHER_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
 
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHERS_INDEX && ctx.patchers_count() > 0] = PatchersList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
         Menu(usize) + BtnDown(Button::JogWheel) [*state == ABOUT_INDEX] = About,
 
-        SetsList(usize) + BtnDown(Button::Back) = Menu(SETS_INDEX),
+        SetsList(usize) + BtnDown(Button::Back) = Menu(GRAPHS_INDEX),
         SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_count() > *state + 1] = SetsList(*state + 1),
         SetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetsList(*state - 1),
         SetsList(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::LoadSet(*state)); = SetsList(*state),
-        SetsList(usize) + SetNamesChanged = Menu(SETS_INDEX), //backout, TODO be smarter
+        SetsList(usize) + SetNamesChanged = Menu(GRAPHS_INDEX), //backout, TODO be smarter
         SetsList(usize) + SetCurrentChanged = SetsList(*state), //redraw
 
-        SetPresetsList(usize) + BtnDown(Button::Back) = Menu(SET_PRESETS_INDEX),
+        SetPresetsList(usize) + BtnDown(Button::Back) = Menu(GRAPH_PRESETS_INDEX),
         SetPresetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.set_presets_count() > *state + 1] = SetPresetsList(*state + 1),
         SetPresetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetPresetsList(*state - 1),
         SetPresetsList(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::LoadSetPreset(*state));,
-        SetPresetsList(usize) + SetPresetNamesChanged = Menu(SET_PRESETS_INDEX), //back out TODO be smarter
+        SetPresetsList(usize) + SetPresetNamesChanged = Menu(GRAPH_PRESETS_INDEX), //back out TODO be smarter
         SetPresetsList(usize) + SetPresetLoadedChanged = SetPresetsList(*state), //redraw
 
-        PatcherInstances(InstSel) + BtnDown(Button::Back) [state.typ() == InstSelType::Params] = Menu(PATCHER_PARAMS_INDEX),
-        PatcherInstances(InstSel) + BtnDown(Button::Back) [state.typ() == InstSelType::Datarefs] = Menu(PATCHER_DATA_INDEX),
+        PatcherInstances(InstSel) + BtnDown(Button::Back) [state.typ() == InstSelType::Params] = Menu(DEVICE_PARAMS_INDEX),
+        PatcherInstances(InstSel) + BtnDown(Button::Back) [state.typ() == InstSelType::Datarefs] = Menu(DEVICE_DATA_INDEX),
         PatcherInstances(InstSel) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherInstances(state.next()),
         PatcherInstances(InstSel) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherInstances(state.prev()),
         PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Params] / ctx.emit(Cmd::RenderVisibleParams);
@@ -808,14 +815,14 @@ smlang::statemachine! {
         PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Datarefs] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(state.selected(), ctx.dataref_count(state.selected()))),
 
 
-        PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) == 0] = Menu(if state.typ == InstSelType::Params { PATCHER_PARAMS_INDEX } else { PATCHER_DATA_INDEX }),
+        PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) == 0] = Menu(if state.typ == InstSelType::Params { DEVICE_PARAMS_INDEX } else { DEVICE_DATA_INDEX }),
         PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) > 0] = PatcherInstances(state.restart()),
 
         //skip patcher instances menu if there is only 1 instance
         PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Params) > 1] = PatcherInstances(InstSel::new(InstSelType::Params, state.index, ctx.instances_count(InstSelType::Params))),
-        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Params) == 1] = Menu(PATCHER_PARAMS_INDEX),
+        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Params) == 1] = Menu(DEVICE_PARAMS_INDEX),
         PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::new(InstSelType::Datarefs, state.instance(), ctx.instances_count(InstSelType::Datarefs))),
-        PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) == 1] = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) == 1] = Menu(DEVICE_DATA_INDEX),
 
         PatcherParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1] / ctx.emit(Cmd::RenderVisibleParams);
             = PatcherParams(ParamPage { index: state.index, page: state.page + 1, focused: state.focused }),
@@ -825,11 +832,11 @@ smlang::statemachine! {
         PatcherParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1}); = PatcherParams(state.with_focus(*event)),
         PatcherParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1}); = PatcherParams(state.with_focus(*event)),
 
-        PatcherParams(ParamPage) + InstancesChanged(_) [ctx.instances_count(InstSelType::Params) == 0] = Menu(PATCHER_PARAMS_INDEX),
+        PatcherParams(ParamPage) + InstancesChanged(_) [ctx.instances_count(InstSelType::Params) == 0] = Menu(DEVICE_PARAMS_INDEX),
         PatcherParams(ParamPage) + InstancesChanged(_) [ctx.instances_count(InstSelType::Params) > 0] = PatcherInstances(InstSel::enter(InstSelType::Params, ctx.instances_count(InstSelType::Params))),
-        PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(DEVICE_DATA_INDEX),
         PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
-        PatcherDatarefLoad(DataLoad) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefLoad(DataLoad) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(DEVICE_DATA_INDEX),
         PatcherDatarefLoad(DataLoad) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
 
         PatcherDatarefs(DataSel) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefs(state.next()),
@@ -845,15 +852,21 @@ smlang::statemachine! {
         PatcherDatarefLoad(DataLoad) + DatarefMappingChanged = PatcherDatarefLoad(state.clone()), //redraw, TODO filter to only redraw if it is a dataref we care about?
 
          //TODO can we be less drastic?
-        PatcherDatarefs(DataSel) + DatarefVisibleChanged = Menu(PATCHER_DATA_INDEX),
-        PatcherDatarefLoad(DataLoad) + DatarefVisibleChanged = Menu(PATCHER_DATA_INDEX),
-        PatcherInstances(InstSel) + DatarefVisibleChanged [state.typ() == InstSelType::Datarefs] = Menu(PATCHER_DATA_INDEX),
+        PatcherDatarefs(DataSel) + DatarefVisibleChanged = Menu(DEVICE_DATA_INDEX),
+        PatcherDatarefLoad(DataLoad) + DatarefVisibleChanged = Menu(DEVICE_DATA_INDEX),
+        PatcherInstances(InstSel) + DatarefVisibleChanged [state.typ() == InstSelType::Datarefs] = Menu(DEVICE_DATA_INDEX),
 
-        PatcherInstances(InstSel) + SetCurrentChanged = Menu(PATCHER_PARAMS_INDEX),
-        PatcherParams(ParamPage) + SetCurrentChanged  = Menu(PATCHER_PARAMS_INDEX),
-        PatcherDatarefs(DataSel) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
-        PatcherDatarefLoad(DataLoad) + SetCurrentChanged  = Menu(PATCHER_DATA_INDEX),
+        PatcherInstances(InstSel) + SetCurrentChanged = Menu(DEVICE_PARAMS_INDEX),
+        PatcherParams(ParamPage) + SetCurrentChanged  = Menu(DEVICE_PARAMS_INDEX),
+        PatcherDatarefs(DataSel) + SetCurrentChanged  = Menu(DEVICE_DATA_INDEX),
+        PatcherDatarefLoad(DataLoad) + SetCurrentChanged  = Menu(DEVICE_DATA_INDEX),
         PatcherParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = PatcherParams(state.clone()), //redraw
+                                                                                                                          //
+        PatchersList(usize) + BtnDown(Button::Back) = Menu(PATCHERS_INDEX),
+        PatchersList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.patchers_count() > *state + 1] = PatchersList(*state + 1),
+        PatchersList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PatchersList(*state - 1),
+        PatchersList(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::LoadPatcher(*state)); = PatchersList(*state),
+        PatchersList(usize) + PatcherNamesChanged = Menu(PATCHERS_INDEX), //backout, TODO be smarter
 
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
         TempoEditor + EncRight(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(1)); = TempoEditor,
@@ -934,6 +947,7 @@ pub struct StateController {
     param_view_param_lookup: HashMap<String, usize>, //OSC addr -> index into self.param_views
 
     set_names: Vec<String>,
+    patcher_names: Vec<String>,
     set_preset_names: Vec<String>,
 
     patchers_params_instance_names: Vec<String>, //only those that have params
@@ -955,6 +969,7 @@ pub struct StateController {
 #[derive(Clone, Debug)]
 struct CommonContext {
     pub(crate) sets_count: usize,
+    pub(crate) patchers_count: usize,
     pub(crate) set_presets_count: usize,
     pub(crate) instances_count: HashMap<InstSelType, usize>,
 
@@ -973,6 +988,7 @@ impl Default for CommonContext {
     fn default() -> Self {
         Self {
             sets_count: 0,
+            patchers_count: 0,
             set_presets_count: 0,
             instances_count: Default::default(),
 
@@ -1016,6 +1032,10 @@ impl Context {
 
     fn sets_count(&self) -> usize {
         self.common.sets_count
+    }
+
+    fn patchers_count(&self) -> usize {
+        self.common.patchers_count
     }
 
     fn set_presets_count(&self) -> usize {
@@ -1144,6 +1164,7 @@ impl StateController {
             param_view_param_lookup: HashMap::new(),
 
             set_names: Vec::new(),
+            patcher_names: Vec::new(),
             set_preset_names: Vec::new(),
 
             patchers_params_instance_names: Vec::new(),
@@ -1966,10 +1987,10 @@ impl StateController {
                     let ctx = self.context();
                     match index {
                         TEMPO_INDEX | ABOUT_INDEX => ITEM_INDICATOR,
-                        PATCHER_PARAMS_INDEX if ctx.instances_count(InstSelType::Params) < 2 => {
+                        DEVICE_PARAMS_INDEX if ctx.instances_count(InstSelType::Params) < 2 => {
                             ITEM_INDICATOR
                         }
-                        PATCHER_DATA_INDEX if ctx.instances_count(InstSelType::Datarefs) < 2 => {
+                        DEVICE_DATA_INDEX if ctx.instances_count(InstSelType::Datarefs) < 2 => {
                             ITEM_INDICATOR
                         }
                         _ => SUB_MENU_INDICATOR,
@@ -1979,10 +2000,11 @@ impl StateController {
                 let enabled = |index: usize| -> bool {
                     let ctx = self.context();
                     match index {
-                        PATCHER_PARAMS_INDEX => ctx.instances_count(InstSelType::Params) > 0,
-                        PATCHER_DATA_INDEX => ctx.instances_count(InstSelType::Datarefs) > 0,
-                        SETS_INDEX => ctx.sets_count() > 0,
-                        SET_PRESETS_INDEX => ctx.set_presets_count() > 0,
+                        DEVICE_PARAMS_INDEX => ctx.instances_count(InstSelType::Params) > 0,
+                        DEVICE_DATA_INDEX => ctx.instances_count(InstSelType::Datarefs) > 0,
+                        GRAPHS_INDEX => ctx.sets_count() > 0,
+                        GRAPH_PRESETS_INDEX => ctx.set_presets_count() > 0,
+                        PATCHERS_INDEX => ctx.patchers_count() > 0,
                         _ => true,
                     }
                 };
@@ -2163,6 +2185,18 @@ impl StateController {
                         indicated,
                     );
                 }
+            }
+            States::PatchersList(selected) => {
+                setup_common(line!(), self);
+                render_menu(
+                    frame,
+                    Some("Load Patcher"),
+                    self.patcher_names.as_slice(),
+                    default_indicator,
+                    all_enabled,
+                    selected,
+                    None, //TODO should there be an indicator(/
+                );
             }
             _ => (), //TODO
         }
@@ -2507,6 +2541,9 @@ impl StateController {
                         };
                         self.send_osc(msg).await;
                     }
+                }
+                Cmd::LoadPatcher(index) => {
+                    //XXX TODO
                 }
                 Cmd::UpdateDataFileList => {
                     self.datafile_list.clear();
