@@ -558,7 +558,8 @@ async fn with_client(
     let inst_path_regex = Regex::new(r"^/rnbo/inst/\d+$").expect("to create instance regex");
     let set_view_regex =
         Regex::new(r"^/rnbo/inst/control/sets/views/list/\d+$").expect("to create set view regex");
-    let patchers_path_regex = Regex::new(r"^/rnbo/patchers/\s+$").expect("to create patchers regex");
+    let patchers_path_regex =
+        Regex::new(r"^/rnbo/patchers/\w+$").expect("to create patchers regex");
 
     //http://c74rpi.local:5678
 
@@ -640,7 +641,7 @@ async fn with_client(
             let parsed: Result<
                 OSCQueryContents<HashMap<String, OSCQueryContents<PatcherListItem>>>,
                 _,
-                > = serde_json::from_value(json.clone());
+            > = serde_json::from_value(json.clone());
             let contents = parsed.map_err(|_| ())?.contents.ok_or(())?;
             Ok(contents.into_keys().collect())
         } else {
@@ -880,7 +881,10 @@ async fn with_client(
                                                         *g = Some(Instant::now());
                                                     } else if patchers_path_regex.is_match(path) {
                                                         let mut g = patchers_query.lock().await;
-                                                        *g = Some(Instant::now());
+                                                        *g = Some(
+                                                            Instant::now()
+                                                                + Duration::from_millis(100),
+                                                        );
                                                     } else if set_view_regex.is_match(path) {
                                                         let mut g = views_query.lock().await;
                                                         *g = Some(
