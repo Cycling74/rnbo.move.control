@@ -44,6 +44,7 @@ const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 
 pub const INST_UNLOAD_ADDR: &str = "/rnbo/inst/control/unload";
+pub const INST_LOAD_ADDR: &str = "/rnbo/inst/control/load";
 pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
 pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
 pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
@@ -2554,7 +2555,19 @@ impl StateController {
                     }
                 }
                 Cmd::LoadPatcher(index) => {
-                    //XXX TODO
+                    //unload all
+                    let msg = OscMessage {
+                        addr: INST_UNLOAD_ADDR.to_string(),
+                        args: vec![OscType::Int(-1)],
+                    };
+                    self.send_osc(msg).await;
+                    if let Some(name) = self.patcher_names.get(index) {
+                        let msg = OscMessage {
+                            addr: INST_LOAD_ADDR.to_string(),
+                            args: vec![OscType::Int(-1), OscType::String(name.clone())],
+                        };
+                        self.send_osc(msg).await;
+                    }
                 }
                 Cmd::UpdateDataFileList => {
                     self.datafile_list.clear();
