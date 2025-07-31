@@ -33,7 +33,7 @@ class RNBOMoveControl(ConanFile):
 	channel = "move"
 	settings = { "os": ["Linux"], "compiler": {"gcc": {"version": ["11.4"], "libcxx": "libstdc++11"}}, "arch": "armv8" }
 	options = { "dockerimage": ["ANY"], "conandatadir": ["ANY"], "jackversion": ["ANY"] }
-	default_options = { "dockerimage": "rnbo.move.takeover:0.1", "conandatadir": "~/Documents/move-conan-data", "jackversion": "1.9.22-457eee49" }
+	default_options = { "dockerimage": "rnbo.move.takeover:0.2", "conandatadir": "~/Documents/move-conan-data", "jackversion": "1.9.22-457eee49" }
 
 	def set_version(self):
 		with open("Cargo.toml") as f:
