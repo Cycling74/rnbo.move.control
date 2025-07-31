@@ -48,6 +48,7 @@ pub const INST_LOAD_ADDR: &str = "/rnbo/inst/control/load";
 pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
 pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
 pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
+pub const SET_PRESETS_DELETE_ADDR: &str = "/rnbo/inst/control/sets/presets/destroy";
 pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loaded";
 pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
 pub const SET_VIEWS_ORDER_ADDR: &str = "/rnbo/inst/control/sets/views/order";
@@ -164,12 +165,11 @@ fn render_param_page(
 
         let label = Span::raw(focus.value);
         let gauge = ratatui::widgets::Gauge::default()
-        .label(label)
-        .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
-        .ratio(focus.norm)
-        .use_unicode(true)
-        ;
-
+            .label(label)
+            .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
+            .ratio(focus.norm)
+            .use_unicode(true)
+            ;
         /*
         let gauge = ratatui::widgets::LineGauge::default()
             .label(label)
@@ -193,15 +193,14 @@ fn render_param_page(
             .ratio(ratio);
         */
         let gauge = ratatui::widgets::Gauge::default()
-        .label(label)
-        .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
-        .ratio(ratio)
-        .use_unicode(true)
-        ;
+            .label(label)
+            .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
+            .ratio(ratio)
+            .use_unicode(true)
+            ;
         frame.render_widget(gauge, layout[3]);
     }
 }
-
 fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> bool>(
     frame: &mut ratatui::Frame,
     title: Option<&str>,
@@ -274,14 +273,51 @@ fn center(area: Rect, horizontal: Constraint, vertical: Constraint) -> Rect {
     area
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum MenuIndicator {
-    SubMenu(usize),
-    Item(usize),
-}
-
 const SUB_MENU_INDICATOR: &char = &'>';
 const ITEM_INDICATOR: &char = &'-';
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PresetListOp {
+    Load,
+    Delete,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PresetListState {
+    op: PresetListOp,
+    selected: usize,
+}
+
+impl PresetListState {
+    pub fn new(op: PresetListOp) -> Self {
+        Self { op, selected: 0 }
+    }
+    pub fn op(&self) -> PresetListOp { self.op }
+    pub fn selected(&self) -> usize { self.selected }
+
+    pub fn next(&self) -> Self {
+        Self {
+            op: self.op,
+            selected: self.selected + 1,
+        }
+    }
+
+    pub fn can_go_prev(&self) -> bool {
+        self.selected > 0
+    }
+
+    pub fn prev(&self) -> Self {
+        let selected = if self.can_go_prev() {
+            self.selected - 1
+        } else {
+            0
+        };
+        Self {
+            op: self.op,
+            selected,
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum InstSelType {
@@ -611,6 +647,7 @@ const MENU_ITEMS: [&str; 7] = [
     "About",
 ];
 const EXIT_MENU: [&str; 2] = ["Power Down", "Launch Move"];
+const PRESET_MENU_ITEMS: [&str; 3] = ["Load", "Save", "Delete"];
 
 const DEVICE_PARAMS_INDEX: usize = 0;
 const DEVICE_DATA_INDEX: usize = 1;
@@ -619,6 +656,10 @@ const GRAPH_PRESETS_INDEX: usize = 3;
 const PATCHERS_INDEX: usize = 4;
 const TEMPO_INDEX: usize = 5;
 const ABOUT_INDEX: usize = 6;
+
+const PRESET_MENU_LOAD_INDEX: usize = 0;
+const PRESET_MENU_SAVE_INDEX: usize = 1;
+const PRESET_MENU_DELETE_INDEX: usize = 2;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Cmd {
@@ -653,6 +694,7 @@ enum Cmd {
 
     LoadSet(usize),
     LoadSetPreset(usize),
+    DeleteSetPreset(usize),
 
     LoadPatcher(usize),
 
@@ -781,7 +823,7 @@ smlang::statemachine! {
 
         //select
         Menu(usize) + BtnDown(Button::JogWheel) [*state == GRAPHS_INDEX && ctx.sets_count() > 0] = SetsList(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == GRAPH_PRESETS_INDEX && ctx.set_presets_count() > 0] = SetPresetsList(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == GRAPH_PRESETS_INDEX && ctx.set_presets_count() > 0] = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
         //skip patcher instances menu if there is only 1 instance
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) > 1] = PatcherInstances(InstSel::enter(InstSelType::Params, ctx.instances_count(InstSelType::Params))),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) == 1] / ctx.emit(Cmd::RenderVisibleParams);
@@ -800,12 +842,21 @@ smlang::statemachine! {
         SetsList(usize) + SetNamesChanged = Menu(GRAPHS_INDEX), //backout, TODO be smarter
         SetsList(usize) + SetCurrentChanged = SetsList(*state), //redraw
 
-        SetPresetsList(usize) + BtnDown(Button::Back) = Menu(GRAPH_PRESETS_INDEX),
-        SetPresetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.set_presets_count() > *state + 1] = SetPresetsList(*state + 1),
-        SetPresetsList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = SetPresetsList(*state - 1),
-        SetPresetsList(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::LoadSetPreset(*state));,
-        SetPresetsList(usize) + SetPresetNamesChanged = Menu(GRAPH_PRESETS_INDEX), //back out TODO be smarter
-        SetPresetsList(usize) + SetPresetLoadedChanged = SetPresetsList(*state), //redraw
+        GraphPresetMenu(usize) + BtnDown(Button::Back) = Menu(GRAPH_PRESETS_INDEX),
+        GraphPresetMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [PRESET_MENU_ITEMS.len() > *state + 1] = GraphPresetMenu(*state + 1),
+        GraphPresetMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = GraphPresetMenu(*state - 1),
+        GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_LOAD_INDEX && ctx.set_presets_count() > 0] = GraphPresetsList(PresetListState::new(PresetListOp::Load)),
+        GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_DELETE_INDEX && ctx.set_presets_count() > 0] = GraphPresetsList(PresetListState::new(PresetListOp::Delete)),
+
+        GraphPresetsList(PresetListState) + BtnDown(Button::Back) [state.op() == PresetListOp::Load] = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
+        GraphPresetsList(PresetListState) + BtnDown(Button::Back) [state.op() == PresetListOp::Delete] = GraphPresetMenu(PRESET_MENU_DELETE_INDEX),
+        GraphPresetsList(PresetListState) + EncRight(JOG_WHEEL_ENCODER) [ctx.set_presets_count() > state.selected() + 1] = GraphPresetsList(state.next()),
+        GraphPresetsList(PresetListState) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = GraphPresetsList(state.prev()),
+        GraphPresetsList(PresetListState) + BtnDown(Button::JogWheel) [state.op() == PresetListOp::Load] / ctx.emit(Cmd::LoadSetPreset(state.selected()));,
+        GraphPresetsList(PresetListState) + BtnDown(Button::JogWheel) [state.op() == PresetListOp::Delete] / ctx.emit(Cmd::DeleteSetPreset(state.selected())); = GraphPresetMenu(PRESET_MENU_DELETE_INDEX),
+        GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::Load] = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
+        GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::Delete] = GraphPresetMenu(PRESET_MENU_DELETE_INDEX),
+        GraphPresetsList(PresetListState) + SetPresetLoadedChanged = GraphPresetsList(state.clone()), //redraw
 
         PatcherInstances(InstSel) + BtnDown(Button::Back) [state.typ() == InstSelType::Params] = Menu(DEVICE_PARAMS_INDEX),
         PatcherInstances(InstSel) + BtnDown(Button::Back) [state.typ() == InstSelType::Datarefs] = Menu(DEVICE_DATA_INDEX),
@@ -2065,15 +2116,46 @@ impl StateController {
                     self.set_current_index,
                 );
             }
-            States::SetPresetsList(selected) => {
+            States::GraphPresetMenu(selected) => {
+                setup_common(line!(), self);
+
+                let enabled = |index: usize| -> bool {
+                    let ctx = self.context();
+                    match index {
+                        PRESET_MENU_LOAD_INDEX | PRESET_MENU_DELETE_INDEX => ctx.set_presets_count() > 0,
+                        _ => true,
+                    }
+                };
+                let indicator = |index: usize| -> &'static char {
+                    match index {
+                        PRESET_MENU_LOAD_INDEX | PRESET_MENU_DELETE_INDEX => SUB_MENU_INDICATOR,
+                        _ => ITEM_INDICATOR,
+                    }
+                };
+
+                render_menu(
+                    frame,
+                    Some("Graph Presets"),
+                    &PRESET_MENU_ITEMS,
+                    indicator,
+                    enabled,
+                    selected,
+                    None,
+                );
+            }
+            States::GraphPresetsList(state) => {
+                let title = match state.op() {
+                    PresetListOp::Load => "Load Graph Preset",
+                    PresetListOp::Delete => "Delete Graph Preset",
+               };
                 setup_common(line!(), self);
                 render_menu(
                     frame,
-                    Some("Load Graph Preset"),
+                    Some(title),
                     self.set_preset_names.as_slice(),
                     default_indicator,
                     all_enabled,
-                    selected,
+                    state.selected(),
                     self.set_preset_loaded_index,
                 );
             }
@@ -2549,6 +2631,15 @@ impl StateController {
                     if let Some(name) = self.set_preset_names.get(index) {
                         let msg = OscMessage {
                             addr: SET_PRESETS_LOAD_ADDR.to_string(),
+                            args: vec![OscType::String(name.clone())],
+                        };
+                        self.send_osc(msg).await;
+                    }
+                }
+                Cmd::DeleteSetPreset(index) => {
+                    if let Some(name) = self.set_preset_names.get(index) {
+                        let msg = OscMessage {
+                            addr: SET_PRESETS_DELETE_ADDR.to_string(),
                             args: vec![OscType::String(name.clone())],
                         };
                         self.send_osc(msg).await;
