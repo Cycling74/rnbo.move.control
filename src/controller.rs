@@ -48,6 +48,7 @@ pub const INST_LOAD_ADDR: &str = "/rnbo/inst/control/load";
 pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
 pub const SET_CURRENT_ADDR: &str = "/rnbo/inst/control/sets/current/name";
 pub const SET_PRESETS_LOAD_ADDR: &str = "/rnbo/inst/control/sets/presets/load";
+pub const SET_PRESETS_SAVE_ADDR: &str = "/rnbo/inst/control/sets/presets/save";
 pub const SET_PRESETS_DELETE_ADDR: &str = "/rnbo/inst/control/sets/presets/destroy";
 pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loaded";
 pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
@@ -693,6 +694,7 @@ enum Cmd {
     LoadDataref((usize, usize, usize)),
 
     LoadSet(usize),
+    SaveSetPreset,
     LoadSetPreset(usize),
     DeleteSetPreset(usize),
 
@@ -847,6 +849,7 @@ smlang::statemachine! {
         GraphPresetMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = GraphPresetMenu(*state - 1),
         GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_LOAD_INDEX && ctx.set_presets_count() > 0] = GraphPresetsList(PresetListState::new(PresetListOp::Load)),
         GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_DELETE_INDEX && ctx.set_presets_count() > 0] = GraphPresetsList(PresetListState::new(PresetListOp::Delete)),
+        GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_SAVE_INDEX] / ctx.emit(Cmd::SaveSetPreset); = Menu(GRAPH_PRESETS_INDEX), //TODO better indication?
 
         GraphPresetsList(PresetListState) + BtnDown(Button::Back) [state.op() == PresetListOp::Load] = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
         GraphPresetsList(PresetListState) + BtnDown(Button::Back) [state.op() == PresetListOp::Delete] = GraphPresetMenu(PRESET_MENU_DELETE_INDEX),
@@ -2626,6 +2629,16 @@ impl StateController {
                         self.send_osc(msg).await;
                         //wait for `/loaded` to actually indicate load?
                     }
+                }
+                Cmd::SaveSetPreset => {
+                    //TODO custom naming?
+                    let date = chrono::Local::now();
+                    let name = date.format("%Y-%m-%d %H:%M:%S").to_string();
+                    let msg = OscMessage {
+                        addr: SET_PRESETS_SAVE_ADDR.to_string(),
+                        args: vec![OscType::String(name)],
+                    };
+                    self.send_osc(msg).await;
                 }
                 Cmd::LoadSetPreset(index) => {
                     if let Some(name) = self.set_preset_names.get(index) {
