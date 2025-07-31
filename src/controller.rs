@@ -2633,7 +2633,7 @@ impl StateController {
                 Cmd::SaveSetPreset => {
                     //TODO custom naming?
                     let date = chrono::Local::now();
-                    let name = date.format("%Y-%m-%d %H:%M:%S").to_string();
+                    let name = date.format("%y-%m-%d %H:%M:%S").to_string();
                     let msg = OscMessage {
                         addr: SET_PRESETS_SAVE_ADDR.to_string(),
                         args: vec![OscType::String(name)],
