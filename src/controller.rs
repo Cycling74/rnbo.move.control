@@ -921,7 +921,7 @@ smlang::statemachine! {
         GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_DELETE_INDEX && ctx.set_presets_count() > 0] = GraphPresetsList(PresetListState::new(PresetListOp::Delete)),
         GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_OVERWRITE_INDEX && ctx.set_presets_count() > 0] = GraphPresetsList(PresetListState::new(PresetListOp::Overwrite)),
         GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_SET_INTIAL_INDEX && ctx.set_presets_count() > 0] = GraphPresetsList(PresetListState::new(PresetListOp::SetInitial)),
-        GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_SAVE_INDEX] / ctx.emit(Cmd::SaveSetPreset); = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
+        GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_SAVE_INDEX] / ctx.emit(Cmd::SaveSetPreset);,
 
         GraphPresetsList(PresetListState) + BtnDown(Button::Back) [state.op() == PresetListOp::Load] = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
         GraphPresetsList(PresetListState) + BtnDown(Button::Back) [state.op() == PresetListOp::Delete] = GraphPresetMenu(PRESET_MENU_DELETE_INDEX),
