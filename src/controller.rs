@@ -17,6 +17,7 @@ use {
         io::BufReader,
         path::PathBuf,
         rc::Rc,
+        time::{Duration, Instant},
         sync::{
             atomic::{AtomicU8, Ordering as AtomicOrdering},
             mpsc as sync_mpsc, Arc,
@@ -24,6 +25,8 @@ use {
     },
     tui_widget_list::{ListBuilder, ListState, ListView},
 };
+
+const POPUP_PERIOD: Duration = Duration::from_secs(2);
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -481,6 +484,54 @@ struct ParamUpdate {
     index: usize,
 }
 
+#[derive(Clone, Debug)]
+struct Popup {
+    title: String,
+    content: String,
+    timeout: Instant,
+}
+
+impl Default for Popup {
+    fn default() -> Self {
+        Self {
+            title: Default::default(),
+            content: Default::default(),
+            timeout: Instant::now(),
+        }
+    }
+}
+
+impl Popup {
+    fn new(title: String, content: String) -> Self {
+        Self {
+            title, 
+            content,
+            timeout: Instant::now() + POPUP_PERIOD
+        }
+    }
+
+    fn new_long(title: String, content: String) -> Self {
+        Self {
+            title, 
+            content,
+            timeout: Instant::now() + 2 * POPUP_PERIOD
+        }
+    }
+
+    fn timed_out(&self) -> bool {
+        self.timeout < Instant::now()
+    }
+
+    fn title(&self) -> &str {
+        &self.title
+    }
+
+    fn content(&self) -> &str {
+        &self.content
+    }
+}
+
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Events {
     BtnDown(Button),
@@ -512,6 +563,8 @@ enum Events {
     SetViewListChanged,
 
     ChildProcessError,
+    PopupRequested,
+    PopupTimeout,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -777,6 +830,11 @@ pub mod top {
             VolumeEditor(LastView) + SetViewSelected(_) = ParamViews,
             VolumeEditor(LastView) + SetViewPageSelected(_) = ParamViews,
 
+            Main + PopupRequested = Popup(LastView::Main),
+            ParamViews + PopupRequested = Popup(LastView::ParamViews),
+            Popup(LastView) + PopupTimeout [*state == LastView::Main] = Main,
+            Popup(LastView) + PopupTimeout [*state == LastView::ParamViews] = ParamViews,
+
             _ + ChildProcessError = DisplayChildProcessError,
             DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
         }
@@ -1037,6 +1095,8 @@ pub struct StateController {
 
     datafile_list: Vec<String>,
     datafile_menu: Vec<String>,
+
+    popup: Popup,
 }
 
 #[derive(Clone, Debug)]
@@ -1253,6 +1313,8 @@ impl StateController {
 
             datafile_list: Vec::new(),
             datafile_menu: Vec::new(),
+
+            popup: Default::default(),
         };
 
         s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
@@ -1365,8 +1427,7 @@ impl StateController {
         self.clear_param_views(); //to be updated later
         self.update_common(common);
 
-        self.handle_event(Events::InstancesChanged(indexes.len()))
-            .await;
+        self.handle_event(Events::InstancesChanged(indexes.len()));
     }
 
     pub async fn set_set_current_name(&mut self, name: Option<String>) {
@@ -1376,7 +1437,7 @@ impl StateController {
         } else {
             None
         };
-        self.handle_event(Events::SetCurrentChanged).await;
+        self.handle_event(Events::SetCurrentChanged);
     }
 
     pub async fn set_set_names(&mut self, names: Vec<String>) {
@@ -1390,7 +1451,7 @@ impl StateController {
         common.sets_count = self.set_names.len();
         self.update_common(common);
 
-        self.handle_event(Events::SetNamesChanged).await;
+        self.handle_event(Events::SetNamesChanged);
     }
 
     pub async fn set_patcher_names(&mut self, names: Vec<String>) {
@@ -1401,7 +1462,7 @@ impl StateController {
         common.patchers_count = self.patcher_names.len();
         self.update_common(common);
 
-        self.handle_event(Events::PatcherNamesChanged).await;
+        self.handle_event(Events::PatcherNamesChanged);
     }
 
     pub async fn set_set_preset_names(&mut self, names: Vec<String>) {
@@ -1411,7 +1472,7 @@ impl StateController {
 
         self.set_preset_names = names;
 
-        self.handle_event(Events::SetPresetNamesChanged).await;
+        self.handle_event(Events::SetPresetNamesChanged);
     }
 
     async fn update_views(&mut self, common: &mut CommonContext) {
@@ -1495,7 +1556,7 @@ impl StateController {
         let mut common = self.sm.context().common();
         self.update_views(&mut common).await;
         self.update_common(common);
-        self.handle_event(Events::SetViewListChanged).await;
+        self.handle_event(Events::SetViewListChanged);
     }
 
     pub async fn display_child_process_error(
@@ -1508,7 +1569,7 @@ impl StateController {
         self.update_common(common);
 
         self.child_process_error = Some((name.to_string(), status));
-        self.handle_event(Events::ChildProcessError).await;
+        self.handle_event(Events::ChildProcessError);
     }
 
     pub fn set_runner_version(&mut self, runner_rnbo_version: &str) {
@@ -1544,7 +1605,7 @@ impl StateController {
                 self.update_views(&mut common).await;
                 self.update_common(common);
                 //TODO transmit more fine tuned changes
-                self.handle_event(Events::SetViewListChanged).await;
+                self.handle_event(Events::SetViewListChanged);
             }
         } else {
             //println!("got osc {}", msg.addr);
@@ -1564,7 +1625,7 @@ impl StateController {
                                     } as _,
                                     MOVE_CTL_MIDI_CHAN,
                                 ));
-                                self.handle_event(Events::Transport(rolling)).await;
+                                self.handle_event(Events::Transport(rolling));
                             }
                         }
                     }
@@ -1577,7 +1638,7 @@ impl StateController {
                             _ => None,
                         } {
                             self.bpm = bpm;
-                            self.handle_event(Events::Tempo(bpm)).await;
+                            self.handle_event(Events::Tempo(bpm));
                         }
                     }
                 }
@@ -1602,7 +1663,7 @@ impl StateController {
                             } else {
                                 None
                             };
-                        self.handle_event(Events::SetPresetLoadedChanged).await;
+                        self.handle_event(Events::SetPresetLoadedChanged);
                     }
                 }
                 SET_VIEWS_ORDER_ADDR => {
@@ -1618,7 +1679,7 @@ impl StateController {
                     self.sort_param_views();
                     let mut common = self.sm.context().common();
                     self.update_views(&mut common).await;
-                    self.handle_event(Events::SetViewListChanged).await;
+                    self.handle_event(Events::SetViewListChanged);
                 }
                 SET_VIEW_DISPLAY => {
                     if !msg.args.is_empty() {
@@ -1651,8 +1712,7 @@ impl StateController {
                                 let pages = ctx.view_param_pages(index);
                                 if pages > 0 {
                                     page = page.min(pages - 1);
-                                    self.handle_event(Events::SetViewSelected((index, page)))
-                                        .await;
+                                    self.handle_event(Events::SetViewSelected((index, page)));
                                 }
                             }
                         }
@@ -1666,7 +1726,7 @@ impl StateController {
                             OscType::Int(v) => Some(*v.max(&0) as usize),
                             _ => None,
                         } {
-                            self.handle_event(Events::SetViewPageSelected(index)).await;
+                            self.handle_event(Events::SetViewPageSelected(index));
                         }
                     }
                 }
@@ -1716,8 +1776,7 @@ impl StateController {
                                         }
                                     }
                                     for location in updates {
-                                        self.handle_event(Events::VisibleParamUpdated(location))
-                                            .await;
+                                        self.handle_event(Events::VisibleParamUpdated(location));
                                     }
                                 }
                             }
@@ -1737,7 +1796,7 @@ impl StateController {
                             if let Some(inst) = self.instances.get_mut(*index) {
                                 if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
                                     *d.mapping_mut() = mapping;
-                                    self.handle_event(Events::DatarefMappingChanged).await;
+                                    self.handle_event(Events::DatarefMappingChanged);
                                 }
                             }
                         }
@@ -1752,7 +1811,7 @@ impl StateController {
                             if let Some(inst) = self.instances.get_mut(*index) {
                                 if let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
                                     if d.set_meta(&meta) {
-                                        self.handle_event(Events::DatarefVisibleChanged).await;
+                                        self.handle_event(Events::DatarefVisibleChanged);
                                     }
                                 }
                             }
@@ -1772,9 +1831,9 @@ impl StateController {
                     //println!("power sysex {:02x?}", sysex);
                     if let Some(status) = sysex.get(6) {
                         if status & 0b1_0000 != 0 {
-                            self.handle_event(Events::BtnDown(Button::PowerLong)).await;
+                            self.handle_event(Events::BtnDown(Button::PowerLong));
                         } else if status & 0b1000 != 0 {
-                            self.handle_event(Events::BtnDown(Button::PowerShort)).await;
+                            self.handle_event(Events::BtnDown(Button::PowerShort));
                         }
                     }
                 }
@@ -1823,7 +1882,7 @@ impl StateController {
                     //8 volume
                     //9 jog wheel
                     if bytes[1] < 10 && bytes[2] != 0 {
-                        self.handle_event(Events::EncTouch(bytes[1] as usize)).await;
+                        self.handle_event(Events::EncTouch(bytes[1] as usize));
                     }
                 }
                 0xBF => {
@@ -1832,42 +1891,40 @@ impl StateController {
                         //jog wheel btn
                         0x03 => {
                             if bytes[2] != 0 {
-                                self.handle_event(Events::BtnDown(Button::JogWheel)).await;
+                                self.handle_event(Events::BtnDown(Button::JogWheel));
                             } else {
-                                self.handle_event(Events::BtnUp(Button::JogWheel)).await;
+                                self.handle_event(Events::BtnUp(Button::JogWheel));
                             }
                         }
                         0x0e => match bytes[2] {
                             1 => {
-                                self.handle_event(Events::EncRight(JOG_WHEEL_ENCODER)).await;
+                                self.handle_event(Events::EncRight(JOG_WHEEL_ENCODER));
                             }
                             127 => {
-                                self.handle_event(Events::EncLeft(JOG_WHEEL_ENCODER)).await;
+                                self.handle_event(Events::EncLeft(JOG_WHEEL_ENCODER));
                             }
                             _ => (),
                         },
                         0x4f => match bytes[2] {
                             1 => {
-                                self.handle_event(Events::EncRight(VOLUME_WHEEL_ENCODER))
-                                    .await;
+                                self.handle_event(Events::EncRight(VOLUME_WHEEL_ENCODER));
                             }
                             127 => {
-                                self.handle_event(Events::EncLeft(VOLUME_WHEEL_ENCODER))
-                                    .await;
+                                self.handle_event(Events::EncLeft(VOLUME_WHEEL_ENCODER));
                             }
                             _ => (),
                         },
                         //hamburger
                         MENU_MIDI if bytes[2] != 0 => {
-                            self.handle_event(Events::BtnDown(Button::Menu)).await;
+                            self.handle_event(Events::BtnDown(Button::Menu));
                         }
                         //menu back button
                         BACK_MIDI if bytes[2] != 0 => {
-                            self.handle_event(Events::BtnDown(Button::Back)).await;
+                            self.handle_event(Events::BtnDown(Button::Back));
                         }
                         //play button
                         PLAY_MIDI if bytes[2] != 0 => {
-                            self.handle_event(Events::BtnDown(Button::Play)).await;
+                            self.handle_event(Events::BtnDown(Button::Play));
                         }
 
                         //param encoders
@@ -1875,10 +1932,10 @@ impl StateController {
                             let index = (index - 71) as usize;
                             match bytes[2] {
                                 1 => {
-                                    self.handle_event(Events::EncRight(index)).await;
+                                    self.handle_event(Events::EncRight(index));
                                 }
                                 127 => {
-                                    self.handle_event(Events::EncLeft(index)).await;
+                                    self.handle_event(Events::EncLeft(index));
                                 }
                                 _ => (),
                             }
@@ -2440,13 +2497,42 @@ impl StateController {
                 frame.render_widget(title, layout[0]);
                 frame.render_widget(paragraph, layout[1]);
             }
+            States::Popup(_) => {
+                if self.popup.timed_out() {
+                    self.handle_event(Events::PopupTimeout);
+                }
+
+                let width = frame.area().width;
+                let layout = titled_layout(frame.area());
+
+                let title = format_title(animate_text(self.popup.title(), width, frame.count()));
+                frame.render_widget(title, layout[0]);
+
+                let content = animate_text(self.popup.content(), width, frame.count());
+                let content = vec![
+                    Line::from(""),
+                    Line::from(content),
+                    Line::from(""),
+                ];
+                let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+                frame.render_widget(paragraph, layout[1]);
+            }
             States::Main => self.render_main(frame),
             States::ParamViews => self.render_param_views(frame),
         }
     }
 
-    async fn handle_event(&mut self, e: Events) {
-        let top_last = self.topsm.state().clone();
+    fn request_popup<S1: Into<String>, S2: Into<String>>(&mut self, title: S1, content: S2) {
+        self.popup = Popup::new(title.into(), content.into());
+        self.handle_event(Events::PopupRequested);
+    }
+
+    fn request_long_popup<S1: Into<String>, S2: Into<String>>(&mut self, title: S1, content: S2) {
+        self.popup = Popup::new_long(title.into(), content.into());
+        self.handle_event(Events::PopupRequested);
+    }
+
+    fn handle_event(&mut self, e: Events) {
         let top_trans = self.topsm.process_event(e).is_some();
         let top_cur = self.topsm.state().clone();
 
@@ -2662,9 +2748,10 @@ impl StateController {
                     let name = date.format("%y-%m-%d %H:%M:%S").to_string();
                     let msg = OscMessage {
                         addr: SET_PRESETS_SAVE_ADDR.to_string(),
-                        args: vec![OscType::String(name)],
+                        args: vec![OscType::String(name.clone())],
                     };
                     self.send_osc(msg).await;
+                    self.request_popup("Preset Saved", &name);
                 }
                 Cmd::LoadSetPreset(index) => {
                     if let Some(name) = self.set_preset_names.get(index) {
@@ -2677,11 +2764,13 @@ impl StateController {
                 }
                 Cmd::OverwriteSetPreset(index) => {
                     if let Some(name) = self.set_preset_names.get(index) {
+                        let name = name.clone();
                         let msg = OscMessage {
                             addr: SET_PRESETS_SAVE_ADDR.to_string(),
                             args: vec![OscType::String(name.clone())],
                         };
                         self.send_osc(msg).await;
+                        self.request_popup("Overwritten", &name);
                     }
                 }
                 Cmd::SetInitialSetPreset(index) => {
@@ -2697,21 +2786,26 @@ impl StateController {
                             let msg = OscMessage {
                                 addr: SET_PRESETS_RENAME_ADDR.to_string(),
                                 args: vec![
-                                    OscType::String(name),
+                                    OscType::String(name.clone()),
                                     OscType::String("initial".to_string()),
                                 ],
                             };
                             self.send_osc(msg).await;
+
+                            let content = format!("{} -> initial", name);
+                            self.request_long_popup("Preset Renamed", content);
                         }
                     }
                 }
                 Cmd::DeleteSetPreset(index) => {
                     if let Some(name) = self.set_preset_names.get(index) {
+                        let name = name.clone();
                         let msg = OscMessage {
                             addr: SET_PRESETS_DELETE_ADDR.to_string(),
                             args: vec![OscType::String(name.clone())],
                         };
                         self.send_osc(msg).await;
+                        self.request_popup("Preset Deleted", &name);
                     }
                 }
                 Cmd::LoadPatcher(index) => {
