@@ -24,7 +24,7 @@ use {
         collections::HashMap,
         error::Error,
         ops::Deref,
-        path::PathBuf,
+        path::{PathBuf, Path},
         sync::{
             atomic::{AtomicU8, Ordering},
             mpsc as sync_mpsc, Arc,
@@ -220,7 +220,7 @@ async fn with_client(
     c: Client,
     logger: &mut syslog::Logger<syslog::LoggerBackend, syslog::Formatter3164>,
     startup: &Vec<StartupProcess>,
-    config: &PathBuf,
+    config: &Path,
     caps: Caps,
 ) -> Result<(), Box<dyn Error>> {
     let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
@@ -497,7 +497,7 @@ async fn with_client(
             midi_out_tx,
             volume,
             package_version,
-            config.clone(),
+            config.to_path_buf(),
             has_all_capabilities,
         )));
 

@@ -170,8 +170,7 @@ fn render_param_page(
             .label(label)
             .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
             .ratio(focus.norm)
-            .use_unicode(true)
-            ;
+            .use_unicode(true);
         /*
         let gauge = ratatui::widgets::LineGauge::default()
             .label(label)
@@ -198,8 +197,7 @@ fn render_param_page(
             .label(label)
             .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
             .ratio(ratio)
-            .use_unicode(true)
-            ;
+            .use_unicode(true);
         frame.render_widget(gauge, layout[3]);
     }
 }
@@ -296,8 +294,12 @@ impl PresetListState {
     pub fn new(op: PresetListOp) -> Self {
         Self { op, selected: 0 }
     }
-    pub fn op(&self) -> PresetListOp { self.op }
-    pub fn selected(&self) -> usize { self.selected }
+    pub fn op(&self) -> PresetListOp {
+        self.op
+    }
+    pub fn selected(&self) -> usize {
+        self.selected
+    }
 
     pub fn next(&self) -> Self {
         Self {
@@ -875,7 +877,7 @@ smlang::statemachine! {
         GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::Delete] = GraphPresetMenu(PRESET_MENU_DELETE_INDEX),
         GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::Overwrite] = GraphPresetMenu(PRESET_MENU_OVERWRITE_INDEX),
         GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::SetInitial] = GraphPresetMenu(PRESET_MENU_SET_INTIAL_INDEX),
-        GraphPresetsList(PresetListState) + SetPresetLoadedChanged = GraphPresetsList(state.clone()), //redraw
+        GraphPresetsList(PresetListState) + SetPresetLoadedChanged = GraphPresetsList(*state), //redraw
 
         PatcherInstances(InstSel) + BtnDown(Button::Back) [state.typ() == InstSelType::Params] = Menu(DEVICE_PARAMS_INDEX),
         PatcherInstances(InstSel) + BtnDown(Button::Back) [state.typ() == InstSelType::Datarefs] = Menu(DEVICE_DATA_INDEX),
@@ -2141,13 +2143,19 @@ impl StateController {
                 let enabled = |index: usize| -> bool {
                     let ctx = self.context();
                     match index {
-                        PRESET_MENU_LOAD_INDEX | PRESET_MENU_DELETE_INDEX | PRESET_MENU_OVERWRITE_INDEX | PRESET_MENU_SET_INTIAL_INDEX => ctx.set_presets_count() > 0,
+                        PRESET_MENU_LOAD_INDEX
+                        | PRESET_MENU_DELETE_INDEX
+                        | PRESET_MENU_OVERWRITE_INDEX
+                        | PRESET_MENU_SET_INTIAL_INDEX => ctx.set_presets_count() > 0,
                         _ => true,
                     }
                 };
                 let indicator = |index: usize| -> &'static char {
                     match index {
-                        PRESET_MENU_LOAD_INDEX | PRESET_MENU_DELETE_INDEX | PRESET_MENU_OVERWRITE_INDEX | PRESET_MENU_SET_INTIAL_INDEX => SUB_MENU_INDICATOR,
+                        PRESET_MENU_LOAD_INDEX
+                        | PRESET_MENU_DELETE_INDEX
+                        | PRESET_MENU_OVERWRITE_INDEX
+                        | PRESET_MENU_SET_INTIAL_INDEX => SUB_MENU_INDICATOR,
                         _ => ITEM_INDICATOR,
                     }
                 };
@@ -2168,7 +2176,7 @@ impl StateController {
                     PresetListOp::Overwrite => "Overwrite Preset",
                     PresetListOp::SetInitial => "Set Initial",
                     PresetListOp::Delete => "Delete Preset",
-               };
+                };
                 setup_common(line!(), self);
                 render_menu(
                     frame,
@@ -2688,7 +2696,10 @@ impl StateController {
                             self.send_osc(msg).await;
                             let msg = OscMessage {
                                 addr: SET_PRESETS_RENAME_ADDR.to_string(),
-                                args: vec![OscType::String(name), OscType::String("initial".to_string())],
+                                args: vec![
+                                    OscType::String(name),
+                                    OscType::String("initial".to_string()),
+                                ],
                             };
                             self.send_osc(msg).await;
                         }
@@ -2722,12 +2733,10 @@ impl StateController {
                     self.datafile_list.clear();
 
                     if let Ok(entries) = std::fs::read_dir(DATFILE_DIR) {
-                        for e in entries {
-                            if let Ok(e) = e {
-                                if let Some(f) = e.path().file_name() {
-                                    let s = f.to_string_lossy().to_string();
-                                    self.datafile_list.push(s);
-                                }
+                        for e in entries.flatten() {
+                            if let Some(f) = e.path().file_name() {
+                                let s = f.to_string_lossy().to_string();
+                                self.datafile_list.push(s);
                             }
                         }
                     };

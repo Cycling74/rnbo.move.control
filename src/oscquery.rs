@@ -1,4 +1,4 @@
-use {serde::Deserialize, std::collections::HashMap};
+use serde::Deserialize;
 
 #[derive(Deserialize, Debug, Default)]
 pub struct OSCQueryItem<T> {
