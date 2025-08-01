@@ -834,6 +834,8 @@ pub mod top {
             ParamViews + PopupRequested = Popup(LastView::ParamViews),
             Popup(LastView) + PopupTimeout [*state == LastView::Main] = Main,
             Popup(LastView) + PopupTimeout [*state == LastView::ParamViews] = ParamViews,
+            Popup(LastView) + EncTouch(JOG_WHEEL_TOUCH) [*state == LastView::Main] = Main,
+            Popup(LastView) + EncTouch(JOG_WHEEL_TOUCH) [*state == LastView::ParamViews] = ParamViews,
 
             _ + ChildProcessError = DisplayChildProcessError,
             DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
