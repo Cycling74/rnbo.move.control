@@ -878,7 +878,8 @@ pub mod view {
                 { ctx.emit(Cmd::ReportViewParamPage(state.index, (*event).min(ctx.view_param_pages(state.index) - 1))); ctx.emit(Cmd::RenderVisibleParams);} =
                 ViewParams(ParamPage { index: state.index, page: (*event).min(ctx.view_param_pages(state.index) - 1), focused: state.focused }),
 
-            _ + SetViewListChanged = ParamViewMenu(0),
+            _ + SetViewListChanged [ctx.param_view_count() != 1] = ParamViewMenu(0),
+            _ + SetViewListChanged [ctx.param_view_count() == 1] = ViewParams(ParamPage { index: 0, page: 0, focused: None }),
         }
     }
 }
