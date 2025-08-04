@@ -17,11 +17,11 @@ use {
         io::BufReader,
         path::PathBuf,
         rc::Rc,
-        time::{Duration, Instant},
         sync::{
             atomic::{AtomicU8, Ordering as AtomicOrdering},
             mpsc as sync_mpsc, Arc,
         },
+        time::{Duration, Instant},
     },
     tui_widget_list::{ListBuilder, ListState, ListView},
 };
@@ -174,34 +174,18 @@ fn render_param_page(
             .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
             .ratio(focus.norm)
             .use_unicode(true);
-        /*
-        let gauge = ratatui::widgets::LineGauge::default()
-            .label(label)
-            .filled_style(Style::new().white().on_black().bold())
-            .unfilled_style(Style::new().black().on_black().bold())
-            .ratio(focus.norm);
-        */
         frame.render_widget(gauge, layout[2]);
     }
 
     if pages > 1 {
-        let width: usize = (pages as f64).log10().floor() as usize + 1;
-        let label = format!("{:0width$}/{}", page + 1, pages, width = width);
-        let label = Span::raw(label);
-        let ratio = (page as f64 + 1.0) / (pages as f64);
-        /*
-        let gauge = ratatui::widgets::LineGauge::default()
-            .label(label)
-            .filled_style(Style::new().white().on_black().bold())
-            .unfilled_style(Style::new().black().on_black().bold())
-            .ratio(ratio);
-        */
-        let gauge = ratatui::widgets::Gauge::default()
-            .label(label)
-            .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
-            .ratio(ratio)
-            .use_unicode(true);
-        frame.render_widget(gauge, layout[3]);
+        use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+        let sb = Scrollbar::new(ScrollbarOrientation::HorizontalBottom)
+            .begin_symbol(Some("<")) //TODO better unicode characters?
+            .end_symbol(Some(">")); //spleen doesn't have more arrows
+        let mut scrollbar_state = ScrollbarState::new(pages)
+            .position(page)
+            .viewport_content_length(1);
+        frame.render_stateful_widget(sb, layout[3], &mut scrollbar_state);
     }
 }
 fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> bool>(
@@ -504,17 +488,17 @@ impl Default for Popup {
 impl Popup {
     fn new(title: String, content: String) -> Self {
         Self {
-            title, 
+            title,
             content,
-            timeout: Instant::now() + POPUP_PERIOD
+            timeout: Instant::now() + POPUP_PERIOD,
         }
     }
 
     fn new_long(title: String, content: String) -> Self {
         Self {
-            title, 
+            title,
             content,
-            timeout: Instant::now() + 2 * POPUP_PERIOD
+            timeout: Instant::now() + 2 * POPUP_PERIOD,
         }
     }
 
@@ -530,7 +514,6 @@ impl Popup {
         &self.content
     }
 }
-
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Events {
@@ -2512,11 +2495,7 @@ impl StateController {
                 frame.render_widget(title, layout[0]);
 
                 let content = animate_text(self.popup.content(), width, frame.count());
-                let content = vec![
-                    Line::from(""),
-                    Line::from(content),
-                    Line::from(""),
-                ];
+                let content = vec![Line::from(""), Line::from(content), Line::from("")];
                 let paragraph = Paragraph::new(content).alignment(Alignment::Center);
                 frame.render_widget(paragraph, layout[1]);
             }
