@@ -2626,11 +2626,7 @@ impl StateController {
     async fn offset_param(&mut self, index: usize, offset: isize) {
         if let Some(param) = self.params.get_mut(index) {
             let mut args = Vec::new();
-            let step = 0.01; //TODO allow for other step sizes
-                             //operate on the normalized value.. TODO, change step
-            let v = (param.norm() + if offset > 0 { step } else { -step }).clamp(0.0, 1.0);
-            param.set_norm(v);
-            args.push(OscType::Double(v));
+            args.push(OscType::Double(param.offset(offset)));
             let msg = OscMessage {
                 addr: param.addr_norm().to_string(),
                 args,
