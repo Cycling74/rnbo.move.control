@@ -72,7 +72,12 @@ const NORM_PENDING_DELAY: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone)]
 pub enum ParamDetail {
-    Float { val: f64, min: f64, max: f64 },
+    Float {
+        val: f64,
+        min: f64,
+        max: f64,
+        steps: Option<usize>,
+    },
     Bool(bool),
     Enum(usize, Vec<String>),
 }
@@ -90,9 +95,12 @@ pub struct Param {
     detail: ParamDetail,
 
     display_name: Option<String>,
+    display_order: Option<isize>,
 
     norm: f64,
     norm_pending: Option<(f64, Instant)>,
+
+    norm_offset_step: f64, //how much do we step our norm value when we offset via MIDI?
 }
 
 impl Param {
@@ -118,6 +126,10 @@ impl Param {
         self.display_name.as_ref().unwrap_or(&self.name).as_str()
     }
 
+    pub fn display_order(&self) -> isize {
+        self.display_order.unwrap_or(0)
+    }
+
     pub fn norm(&mut self) -> f64 {
         if let Some((v, time)) = self.norm_pending {
             if time + NORM_PENDING_DELAY < Instant::now() {
@@ -141,6 +153,11 @@ impl Param {
         self.norm = v;
     }
 
+    pub fn offset(&mut self, offset: isize) -> f64{
+        self.norm = (self.norm + if offset > 0 { self.norm_offset_step } else { -self.norm_offset_step}).clamp(0.0, 1.0);
+        self.norm
+    }
+
     pub fn set_norm_pending(&mut self, v: f64) {
         self.norm_pending = Some((v, Instant::now()));
     }
@@ -161,8 +178,8 @@ impl Param {
 
     pub fn update_f64(&mut self, val: f64) {
         match self.detail {
-            ParamDetail::Float { min, max, .. } => {
-                self.detail = ParamDetail::Float { val, min, max };
+            ParamDetail::Float { min, max, steps, .. } => {
+                self.detail = ParamDetail::Float { val, min, max, steps };
             }
             _ => (), //XXX error
         }
@@ -189,6 +206,8 @@ impl Param {
             let contents = obj.get("CONTENTS")?;
             let addr_norm = format!("{}/normalized", addr);
 
+            let mut norm_offset_step = 0.01; //TODO customize from meta?
+
             let norm = contents
                 .get("normalized")?
                 .get("VALUE")?
@@ -208,6 +227,9 @@ impl Param {
                 None
             };
 
+
+            let display_order = contents.get("display_order").map(|n| n.get("VALUE")?.as_number()?.as_i64().map(|v| v as isize)).flatten();
+
             match obj.get("TYPE")?.as_str()? {
                 "s" => {
                     let vals: Option<Vec<String>> = range
@@ -223,18 +245,26 @@ impl Param {
                         ParamDetail::Bool(val == "1")
                     } else {
                         let index = vals.iter().position(|v| v == val).unwrap_or(0);
+                        //normalized value is 0..1 inclusive so 
+                        //a 2 entry enum would be: 
+                        //1.0 / (2 * 2 - 1) =  0.333 -> 0, 0.33 | 0.66, 1.0
+                        //a 3 entry enum would be: 
+                        //1.0 / (2 * 3 - 1) =  0.2 -> 0, 0.2 | 0.4, 0.6 | 0.8, 1.0
+                        norm_offset_step = 1.0 / (2.0 * vals.len() as f64 - 1.0); //half a step per change
                         ParamDetail::Enum(index, vals)
                     };
                     Some(Param {
                         index,
                         instance_index,
                         display_name,
+                        display_order,
                         addr,
                         addr_norm,
                         name,
                         detail,
                         norm,
                         norm_pending: None,
+                        norm_offset_step,
                     })
                 }
                 "f" => {
@@ -243,17 +273,25 @@ impl Param {
                         range.get("MIN")?.as_number()?.as_f64()?,
                         range.get("MAX")?.as_number()?.as_f64()?,
                     );
-                    let detail = ParamDetail::Float { val, min, max };
+                    let steps = contents.get("steps").map(|s| s.get("VALUE")?.as_number()?.as_i64().map(|v| v as usize)).flatten();
+                    let detail = ParamDetail::Float { val, min, max, steps };
+                    if let Some(steps) = steps {
+                        if steps > 1 {
+                            norm_offset_step = 1.0 / (2.0 * steps as f64 - 1.0); //0..1 inclusive
+                        }
+                    }
                     Some(Param {
                         index,
                         instance_index,
                         display_name,
+                        display_order,
                         addr,
                         addr_norm,
                         name,
                         detail,
                         norm,
                         norm_pending: None,
+                        norm_offset_step,
                     })
                 }
                 _ => None,
