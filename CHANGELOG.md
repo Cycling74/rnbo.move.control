@@ -1,3 +1,5 @@
+* **current**
+    * using param `steps` and `enum` values to inform normalized parameter updates and better reach all steps of enum and stepped values
 * **0.1.0-beta.9**
     * added Graph Preset Features
         * Save (currently the name is automatically created from the current time)
