@@ -2109,7 +2109,10 @@ impl StateController {
 
         match state {
             States::Menu(selected) => {
-                setup_common(line!(), self);
+                self.do_once(line!(), |s| {
+                    s.clear_visible_params();
+                    s.render_buttons([(MENU_MIDI, MoveColor::LightGray)]);
+                });
                 let indicator = |index: usize| -> &'static char {
                     let ctx = self.context();
                     match index {
