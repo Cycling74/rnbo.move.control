@@ -1475,10 +1475,26 @@ impl StateController {
         self.handle_event(Events::PatcherNamesChanged);
     }
 
-    pub async fn set_set_preset_names(&mut self, names: Vec<String>) {
+    pub async fn set_set_preset_names(&mut self, mut names: Vec<String>) {
         let mut common = self.sm.context().common();
         common.set_presets_count = names.len();
         self.update_common(common);
+
+        names.sort_by(|a, b| {
+            use {
+                unicase::UniCase,
+                std::cmp::Ordering
+            };
+            if a == "initial" {
+                Ordering::Less
+            } else if b == "initial" {
+                Ordering::Greater
+            } else {
+                let a = UniCase::new(a);
+                let b = UniCase::new(b);
+                a.partial_cmp(&b).unwrap()
+            }
+        });
 
         self.set_preset_names = names;
 
