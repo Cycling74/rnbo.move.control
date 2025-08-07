@@ -1120,14 +1120,16 @@ async fn start_jack(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    //set HOME if it doesn't already exist
-    if std::env::var_os("HOME").is_none() {
-        std::env::set_var("HOME", "/data/UserData/");
-    }
+    unsafe {
+        //set HOME if it doesn't already exist
+        if std::env::var_os("HOME").is_none() {
+            std::env::set_var("HOME", "/data/UserData/");
+        }
 
-    //hack, for some reason running setcap on this executable will unset TMPDIR after it starts
-    //set it again
-    std::env::set_var("TMPDIR", "/data/UserData/Scratch/");
+        //hack, for some reason running setcap on this executable will unset TMPDIR after it starts
+        //set it again
+        std::env::set_var("TMPDIR", "/data/UserData/Scratch/");
+    }
 
     let args = Args::parse();
     let homedir = home::home_dir().expect("to get home directory");

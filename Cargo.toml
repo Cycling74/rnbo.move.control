@@ -1,7 +1,7 @@
 [package]
 name = "rnbomovecontrol"
 version = "0.1.0-beta.9"
-edition = "2021"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -34,3 +34,4 @@ mousefood = { git = "https://github.com/x37v/mousefood", branch = "main" }
 ratatui = { version = "0.30.0-alpha.5", default-features = false }
 tui-widget-list = { git = "https://github.com/x37v/tui-widget-list/", branch = "ratatui-core" }
 chrono = "0.4.41"
+once_cell = "1.21.3"

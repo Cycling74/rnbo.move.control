@@ -1551,6 +1551,7 @@ dependencies = [
  "jack",
  "libc",
  "mousefood",
+ "once_cell",
  "pad",
  "palette",
  "profont",
