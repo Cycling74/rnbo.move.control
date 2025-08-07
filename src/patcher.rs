@@ -123,6 +123,13 @@ impl PatcherInst {
     pub fn alias(&self) -> Option<&String> {
         self.alias.as_ref()
     }
+    pub fn alias_or_index_name(&self) -> String {
+        self.alias.clone().unwrap_or_else(|| format!("{}: {}", self.index, self.name))
+    }
+    pub fn set_alias(&mut self, alias: Option<String>) {
+        self.alias = alias;
+    }
+
     pub fn params(&self) -> &Vec<Param> {
         &self.params
     }
