@@ -1053,6 +1053,9 @@ pub struct StateController {
 
     visible_params: Vec<usize>,
 
+    param_values: [Srgb<u8>; 8],
+    param_values_last: [Srgb<u8>; 8],
+
     //(sparce instance index, param_id) -> (local instance_index, param index)
     instance_param_map: HashMap<(usize, String), (usize, usize)>,
 
@@ -1275,6 +1278,9 @@ impl StateController {
 
             instance_params: Vec::new(),
             visible_params: Vec::new(),
+
+            param_values: [Srgb::new(0, 0, 0); 8],
+            param_values_last: [Srgb::new(255, 255, 255); 8],
 
             instance_param_map: HashMap::new(),
             instance_alias_map: HashMap::new(),
@@ -1800,6 +1806,7 @@ impl StateController {
                                     }
                                     _ => None,
                                 };
+                                /*
                                 if let Some(sparce) = v {
                                     //TODO throttle?
 
@@ -1820,6 +1827,7 @@ impl StateController {
                                         self.handle_event(Events::VisibleParamUpdated(location));
                                     }
                                 }
+                                */
                             }
                         }
                     } else if let Some((index, name)) = self.dataref_lookup.get(&msg.addr) {
@@ -2068,6 +2076,17 @@ impl StateController {
         std::mem::swap(&mut tracked, &mut self.tracked_buttons);
     }
 
+    fn render_params(&mut self) {
+        for (location, (l, v)) in self.param_values_last.iter_mut().zip(self.param_values.iter()).enumerate() {
+            if l != v {
+                *l = *v;
+                for m in led_color(location as _, v) {
+                    let _ = self.midi_out_queue.send(m);
+                }
+            }
+        }
+    }
+
     fn render_param_views(&mut self, frame: &mut ratatui::Frame) {
         use view::States;
         let s = self.viewsm.state().clone();
@@ -2108,12 +2127,23 @@ impl StateController {
                 {
                     let offset = page * PARAM_PAGE_SIZE;
 
+                    /*
                     self.visible_params = params
                         .iter()
                         .skip(offset)
                         .take(PARAM_PAGE_SIZE)
                         .copied()
                         .collect();
+                    */
+
+                    for (pindex, o) in params.iter()
+                        .skip(offset)
+                            .take(PARAM_PAGE_SIZE)
+                            .zip(self.param_values.iter_mut()) {
+                                if let Some(param) = self.params.get(*pindex) {
+                                    *o = param.color();
+                                }
+                            }
 
                     let pages = self.context().view_param_pages(index);
                     let mut title = format!("View: {}", name);
@@ -2332,12 +2362,17 @@ impl StateController {
                 let mut focus: Option<ParamFocus> = None;
                 if let Some(instance) = self.instance_params.get(index) {
                     let offset = page * PARAM_PAGE_SIZE;
-                    self.visible_params = instance
-                        .iter()
+
+                    for (pindex, o) in instance.iter()
                         .skip(offset)
-                        .take(PARAM_PAGE_SIZE)
-                        .copied()
-                        .collect();
+                            .take(PARAM_PAGE_SIZE)
+                            .zip(self.param_values.iter_mut()) {
+                                if let Some(param) = self.params.get(*pindex) {
+                                    *o = param.color();
+                                }
+                            }
+
+
                     if let Some(focused) = focused {
                         let pindex = offset + focused;
                         if let Some(pindex) = instance.get(pindex) {
@@ -2438,6 +2473,7 @@ impl StateController {
         use top::States;
 
         let state = self.topsm.state().clone();
+        self.param_values = [Srgb::new(0, 0, 0); 8]; //clear out params, they may then get updated
         match state {
             States::Init => {
                 self.do_once(line!(), |s| {
@@ -2568,6 +2604,7 @@ impl StateController {
             States::Main => self.render_main(frame),
             States::ParamViews => self.render_param_views(frame),
         }
+        self.render_params();
     }
 
     fn request_popup<S1: Into<String>, S2: Into<String>>(&mut self, title: S1, content: S2) {
@@ -2595,7 +2632,10 @@ impl StateController {
                     self.send_power_cmd(PowerCommand::PowerOff);
                 }
                 //transitions
-                States::Main | States::ParamViews => self.clear_visible_params(),
+                States::Main | States::ParamViews => {
+                    self.line_token = 0; //reset do once
+                    self.clear_visible_params();
+                }
                 _ => (),
             }
         }
@@ -2762,6 +2802,7 @@ impl StateController {
                 Cmd::LightButton { btn, val } => self.light_button(btn, val),
 
                 Cmd::RenderVisibleParams => {
+                    /*
                     for i in 0..PARAM_PAGE_SIZE {
                         if let Some(index) = self.visible_params.get(i) {
                             self.render_param_at(*index, i);
@@ -2769,6 +2810,7 @@ impl StateController {
                             self.clear_param(i);
                         }
                     }
+                    */
                 }
                 Cmd::LoadSet(index) => {
                     if index == 0 {
@@ -2921,10 +2963,13 @@ impl StateController {
     }
 
     fn clear_visible_params(&mut self) {
+        /*
+        self.param_values = Default::default();
         if !self.visible_params.is_empty() {
             self.visible_params.clear();
             self.clear_params();
         }
+        */
     }
 
     async fn send_osc(&mut self, msg: OscMessage) {
