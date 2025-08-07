@@ -7,6 +7,7 @@ use {
 pub struct PatcherInst {
     index: usize,
     name: String,
+    alias: Option<String>,
     params: Vec<Param>,
     presets: Vec<String>,
     datarefs: BTreeMap<String, Dataref>,
@@ -119,6 +120,9 @@ impl PatcherInst {
     pub fn name(&self) -> &str {
         &self.name
     }
+    pub fn alias(&self) -> Option<&String> {
+        self.alias.as_ref()
+    }
     pub fn params(&self) -> &Vec<Param> {
         &self.params
     }
@@ -192,9 +196,27 @@ impl PatcherInst {
         let presets = parse_presets(contents).unwrap_or_default();
         let datarefs = parse_datarefs(contents).unwrap_or_default();
 
+        let get_alias = || -> Option<String> {
+            let alias = contents
+                .get("config")?
+                .as_object()?
+                .get("CONTENTS")?
+                .as_object()?
+                .get("name_alias")?
+                .as_object()?
+                .get("VALUE")?
+                .as_str()?;
+            if alias.len() > 0 {
+                Some(alias.to_string())
+            } else {
+                None
+            }
+        };
+
         let mut inst = PatcherInst {
             index,
             name,
+            alias: get_alias(),
             params,
             presets,
             datarefs,

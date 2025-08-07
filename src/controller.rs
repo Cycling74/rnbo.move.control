@@ -1052,6 +1052,9 @@ pub struct StateController {
     //(sparce instance index, param_id) -> (local instance_index, param index)
     instance_param_map: HashMap<(usize, String), (usize, usize)>,
 
+    //sparce instance index -> alias
+    instance_alias_map: HashMap<usize, String>,
+
     param_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
     param_norm_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
     dataref_lookup: HashMap<String, (usize, String)>, //OSC addr -> (index into self.instances, datarefname)
@@ -1270,6 +1273,7 @@ impl StateController {
             visible_params: Vec::new(),
 
             instance_param_map: HashMap::new(),
+            instance_alias_map: HashMap::new(),
 
             param_lookup: HashMap::new(),
             param_norm_lookup: HashMap::new(),
@@ -1333,6 +1337,7 @@ impl StateController {
         self.patchers_datarefs_instance_names.clear();
         self.patchers_params_instance_indexes.clear();
         self.patchers_datarefs_instance_indexes.clear();
+        self.instance_alias_map.clear();
 
         self.params.clear();
         self.instance_params.clear();
@@ -1348,7 +1353,12 @@ impl StateController {
 
         for key in indexes.iter() {
             let inst = instances.remove(key).unwrap();
-            let name = format!("{}: {}", inst.index(), inst.name());
+            let name = if let Some(alias) = inst.alias() {
+                self.instance_alias_map.insert(inst.index(), alias.clone());
+                alias.clone()
+            } else {
+                format!("{}: {}", inst.index(), inst.name())
+            };
 
             if !inst.params().is_empty() {
                 let mut instindexes = Vec::new();
@@ -2061,18 +2071,26 @@ impl StateController {
                         .collect();
 
                     let pages = self.context().view_param_pages(index);
-                    let title = format!("View: {}", name);
+                    let mut title = format!("View: {}", name);
 
                     let mut focus: Option<ParamFocus> = None;
                     if let Some(focused) = focused {
                         let pindex = offset + focused;
                         if let Some(pindex) = params.get(pindex) {
                             if let Some(param) = self.params.get(*pindex) {
+                                /*
                                 let label = format!(
                                     "inst: {} - {}",
                                     param.instance_index(),
                                     param.display_name(),
                                 );
+                                */
+                                title = if let Some(alias) = self.instance_alias_map.get(&param.instance_index()) {
+                                    alias.clone()
+                                } else {
+                                    format!("inst: {}", param.instance_index())
+                                };
+                                let label = param.display_name().to_string();
                                 let value = param.render_value();
                                 let norm = param.norm_prefer_pending();
 
