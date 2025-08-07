@@ -2,12 +2,14 @@ use {
     crate::{config::Config, midi::Midi, param::Param, patcher::PatcherInst, view::ParamView},
     futures_util::{stream::SplitSink, SinkExt},
     palette::{Darken, Srgb},
+    once_cell::sync::Lazy,
     ratatui::{
         layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
         style::{Color, Modifier, Style},
         text::{Line, Span, Text},
         widgets::Paragraph,
     },
+    regex::Regex,
     reqwest_websocket::{Message, WebSocket},
     rosc::{OscMessage, OscPacket, OscType},
     std::{
@@ -57,6 +59,8 @@ pub const SET_PRESETS_DELETE_ADDR: &str = "/rnbo/inst/control/sets/presets/destr
 pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loaded";
 pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
 pub const SET_VIEWS_ORDER_ADDR: &str = "/rnbo/inst/control/sets/views/order";
+
+static INST_ALIAS_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"/rnbo/inst/(\d*)/config/name_alias").expect("to build name_alias regex"));
 
 pub const SET_VIEW_DISPLAY: &str = "/rnboctl/view/display";
 pub const SET_VIEW_PAGE_DISPLAY: &str = "/rnboctl/view/page";
@@ -1727,7 +1731,15 @@ impl StateController {
                     }
                 }
                 _ => {
-                    if let Some(index) = self.param_lookup.get(&msg.addr) {
+                    if let Some(captures) = INST_ALIAS_REGEX.captures(&msg.addr) {
+                        let index = captures.get(1).expect("to get instance index").as_str().parse::<usize>().expect("index to parse to usize");
+                        //TODO update internal names
+                        if msg.args.len() >= 1 && let OscType::String(v) = &msg.args[0] && v.len() > 0 {
+                            self.instance_alias_map.insert(index, v.clone());
+                        } else {
+                            let _ = self.instance_alias_map.remove(&index);
+                        }
+                    } else if let Some(index) = self.param_lookup.get(&msg.addr) {
                         if let Some(param) = self.params.get_mut(*index) {
                             if msg.args.len() == 1 {
                                 //ignore, we wait for normalized
