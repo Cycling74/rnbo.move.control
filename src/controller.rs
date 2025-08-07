@@ -1077,7 +1077,7 @@ pub struct StateController {
     patchers_params_instance_names: Vec<String>, //only those that have params
     patchers_datarefs_instance_names: Vec<String>, //only those that have datarefs
 
-    patchers_params_instance_indexes: Vec<usize>, //only those that have params, index into self.params
+    patchers_params_instance_indexes: Vec<usize>, //only those that have params, index into self.instances
     patchers_datarefs_instance_indexes: Vec<usize>, //only those that have datarefs, index into self.instances
 
     child_process_error: Option<(String, std::io::Result<std::process::ExitStatus>)>,
@@ -1356,17 +1356,16 @@ impl StateController {
         common.dataref_count.clear();
 
         for key in indexes.iter() {
+            let local_instance_index = self.instances.len();
+
+
             let inst = instances.remove(key).unwrap();
-            let name = if let Some(alias) = inst.alias() {
-                self.instance_alias_map.insert(inst.index(), alias.clone());
-                alias.clone()
-            } else {
-                format!("{}: {}", inst.index(), inst.name())
-            };
+            let name = inst.alias_or_index_name();
+            self.instance_alias_map.insert(inst.index(), name.clone());
 
             if !inst.params().is_empty() {
                 let mut instindexes = Vec::new();
-                let local_instance_index = self.patchers_params_instance_names.len();
+                let local_param_instance_index = self.patchers_params_instance_names.len();
                 self.patchers_params_instance_names.push(name.clone());
                 self.patchers_params_instance_indexes
                     .push(local_instance_index);
@@ -1388,14 +1387,13 @@ impl StateController {
                         .insert(p.addr_norm().to_string(), index);
                     self.instance_param_map.insert(
                         (p.instance_index(), p.name().to_string()),
-                        (local_instance_index, local_param_index),
+                        (local_param_instance_index, local_param_index),
                     );
                 }
                 self.instance_params.push(instindexes);
             }
 
             {
-                let local_instance_index = self.instances.len();
                 let visible = inst.visible_datarefs();
                 if !visible.is_empty() {
                     self.patchers_datarefs_instance_names.push(name.clone());
@@ -1428,6 +1426,18 @@ impl StateController {
         self.update_common(common);
 
         self.handle_event(Events::InstancesChanged(indexes.len()));
+    }
+
+    //rewrite the names we use based on aliases (if they exist)
+    fn update_patcher_instance_names(&mut self) {
+        self.patchers_params_instance_names = self.patchers_params_instance_indexes.iter().map(|index| {
+            let inst = self.instances.get(*index).expect("to get instance");
+            inst.alias_or_index_name()
+        }).collect();
+        self.patchers_datarefs_instance_names = self.patchers_datarefs_instance_indexes.iter().map(|index| {
+            let inst = self.instances.get(*index).expect("to get instance");
+            inst.alias_or_index_name()
+        }).collect();
     }
 
     pub async fn set_set_current_name(&mut self, name: Option<String>) {
@@ -1733,12 +1743,19 @@ impl StateController {
                 _ => {
                     if let Some(captures) = INST_ALIAS_REGEX.captures(&msg.addr) {
                         let index = captures.get(1).expect("to get instance index").as_str().parse::<usize>().expect("index to parse to usize");
-                        //TODO update internal names
-                        if msg.args.len() >= 1 && let OscType::String(v) = &msg.args[0] && v.len() > 0 {
-                            self.instance_alias_map.insert(index, v.clone());
+                        let alias = if msg.args.len() >= 1 && let OscType::String(v) = &msg.args[0] && v.len() > 0 {
+                            Some(v.clone())
                         } else {
-                            let _ = self.instance_alias_map.remove(&index);
+                            None
+                        };
+                        for i in self.instances.iter_mut() {
+                            if i.index() == index {
+                                i.set_alias(alias);
+                                self.instance_alias_map.insert(index, i.alias_or_index_name());
+                                break;
+                            }
                         }
+                        self.update_patcher_instance_names();
                     } else if let Some(index) = self.param_lookup.get(&msg.addr) {
                         if let Some(param) = self.params.get_mut(*index) {
                             if msg.args.len() == 1 {
