@@ -63,12 +63,22 @@
 }
 */
 
-use std::{
-    cmp::PartialOrd,
-    time::{Duration, Instant},
+use {
+    std::{
+        cmp::PartialOrd,
+        time::{Duration, Instant},
+    },
+    palette::{Darken, Srgb},
 };
 
 const NORM_PENDING_DELAY: Duration = Duration::from_millis(50);
+
+fn get_color(v: f64) -> Srgb<u8> {
+    let cap = 0.96;
+
+    //TODO get from metdata?
+    Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap).into_format()
+}
 
 #[derive(Debug, Clone)]
 pub enum ParamDetail {
@@ -101,6 +111,8 @@ pub struct Param {
     norm_pending: Option<(f64, Instant)>,
 
     norm_offset_step: f64, //how much do we step our norm value when we offset via MIDI?
+
+    color: Srgb<u8>
 }
 
 impl Param {
@@ -128,6 +140,10 @@ impl Param {
 
     pub fn display_order(&self) -> isize {
         self.display_order.unwrap_or(0)
+    }
+
+    pub fn color(&self) -> Srgb<u8> {
+        self.color
     }
 
     pub fn norm(&mut self) -> f64 {
@@ -159,6 +175,7 @@ impl Param {
     }
 
     pub fn set_norm_pending(&mut self, v: f64) {
+        self.color = get_color(v);
         self.norm_pending = Some((v, Instant::now()));
     }
 
@@ -215,6 +232,7 @@ impl Param {
                 .as_f64()?;
 
             let index = contents.get("index")?.get("VALUE")?.as_number()?.as_u64()? as usize;
+            let color = get_color(norm);
 
             let display_name = if let Some(n) = contents.get("display_name") {
                 let v = n.get("VALUE")?.as_str()?;
@@ -245,10 +263,10 @@ impl Param {
                         ParamDetail::Bool(val == "1")
                     } else {
                         let index = vals.iter().position(|v| v == val).unwrap_or(0);
-                        //normalized value is 0..1 inclusive so 
-                        //a 2 entry enum would be: 
+                        //normalized value is 0..1 inclusive so
+                        //a 2 entry enum would be:
                         //1.0 / (2 * 2 - 1) =  0.333 -> 0, 0.33 | 0.66, 1.0
-                        //a 3 entry enum would be: 
+                        //a 3 entry enum would be:
                         //1.0 / (2 * 3 - 1) =  0.2 -> 0, 0.2 | 0.4, 0.6 | 0.8, 1.0
                         norm_offset_step = 1.0 / (2.0 * vals.len() as f64 - 1.0); //half a step per change
                         ParamDetail::Enum(index, vals)
@@ -265,6 +283,7 @@ impl Param {
                         norm,
                         norm_pending: None,
                         norm_offset_step,
+                        color,
                     })
                 }
                 "f" => {
@@ -292,6 +311,7 @@ impl Param {
                         norm,
                         norm_pending: None,
                         norm_offset_step,
+                        color,
                     })
                 }
                 _ => None,
