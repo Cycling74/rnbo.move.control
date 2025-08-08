@@ -64,7 +64,9 @@
 */
 
 use {
+    crate::util::parse_meta,
     palette::{Darken, Srgb},
+    serde_json::Value,
     std::{
         cmp::PartialOrd,
         time::{Duration, Instant},
@@ -113,6 +115,8 @@ pub struct Param {
     norm_offset_step: f64, //how much do we step our norm value when we offset via MIDI?
 
     color: Srgb<u8>,
+
+    meta: Value,
 }
 
 impl Param {
@@ -228,6 +232,28 @@ impl Param {
         }
     }
 
+    //returns true if visibility changes
+    pub fn set_meta(&mut self, meta: &Value) -> bool {
+        let hidden = self.hidden();
+        self.meta = meta.clone();
+        hidden != self.hidden()
+    }
+
+    pub fn meta(&self) -> &Value {
+        &self.meta
+    }
+
+    pub fn hidden(&self) -> bool {
+        if let Some(meta) = self.meta.as_object()
+            && meta.contains_key("hidden")
+            && let Some(hidden) = meta.get("hidden")
+            && let Some(v) = hidden.as_bool()
+        {
+            return v;
+        }
+        false
+    }
+
     pub fn parse(instance_index: usize, json: &serde_json::Value) -> Option<Self> {
         if let serde_json::Value::Object(obj) = json {
             let range = obj.get("RANGE")?.as_array()?.first()?.as_object()?;
@@ -243,6 +269,8 @@ impl Param {
                 .get("VALUE")?
                 .as_number()?
                 .as_f64()?;
+
+            let meta = parse_meta(contents).unwrap_or(Value::Null);
 
             let index = contents.get("index")?.get("VALUE")?.as_number()?.as_u64()? as usize;
             let color = get_color(norm);
@@ -298,6 +326,7 @@ impl Param {
                         norm_pending: None,
                         norm_offset_step,
                         color,
+                        meta,
                     })
                 }
                 "f" => {
@@ -333,6 +362,7 @@ impl Param {
                         norm_pending: None,
                         norm_offset_step,
                         color,
+                        meta,
                     })
                 }
                 _ => None,

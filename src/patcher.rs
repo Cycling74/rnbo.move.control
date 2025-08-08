@@ -1,5 +1,5 @@
 use {
-    crate::param::Param,
+    crate::{param::Param, util::parse_meta},
     serde_json::Value,
     std::collections::{BTreeMap, HashMap},
 };
@@ -31,18 +31,6 @@ fn parse_presets(contents: &serde_json::Map<String, serde_json::Value>) -> Optio
     }
 
     Some(presets)
-}
-
-fn parse_meta(body: &Value) -> Option<Value> {
-    let meta = body
-        .as_object()?
-        .get("CONTENTS")?
-        .as_object()?
-        .get("meta")?
-        .as_object()?
-        .get("VALUE")?
-        .as_str()?;
-    serde_json::from_str(meta).ok()
 }
 
 fn parse_datarefs(
