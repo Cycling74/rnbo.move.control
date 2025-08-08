@@ -47,11 +47,10 @@ impl ParamView {
 
     pub fn parse_param_s(v: &str) -> Result<(usize, String), ()> {
         let mut split = v.split(":");
-        if let Some(Ok(instance)) = split.next().map(|p| p.parse::<usize>()) {
-            if let Some(param_id) = split.next() {
+        if let Some(Ok(instance)) = split.next().map(|p| p.parse::<usize>())
+            && let Some(param_id) = split.next() {
                 return Ok((instance, param_id.to_string()));
             }
-        }
         Err(())
     }
 

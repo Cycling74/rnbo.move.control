@@ -168,18 +168,15 @@ impl jack::NotificationHandler for ConnectionControl {
         are_connected: bool,
     ) {
         //don't allow anything to connect to system display, system midi port, our midi in port or our display port except us
-        if are_connected {
-            if let (Some(a), Some(b)) = (client.port_by_id(port_id_a), client.port_by_id(port_id_b))
-            {
-                if (a != self.display_port && b == self.system_display_port)
+        if are_connected
+            && let (Some(a), Some(b)) = (client.port_by_id(port_id_a), client.port_by_id(port_id_b))
+                && ((a != self.display_port && b == self.system_display_port)
                     || (a == self.display_port && b != self.system_display_port)
                     || (a == self.system_midi_out_port && b != self.midi_in_port)
-                    || (a != self.system_midi_out_port && b == self.midi_in_port)
+                    || (a != self.system_midi_out_port && b == self.midi_in_port))
                 {
                     let _ = self.disconnect_queue.try_send((port_id_a, port_id_b));
                 }
-            }
-        }
     }
 }
 
@@ -654,8 +651,8 @@ async fn with_client(
             tokio::time::sleep(HTTP_QUERY_DELAY).await;
             {
                 let mut g = sets_query.lock().await;
-                if let Some(v) = g.deref() {
-                    if *v <= Instant::now() {
+                if let Some(v) = g.deref()
+                    && *v <= Instant::now() {
                         if let Some(names) = get_string_range(
                             "http://127.0.0.1:5678/rnbo/inst/control/sets/load?RANGE",
                         )
@@ -676,13 +673,12 @@ async fn with_client(
                             g.set_set_preset_names(names).await;
                         }
                     }
-                }
             }
 
             {
                 let mut g = inst_query.lock().await;
-                if let Some(v) = g.deref() {
-                    if *v <= Instant::now() {
+                if let Some(v) = g.deref()
+                    && *v <= Instant::now() {
                         //println!("got instance update");
                         if let Ok(inst) = get_instances().await {
                             *g = None;
@@ -696,43 +692,36 @@ async fn with_client(
                             }
                         }
                     }
-                }
             }
             {
                 let mut g = set_current_query.lock().await;
-                if let Some(v) = g.deref() {
-                    if *v <= Instant::now() {
-                        if let Ok(name) = get_current_set_name().await {
+                if let Some(v) = g.deref()
+                    && *v <= Instant::now()
+                        && let Ok(name) = get_current_set_name().await {
                             *g = None;
                             let mut g = state.lock().await;
                             g.set_set_current_name(name).await;
                         }
-                    }
-                }
             }
             {
                 let mut g = views_query.lock().await;
-                if let Some(v) = g.deref() {
-                    if *v <= Instant::now() {
-                        if let Ok(views) = get_views().await {
+                if let Some(v) = g.deref()
+                    && *v <= Instant::now()
+                        && let Ok(views) = get_views().await {
                             *g = None;
                             let mut g = state.lock().await;
                             g.set_param_views(views).await;
                         }
-                    }
-                }
             }
             {
                 let mut g = patchers_query.lock().await;
-                if let Some(v) = g.deref() {
-                    if *v <= Instant::now() {
-                        if let Ok(names) = get_patcher_names().await {
+                if let Some(v) = g.deref()
+                    && *v <= Instant::now()
+                        && let Ok(names) = get_patcher_names().await {
                             *g = None;
                             let mut g = state.lock().await;
                             g.set_patcher_names(names).await;
                         }
-                    }
-                }
             }
         }
     };
@@ -779,8 +768,7 @@ async fn with_client(
                     .upgrade()
                     .send()
                     .await
-                {
-                    if let Ok(websocket) = res.into_websocket().await {
+                    && let Ok(websocket) = res.into_websocket().await {
                         let (tx, mut rx) = websocket.split();
 
                         {
@@ -823,12 +811,12 @@ async fn with_client(
                                     Message::Text(text) => {
                                         let cmd: serde_json::Result<serde_json::Value> =
                                             serde_json::from_str(text.as_str());
-                                        if let Ok(cmd) = cmd {
-                                            if let (Some(name), Some(data)) = (
+                                        if let Ok(cmd) = cmd
+                                            && let (Some(name), Some(data)) = (
                                                 cmd.get("COMMAND").unwrap().as_str(),
                                                 cmd.get("DATA"),
-                                            ) {
-                                                if let Some(path) = match name {
+                                            )
+                                                && let Some(path) = match name {
                                                     "ATTRIBUTES_CHANGED" => {
                                                         match data
                                                             .get("FULL_PATH")
@@ -893,8 +881,6 @@ async fn with_client(
                                                         );
                                                     }
                                                 }
-                                            }
-                                        }
                                     }
                                     Message::Binary(vec) => {
                                         if let Ok((_, OscPacket::Message(m))) =
@@ -908,7 +894,6 @@ async fn with_client(
                             }
                         }
                     }
-                }
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -1195,14 +1180,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::time::sleep(Duration::from_millis(pollms)).await;
     loop {
         tokio::time::sleep(Duration::from_millis(10)).await;
-        if let Some(jack) = &jack_handle {
-            if jack.is_finished() {
+        if let Some(jack) = &jack_handle
+            && jack.is_finished() {
                 //TODO retry jack?
                 let _ = logger.err("failed to start jack");
                 jack_handle = None;
                 break;
             }
-        }
         if let Ok((c, _status)) = Client::new(name, ClientOptions::NO_START_SERVER) {
             if let Err(e) = with_client(c, &mut logger, &tostartup, &config, caps).await {
                 let _ = logger.err(e);

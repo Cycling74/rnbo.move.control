@@ -147,12 +147,11 @@ impl Param {
     }
 
     pub fn norm(&mut self) -> f64 {
-        if let Some((v, time)) = self.norm_pending {
-            if time + NORM_PENDING_DELAY < Instant::now() {
+        if let Some((v, time)) = self.norm_pending
+            && time + NORM_PENDING_DELAY < Instant::now() {
                 self.norm = v;
                 self.norm_pending = None;
             }
-        }
         self.norm
     }
 
@@ -246,7 +245,7 @@ impl Param {
             };
 
 
-            let display_order = contents.get("display_order").map(|n| n.get("VALUE")?.as_number()?.as_i64().map(|v| v as isize)).flatten();
+            let display_order = contents.get("display_order").and_then(|n| n.get("VALUE")?.as_number()?.as_i64().map(|v| v as isize));
 
             match obj.get("TYPE")?.as_str()? {
                 "s" => {
@@ -292,13 +291,12 @@ impl Param {
                         range.get("MIN")?.as_number()?.as_f64()?,
                         range.get("MAX")?.as_number()?.as_f64()?,
                     );
-                    let steps = contents.get("steps").map(|s| s.get("VALUE")?.as_number()?.as_i64().map(|v| v as usize)).flatten();
+                    let steps = contents.get("steps").and_then(|s| s.get("VALUE")?.as_number()?.as_i64().map(|v| v as usize));
                     let detail = ParamDetail::Float { val, min, max, steps };
-                    if let Some(steps) = steps {
-                        if steps > 1 {
+                    if let Some(steps) = steps
+                        && steps > 1 {
                             norm_offset_step = 1.0 / (2.0 * steps as f64 - 1.0); //0..1 inclusive
                         }
-                    }
                     Some(Param {
                         index,
                         instance_index,

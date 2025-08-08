@@ -100,15 +100,12 @@ impl Dataref {
     }
 
     pub fn hidden(&self) -> bool {
-        if let Some(meta) = self.meta.as_object() {
-            if meta.contains_key("hidden") {
-                if let Some(hidden) = meta.get("hidden") {
-                    if let Some(v) = hidden.as_bool() {
+        if let Some(meta) = self.meta.as_object()
+            && meta.contains_key("hidden")
+                && let Some(hidden) = meta.get("hidden")
+                    && let Some(v) = hidden.as_bool() {
                         return v;
                     }
-                }
-            }
-        }
         false
     }
 }
@@ -213,7 +210,7 @@ impl PatcherInst {
                 .as_object()?
                 .get("VALUE")?
                 .as_str()?;
-            if alias.len() > 0 {
+            if !alias.is_empty() {
                 Some(alias.to_string())
             } else {
                 None
