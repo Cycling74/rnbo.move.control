@@ -65,6 +65,10 @@ static INST_ALIAS_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"/rnbo/inst/(\d*)/config/name_alias").expect("to build name_alias regex")
 });
 
+static PARAM_META_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"/rnbo/inst/(\d*)/params/(.+)/meta").expect("to build param hidden regex")
+});
+
 pub const SET_VIEW_DISPLAY: &str = "/rnboctl/view/display";
 pub const SET_VIEW_PAGE_DISPLAY: &str = "/rnboctl/view/page";
 
@@ -1368,20 +1372,11 @@ impl StateController {
             if !inst.params().is_empty() {
                 let mut instindexes = Vec::new();
                 let local_param_instance_index = self.patchers_params_instance_names.len();
-                self.patchers_params_instance_names.push(name.clone());
-                self.patchers_params_instance_indexes
-                    .push(local_instance_index);
 
-                common
-                    .instance_param_pages
-                    .push(param_pages(inst.params().len()));
-
-                for p in inst.params().iter() {
+                for (local_param_index, p) in inst.params().iter().enumerate() {
                     let index = self.params.len();
-                    let local_param_index = instindexes.len();
 
                     self.params.push(p.clone());
-                    instindexes.push(index);
 
                     //setup maps
                     self.param_lookup.insert(p.addr().to_string(), index);
@@ -1391,8 +1386,21 @@ impl StateController {
                         (p.instance_index(), p.name().to_string()),
                         (local_param_instance_index, local_param_index),
                     );
+
+                    if p.visible() {
+                        instindexes.push(index);
+                    }
                 }
-                self.instance_params.push(instindexes);
+
+                if instindexes.len() > 0 {
+                    common
+                        .instance_param_pages
+                        .push(param_pages(instindexes.len()));
+                    self.instance_params.push(instindexes);
+                    self.patchers_params_instance_names.push(name.clone());
+                    self.patchers_params_instance_indexes
+                        .push(local_instance_index);
+                }
             }
 
             {
@@ -1428,6 +1436,60 @@ impl StateController {
         self.update_common(common);
 
         self.handle_event(Events::InstancesChanged(indexes.len()));
+    }
+
+    fn update_instance_params(&mut self) {
+        self.instance_params.clear();
+        self.patchers_params_instance_names.clear();
+        self.patchers_params_instance_indexes.clear();
+
+        let mut common = self.sm.context().common();
+        common.instance_param_pages.clear();
+
+        let mut push_data = |inst_index: usize,
+                             instindexes: &mut Vec<usize>,
+                             instance_params: &mut Vec<Vec<usize>>| {
+            if instindexes.len() > 0
+                && let Some(local_instance_index) =
+                    self.instances.iter().position(|i| i.index() == inst_index)
+            {
+                common
+                    .instance_param_pages
+                    .push(param_pages(instindexes.len()));
+                instance_params.push(std::mem::take(instindexes));
+                self.patchers_params_instance_names
+                    .push(self.instances[local_instance_index].alias_or_index_name());
+                self.patchers_params_instance_indexes
+                    .push(local_instance_index);
+            }
+        };
+
+        //we know that self.params are sorted by instance_index
+        let mut current_index = 0;
+        let mut instindexes = Vec::new();
+        for (pindex, p) in self.params.iter().enumerate() {
+            if p.instance_index() != current_index {
+                push_data(current_index, &mut instindexes, &mut self.instance_params);
+                current_index = p.instance_index();
+            }
+            if p.visible() {
+                instindexes.push(pindex);
+            }
+        }
+        //push any remaining
+        push_data(current_index, &mut instindexes, &mut self.instance_params);
+
+        common.instances_count.insert(
+            InstSelType::Params,
+            self.patchers_params_instance_names.len(),
+        );
+
+        self.update_common(common);
+
+        //XXX is there a better event?
+        self.handle_event(Events::InstancesChanged(
+            self.patchers_params_instance_names.len(),
+        ));
     }
 
     //rewrite the names we use based on aliases (if they exist)
@@ -1516,6 +1578,7 @@ impl StateController {
             let params = self
                 .params
                 .iter()
+                .filter(|p| !p.hidden())
                 .map(|p| (p.instance_index(), p.name().to_string()))
                 .collect();
             self.param_views
@@ -1787,6 +1850,32 @@ impl StateController {
                             }
                         }
                         self.update_patcher_instance_names();
+                    } else if let Some(captures) = PARAM_META_REGEX.captures(&msg.addr) {
+                        let index = captures
+                            .get(1)
+                            .expect("to get instance index")
+                            .as_str()
+                            .parse::<usize>()
+                            .expect("index to parse to usize");
+                        let name = captures.get(2).expect("to get param name").as_str();
+
+                        if !msg.args.is_empty()
+                            && let OscType::String(meta) = &msg.args[0]
+                        {
+                            let meta = serde_json::from_str(meta)
+                                .ok()
+                                .unwrap_or(serde_json::Value::Null);
+                            if let Some(param) = self
+                                .params
+                                .iter_mut()
+                                .find(|p| p.instance_index() == index && p.name() == name)
+                            {
+                                //set meta, hidden changed, update params
+                                if param.set_meta(&meta) {
+                                    self.update_instance_params();
+                                }
+                            }
+                        }
                     } else if let Some(index) = self.param_lookup.get(&msg.addr) {
                         if let Some(param) = self.params.get_mut(*index)
                             && msg.args.len() == 1
@@ -1873,11 +1962,11 @@ impl StateController {
                     }
                 }
                 _ => {
-                    println!("unhandled sysex {:02x?}", sysex);
+                    eprintln!("unhandled sysex {:02x?}", sysex);
                 }
             }
         } else {
-            println!("unhandled sysex {:02x?}", sysex);
+            eprintln!("unhandled sysex {:02x?}", sysex);
         }
     }
 
@@ -1888,7 +1977,7 @@ impl StateController {
         //jog 0x09
         match bytes.len() {
             1 => {
-                println!("got 1 byte midi {:?}", bytes);
+                //println!("got 1 byte midi {:?}", bytes);
                 if bytes[0] == 0xF7 {
                     self.handle_sysex().await;
                 } else if bytes[0] & 0x80 != 0 {
@@ -1898,7 +1987,7 @@ impl StateController {
                 }
             }
             2 => {
-                println!("got 2 byte midi {:?}", bytes);
+                //println!("got 2 byte midi {:?}", bytes);
                 if bytes[0] == 0xF7 {
                     self.handle_sysex().await;
                 } else if bytes[1] == 0xF7 {
@@ -2004,7 +2093,7 @@ impl StateController {
                 }
             },
             _ => {
-                println!("got other byte midi {:?}", bytes);
+                //println!("got other byte midi {:?}", bytes);
             }
         };
         self.exit
@@ -2390,7 +2479,6 @@ impl StateController {
                         .get(entry.instance())
                         .unwrap();
                     let title = format!("{} Data", name);
-                    let items: Vec<String> = inst.visible_datarefs().clone();
 
                     render_menu(
                         frame,
@@ -2661,50 +2749,6 @@ impl StateController {
             }
             _ => (),
         };
-    }
-
-    fn render_param(&self, param: &Param, location: usize) {
-        let cap = 0.96;
-        let v = param.norm_prefer_pending();
-
-        //TODO get from metdata?
-        let color = Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap).into_format();
-
-        for m in led_color(location as _, &color) {
-            let _ = self.midi_out_queue.send(m);
-        }
-    }
-
-    fn render_param_at(&self, index: usize, location: usize) {
-        let color = if let Some(param) = self.params.get(index) {
-            let cap = 0.96;
-            let v = param.norm_prefer_pending();
-
-            //TODO get from metdata?
-            Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap)
-        } else {
-            Srgb::new(0., 0., 0.)
-        }
-        .into_format();
-
-        for m in led_color(location as _, &color) {
-            let _ = self.midi_out_queue.send(m);
-        }
-    }
-
-    fn clear_params(&mut self) {
-        for index in 0..PARAM_PAGE_SIZE {
-            self.clear_param(index);
-        }
-    }
-
-    fn clear_param(&mut self, location: usize) {
-        let num = location + 71;
-        let _ = self.midi_out_queue.send(Midi::cc(
-            num as u8,
-            MoveColor::Black as _,
-            MOVE_CTL_MIDI_CHAN,
-        ));
     }
 
     async fn offset_param(&mut self, index: usize, offset: isize) {
