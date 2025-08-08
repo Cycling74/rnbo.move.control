@@ -1,8 +1,8 @@
 use {
     crate::{config::Config, midi::Midi, param::Param, patcher::PatcherInst, view::ParamView},
-    futures_util::{stream::SplitSink, SinkExt},
-    palette::{Darken, Srgb},
+    futures_util::{SinkExt, stream::SplitSink},
     once_cell::sync::Lazy,
+    palette::{Darken, Srgb},
     ratatui::{
         layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
         style::{Color, Modifier, Style},
@@ -20,8 +20,9 @@ use {
         path::PathBuf,
         rc::Rc,
         sync::{
+            Arc,
             atomic::{AtomicU8, Ordering as AtomicOrdering},
-            mpsc as sync_mpsc, Arc,
+            mpsc as sync_mpsc,
         },
         time::{Duration, Instant},
     },
@@ -60,7 +61,9 @@ pub const SET_PRESETS_LOADED_ADDR: &str = "/rnbo/inst/control/sets/presets/loade
 pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
 pub const SET_VIEWS_ORDER_ADDR: &str = "/rnbo/inst/control/sets/views/order";
 
-static INST_ALIAS_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"/rnbo/inst/(\d*)/config/name_alias").expect("to build name_alias regex"));
+static INST_ALIAS_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"/rnbo/inst/(\d*)/config/name_alias").expect("to build name_alias regex")
+});
 
 pub const SET_VIEW_DISPLAY: &str = "/rnboctl/view/display";
 pub const SET_VIEW_PAGE_DISPLAY: &str = "/rnboctl/view/page";
@@ -734,8 +737,6 @@ enum Cmd {
         val: u8,
     },
 
-    RenderVisibleParams,
-
     UpdateDataFileList,
     //local index, dataref index, file index
     LoadDataref((usize, usize, usize)),
@@ -754,7 +755,7 @@ enum Cmd {
 
 pub mod top {
     use super::{
-        Button, Cmd, Context, Events, PowerCommand, EXIT_MENU, JOG_WHEEL_ENCODER, JOG_WHEEL_TOUCH,
+        Button, Cmd, Context, EXIT_MENU, Events, JOG_WHEEL_ENCODER, JOG_WHEEL_TOUCH, PowerCommand,
         VOLUME_WHEEL_ENCODER, VOLUME_WHEEL_TOUCH,
     };
 
@@ -784,28 +785,28 @@ pub mod top {
             Main + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::Main),
 
             //toggle
-            Main + BtnDown(Button::Menu) / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
-            ParamViews + BtnDown(Button::Menu)/ ctx.emit(Cmd::RenderVisibleParams);  = Main,
+            Main + BtnDown(Button::Menu) = ParamViews,
+            ParamViews + BtnDown(Button::Menu) = Main,
 
             ParamViews + EncTouch(VOLUME_WHEEL_TOUCH)  = VolumeEditor(LastView::ParamViews),
             ParamViews + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::ParamViews),
             ParamViews + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::ParamViews),
 
-            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = Main,
-            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::ParamViews] / ctx.emit(Cmd::RenderVisibleParams); = Main,
-            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::ParamViews] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
-            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
+            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::Main] = Main,
+            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::ParamViews] = Main,
+            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::ParamViews] = ParamViews,
+            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::Main] = ParamViews,
             VolumeEditor(LastView) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(*state),
             VolumeEditor(LastView) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(*state),
-            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::Main] / ctx.emit(Cmd::RenderVisibleParams); = Main,
-            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::ParamViews] / ctx.emit(Cmd::RenderVisibleParams); = ParamViews,
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::Main] = Main,
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::ParamViews] = ParamViews,
 
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == POWER_DOWN_INDEX] = PowerOff,
             PromptExit(usize) + BtnDown(Button::JogWheel) [*state == LAUNCH_MOVE_INDEX] = LaunchMove,
             PromptExit(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < EXIT_MENU.len()] = PromptExit(*state + 1),
             PromptExit(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PromptExit(*state - 1),
-            PromptExit(usize) + BtnDown(Button::Back) [ctx.can_exit_powermenu()] / ctx.emit(Cmd::RenderVisibleParams); = Main,
-            PromptExit(usize) + BtnDown(Button::Menu) [ctx.can_exit_powermenu()] / ctx.emit(Cmd::RenderVisibleParams); = Main,
+            PromptExit(usize) + BtnDown(Button::Back) [ctx.can_exit_powermenu()] = Main,
+            PromptExit(usize) + BtnDown(Button::Menu) [ctx.can_exit_powermenu()] = Main,
 
             _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
             _ + BtnDown(Button::PowerLong) / ctx.emit(Cmd::Power(PowerCommand::ClearLongPress)); = PowerOff,
@@ -831,22 +832,22 @@ pub mod top {
 }
 
 pub mod view {
-    use super::{Button, Cmd, Context, Events, ParamPage, JOG_WHEEL_ENCODER, PARAM_PAGE_SIZE};
+    use super::{Button, Cmd, Context, Events, JOG_WHEEL_ENCODER, PARAM_PAGE_SIZE, ParamPage};
     smlang::statemachine! {
         states_attr: #[derive(Clone, Debug)],
         transitions: {
             *ParamViewMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < ctx.param_view_count()] = ParamViewMenu(*state + 1),
             ParamViewMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = ParamViewMenu(*state - 1),
             ParamViewMenu(usize) + BtnDown(Button::JogWheel) /
-                { ctx.emit(Cmd::ReportViewParamPage(*state, 0)); ctx.emit(Cmd::RenderVisibleParams); }=
+                ctx.emit(Cmd::ReportViewParamPage(*state, 0)); =
                 ViewParams(ParamPage { index: *state, page: 0, focused: None }),
 
             ViewParams(ParamPage) + BtnDown(Button::Back) = ParamViewMenu(state.index),
             ViewParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [state.page + 1 < ctx.view_param_pages(state.index)] /
-                { ctx.emit(Cmd::ReportViewParamPage(state.index, state.offset_page(1))); ctx.emit(Cmd::RenderVisibleParams); }=
+                ctx.emit(Cmd::ReportViewParamPage(state.index, state.offset_page(1))); =
                 ViewParams(state.with_offset_page(1)),
             ViewParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] /
-                { ctx.emit(Cmd::ReportViewParamPage(state.index, state.offset_page(-1))); ctx.emit(Cmd::RenderVisibleParams); }=
+                ctx.emit(Cmd::ReportViewParamPage(state.index, state.offset_page(-1))); =
                 ViewParams(state.with_offset_page(-1)),
             ViewParams(ParamPage) + EncTouch(_) [*event < 8] = ViewParams(state.with_focus(*event)),
             ViewParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1}); = ViewParams(state.with_focus(*event)),
@@ -854,15 +855,15 @@ pub mod view {
             ViewParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = ViewParams(state.clone()), //redraw
 
             ParamViewMenu(usize) + SetViewSelected(_) [event.0 < ctx.param_view_count() && event.1 < ctx.view_param_pages(event.0)] /
-                { ctx.emit(Cmd::ReportViewParamPage(event.0, event.1)); ctx.emit(Cmd::RenderVisibleParams); }=
+                ctx.emit(Cmd::ReportViewParamPage(event.0, event.1)); =
                 ViewParams(ParamPage { index: event.0, page: event.1, focused: None }),
             ViewParams(ParamPage) + SetViewSelected(_)
                 [(state.index != event.0 || state.page != event.1) && event.0 < ctx.param_view_count() && event.1 < ctx.view_param_pages(event.0)] /
-                { ctx.emit(Cmd::ReportViewParamPage(event.0, event.1)); ctx.emit(Cmd::RenderVisibleParams); }=
+                ctx.emit(Cmd::ReportViewParamPage(event.0, event.1)); =
                 ViewParams(ParamPage { index: event.0, page: event.1, focused: state.focused }),
 
             ViewParams(ParamPage) + SetViewPageSelected(_) [state.page != *event] /
-                { ctx.emit(Cmd::ReportViewParamPage(state.index, (*event).min(ctx.view_param_pages(state.index) - 1))); ctx.emit(Cmd::RenderVisibleParams);} =
+                ctx.emit(Cmd::ReportViewParamPage(state.index, (*event).min(ctx.view_param_pages(state.index) - 1))); =
                 ViewParams(ParamPage { index: state.index, page: (*event).min(ctx.view_param_pages(state.index) - 1), focused: state.focused }),
 
             _ + SetViewListChanged [ctx.param_view_count() != 1] = ParamViewMenu(0),
@@ -885,8 +886,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == GRAPH_PRESETS_INDEX && ctx.set_presets_count() > 0] = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
         //skip patcher instances menu if there is only 1 instance
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) > 1] = PatcherInstances(InstSel::enter(InstSelType::Params, ctx.instances_count(InstSelType::Params))),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) == 1] / ctx.emit(Cmd::RenderVisibleParams);
-            = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) == 1] = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
 
@@ -931,7 +931,7 @@ smlang::statemachine! {
         PatcherInstances(InstSel) + BtnDown(Button::Back) [state.typ() == InstSelType::Datarefs] = Menu(DEVICE_DATA_INDEX),
         PatcherInstances(InstSel) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherInstances(state.next()),
         PatcherInstances(InstSel) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherInstances(state.prev()),
-        PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Params] / ctx.emit(Cmd::RenderVisibleParams);
+        PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Params]
             = PatcherParams(ParamPage { index: state.selected(), page: 0, focused: None }),
         PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Datarefs] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(state.selected(), ctx.dataref_count(state.selected()))),
 
@@ -945,9 +945,9 @@ smlang::statemachine! {
         PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::new(InstSelType::Datarefs, state.instance(), ctx.instances_count(InstSelType::Datarefs))),
         PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) == 1] = Menu(DEVICE_DATA_INDEX),
 
-        PatcherParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1] / ctx.emit(Cmd::RenderVisibleParams);
+        PatcherParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1]
             = PatcherParams(ParamPage { index: state.index, page: state.page + 1, focused: state.focused }),
-        PatcherParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0] / ctx.emit(Cmd::RenderVisibleParams);
+        PatcherParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0]
             = PatcherParams(ParamPage { index: state.index, page: state.page - 1, focused: state.focused }),
         PatcherParams(ParamPage) + EncTouch(_) [*event < 8] = PatcherParams(state.with_focus(*event)),
         PatcherParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1}); = PatcherParams(state.with_focus(*event)),
@@ -1050,8 +1050,6 @@ pub struct StateController {
     params: Vec<Param>,
 
     instance_params: Vec<Vec<usize>>,
-
-    visible_params: Vec<usize>,
 
     param_values: [Srgb<u8>; 8],
     param_values_last: [Srgb<u8>; 8],
@@ -1277,7 +1275,6 @@ impl StateController {
             params: Vec::new(),
 
             instance_params: Vec::new(),
-            visible_params: Vec::new(),
 
             param_values: [Srgb::new(0, 0, 0); 8],
             param_values_last: [Srgb::new(255, 255, 255); 8],
@@ -1364,7 +1361,6 @@ impl StateController {
         for key in indexes.iter() {
             let local_instance_index = self.instances.len();
 
-
             let inst = instances.remove(key).unwrap();
             let name = inst.alias_or_index_name();
             self.instance_alias_map.insert(inst.index(), name.clone());
@@ -1436,14 +1432,22 @@ impl StateController {
 
     //rewrite the names we use based on aliases (if they exist)
     fn update_patcher_instance_names(&mut self) {
-        self.patchers_params_instance_names = self.patchers_params_instance_indexes.iter().map(|index| {
-            let inst = self.instances.get(*index).expect("to get instance");
-            inst.alias_or_index_name()
-        }).collect();
-        self.patchers_datarefs_instance_names = self.patchers_datarefs_instance_indexes.iter().map(|index| {
-            let inst = self.instances.get(*index).expect("to get instance");
-            inst.alias_or_index_name()
-        }).collect();
+        self.patchers_params_instance_names = self
+            .patchers_params_instance_indexes
+            .iter()
+            .map(|index| {
+                let inst = self.instances.get(*index).expect("to get instance");
+                inst.alias_or_index_name()
+            })
+            .collect();
+        self.patchers_datarefs_instance_names = self
+            .patchers_datarefs_instance_indexes
+            .iter()
+            .map(|index| {
+                let inst = self.instances.get(*index).expect("to get instance");
+                inst.alias_or_index_name()
+            })
+            .collect();
     }
 
     pub async fn set_set_current_name(&mut self, name: Option<String>) {
@@ -1487,10 +1491,7 @@ impl StateController {
         self.update_common(common);
 
         names.sort_by(|a, b| {
-            use {
-                unicase::UniCase,
-                std::cmp::Ordering
-            };
+            use {std::cmp::Ordering, unicase::UniCase};
             if a == "initial" {
                 Ordering::Less
             } else if b == "initial" {
@@ -1764,8 +1765,16 @@ impl StateController {
                 }
                 _ => {
                     if let Some(captures) = INST_ALIAS_REGEX.captures(&msg.addr) {
-                        let index = captures.get(1).expect("to get instance index").as_str().parse::<usize>().expect("index to parse to usize");
-                        let alias = if msg.args.len() >= 1 && let OscType::String(v) = &msg.args[0] && v.len() > 0 {
+                        let index = captures
+                            .get(1)
+                            .expect("to get instance index")
+                            .as_str()
+                            .parse::<usize>()
+                            .expect("index to parse to usize");
+                        let alias = if msg.args.len() >= 1
+                            && let OscType::String(v) = &msg.args[0]
+                            && v.len() > 0
+                        {
                             Some(v.clone())
                         } else {
                             None
@@ -1773,7 +1782,8 @@ impl StateController {
                         for i in self.instances.iter_mut() {
                             if i.index() == index {
                                 i.set_alias(alias);
-                                self.instance_alias_map.insert(index, i.alias_or_index_name());
+                                self.instance_alias_map
+                                    .insert(index, i.alias_or_index_name());
                                 break;
                             }
                         }
@@ -1806,28 +1816,6 @@ impl StateController {
                                     }
                                     _ => None,
                                 };
-                                /*
-                                if let Some(sparce) = v {
-                                    //TODO throttle?
-
-                                    let mut updates = Vec::new();
-                                    //see if this param is visible, render it if so
-                                    for (location, index) in self.visible_params.iter().enumerate()
-                                    {
-                                        if let Some(param) = self.params.get(*index) {
-                                            if sparce.0 == param.instance_index()
-                                                && sparce.1 == param.index()
-                                            {
-                                                self.render_param(param, location);
-                                                updates.push(location);
-                                            }
-                                        }
-                                    }
-                                    for location in updates {
-                                        self.handle_event(Events::VisibleParamUpdated(location));
-                                    }
-                                }
-                                */
                             }
                         }
                     } else if let Some((index, name)) = self.dataref_lookup.get(&msg.addr) {
@@ -2077,7 +2065,12 @@ impl StateController {
     }
 
     fn render_params(&mut self) {
-        for (location, (l, v)) in self.param_values_last.iter_mut().zip(self.param_values.iter()).enumerate() {
+        for (location, (l, v)) in self
+            .param_values_last
+            .iter_mut()
+            .zip(self.param_values.iter())
+            .enumerate()
+        {
             if l != v {
                 *l = *v;
                 for m in led_color(location as _, v) {
@@ -2093,7 +2086,6 @@ impl StateController {
         match s {
             States::ParamViewMenu(selected) => {
                 self.do_once(line!(), |s| {
-                    s.clear_visible_params();
                     s.render_buttons([(MENU_MIDI, MoveColor::LightGray)]);
                 });
                 render_menu(
@@ -2127,23 +2119,16 @@ impl StateController {
                 {
                     let offset = page * PARAM_PAGE_SIZE;
 
-                    /*
-                    self.visible_params = params
+                    for (pindex, o) in params
                         .iter()
                         .skip(offset)
                         .take(PARAM_PAGE_SIZE)
-                        .copied()
-                        .collect();
-                    */
-
-                    for (pindex, o) in params.iter()
-                        .skip(offset)
-                            .take(PARAM_PAGE_SIZE)
-                            .zip(self.param_values.iter_mut()) {
-                                if let Some(param) = self.params.get(*pindex) {
-                                    *o = param.color();
-                                }
-                            }
+                        .zip(self.param_values.iter_mut())
+                    {
+                        if let Some(param) = self.params.get(*pindex) {
+                            *o = param.color();
+                        }
+                    }
 
                     let pages = self.context().view_param_pages(index);
                     let mut title = format!("View: {}", name);
@@ -2160,7 +2145,9 @@ impl StateController {
                                     param.display_name(),
                                 );
                                 */
-                                title = if let Some(alias) = self.instance_alias_map.get(&param.instance_index()) {
+                                title = if let Some(alias) =
+                                    self.instance_alias_map.get(&param.instance_index())
+                                {
                                     alias.clone()
                                 } else {
                                     format!("inst: {}", param.instance_index())
@@ -2192,7 +2179,6 @@ impl StateController {
 
         let setup_common = |line: u32, s: &mut Self| {
             s.do_once(line, |s| {
-                s.clear_visible_params();
                 s.render_buttons([
                     (MENU_MIDI, MoveColor::LightGray),
                     (BACK_MIDI, MoveColor::LightGray),
@@ -2203,7 +2189,6 @@ impl StateController {
         match state {
             States::Menu(selected) => {
                 self.do_once(line!(), |s| {
-                    s.clear_visible_params();
                     s.render_buttons([(MENU_MIDI, MoveColor::LightGray)]);
                 });
                 let indicator = |index: usize| -> &'static char {
@@ -2363,15 +2348,16 @@ impl StateController {
                 if let Some(instance) = self.instance_params.get(index) {
                     let offset = page * PARAM_PAGE_SIZE;
 
-                    for (pindex, o) in instance.iter()
+                    for (pindex, o) in instance
+                        .iter()
                         .skip(offset)
-                            .take(PARAM_PAGE_SIZE)
-                            .zip(self.param_values.iter_mut()) {
-                                if let Some(param) = self.params.get(*pindex) {
-                                    *o = param.color();
-                                }
-                            }
-
+                        .take(PARAM_PAGE_SIZE)
+                        .zip(self.param_values.iter_mut())
+                    {
+                        if let Some(param) = self.params.get(*pindex) {
+                            *o = param.color();
+                        }
+                    }
 
                     if let Some(focused) = focused {
                         let pindex = offset + focused;
@@ -2388,8 +2374,6 @@ impl StateController {
                             //eprintln!("cannot get pinstance {}", pindex);
                         }
                     }
-                } else {
-                    //self.visible_params.clear();
                 }
 
                 let name = self.patchers_params_instance_names.get(index).unwrap();
@@ -2527,7 +2511,6 @@ impl StateController {
             States::PromptExit(selected) => {
                 let can_exit = self.child_process_error.is_none();
                 self.do_once(line!(), |s| {
-                    s.clear_visible_params();
                     if can_exit {
                         s.render_buttons([(BACK_MIDI, MoveColor::LightGray)]);
                     } else {
@@ -2547,7 +2530,6 @@ impl StateController {
             }
             States::VolumeEditor(_) => {
                 self.do_once(line!(), |s| {
-                    s.clear_visible_params();
                     s.render_buttons([
                         (BACK_MIDI, MoveColor::LightGray),
                         (MENU_MIDI, MoveColor::LightGray),
@@ -2565,7 +2547,6 @@ impl StateController {
             }
             States::DisplayChildProcessError => {
                 self.do_once(line!(), |s| {
-                    s.clear_visible_params();
                     s.render_buttons([]);
                 });
 
@@ -2634,7 +2615,6 @@ impl StateController {
                 //transitions
                 States::Main | States::ParamViews => {
                     self.line_token = 0; //reset do once
-                    self.clear_visible_params();
                 }
                 _ => (),
             }
@@ -2801,17 +2781,6 @@ impl StateController {
 
                 Cmd::LightButton { btn, val } => self.light_button(btn, val),
 
-                Cmd::RenderVisibleParams => {
-                    /*
-                    for i in 0..PARAM_PAGE_SIZE {
-                        if let Some(index) = self.visible_params.get(i) {
-                            self.render_param_at(*index, i);
-                        } else {
-                            self.clear_param(i);
-                        }
-                    }
-                    */
-                }
                 Cmd::LoadSet(index) => {
                     if index == 0 {
                         let msg = OscMessage {
@@ -2960,16 +2929,6 @@ impl StateController {
                 }
             }
         }
-    }
-
-    fn clear_visible_params(&mut self) {
-        /*
-        self.param_values = Default::default();
-        if !self.visible_params.is_empty() {
-            self.visible_params.clear();
-            self.clear_params();
-        }
-        */
     }
 
     async fn send_osc(&mut self, msg: OscMessage) {
