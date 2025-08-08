@@ -2,7 +2,7 @@ use {
     crate::{config::Config, midi::Midi, param::Param, patcher::PatcherInst, view::ParamView},
     futures_util::{SinkExt, stream::SplitSink},
     once_cell::sync::Lazy,
-    palette::{Darken, Srgb},
+    palette::Srgb,
     ratatui::{
         layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
         style::{Color, Modifier, Style},
@@ -1392,7 +1392,7 @@ impl StateController {
                     }
                 }
 
-                if instindexes.len() > 0 {
+                if !instindexes.is_empty() {
                     common
                         .instance_param_pages
                         .push(param_pages(instindexes.len()));
@@ -1449,7 +1449,7 @@ impl StateController {
         let mut push_data = |inst_index: usize,
                              instindexes: &mut Vec<usize>,
                              instance_params: &mut Vec<Vec<usize>>| {
-            if instindexes.len() > 0
+            if !instindexes.is_empty()
                 && let Some(local_instance_index) =
                     self.instances.iter().position(|i| i.index() == inst_index)
             {
@@ -2753,8 +2753,7 @@ impl StateController {
 
     async fn offset_param(&mut self, index: usize, offset: isize) {
         if let Some(param) = self.params.get_mut(index) {
-            let mut args = Vec::new();
-            args.push(OscType::Double(param.offset(offset)));
+            let args = vec![OscType::Double(param.offset(offset))];
             let msg = OscMessage {
                 addr: param.addr_norm().to_string(),
                 args,

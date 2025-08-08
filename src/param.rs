@@ -204,18 +204,16 @@ impl Param {
     }
 
     pub fn update_f64(&mut self, val: f64) {
-        match self.detail {
-            ParamDetail::Float {
-                min, max, steps, ..
-            } => {
-                self.detail = ParamDetail::Float {
-                    val,
-                    min,
-                    max,
-                    steps,
-                };
-            }
-            _ => (), //XXX error
+        if let ParamDetail::Float {
+            min, max, steps, ..
+        } = self.detail
+        {
+            self.detail = ParamDetail::Float {
+                val,
+                min,
+                max,
+                steps,
+            };
         }
     }
 
