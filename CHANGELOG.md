@@ -1,6 +1,9 @@
 * **current**
     * using param `steps` and `enum` values to inform normalized parameter updates and better reach all steps of enum and stepped values
     * updated param pager display to use scrollbar
+    * hiding params from device params and default param views that have @meta `{ "hidden": true }`
+    * simplified param rendering
+        * should fix cases where some param lights were lit mistakenly when there was no param present
 * **0.1.0-beta.9**
     * added Graph Preset Features
         * Save (currently the name is automatically created from the current time)
