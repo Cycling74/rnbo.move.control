@@ -102,10 +102,11 @@ impl Dataref {
     pub fn hidden(&self) -> bool {
         if let Some(meta) = self.meta.as_object()
             && meta.contains_key("hidden")
-                && let Some(hidden) = meta.get("hidden")
-                    && let Some(v) = hidden.as_bool() {
-                        return v;
-                    }
+            && let Some(hidden) = meta.get("hidden")
+            && let Some(v) = hidden.as_bool()
+        {
+            return v;
+        }
         false
     }
 }
@@ -121,7 +122,9 @@ impl PatcherInst {
         self.alias.as_ref()
     }
     pub fn alias_or_index_name(&self) -> String {
-        self.alias.clone().unwrap_or_else(|| format!("{}: {}", self.index, self.name))
+        self.alias
+            .clone()
+            .unwrap_or_else(|| format!("{}: {}", self.index, self.name))
     }
     pub fn set_alias(&mut self, alias: Option<String>) {
         self.alias = alias;

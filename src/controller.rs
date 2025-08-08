@@ -1647,19 +1647,20 @@ impl StateController {
                 TRANSPORT_ROLLING_ADDR => {
                     if msg.args.len() == 1
                         && let OscType::Bool(rolling) = msg.args[0]
-                            && self.rolling != rolling {
-                                self.rolling = rolling;
-                                let _ = self.midi_out_queue.send(Midi::cc(
-                                    PLAY_MIDI,
-                                    if rolling {
-                                        MoveColor::Green
-                                    } else {
-                                        MoveColor::LightGray
-                                    } as _,
-                                    MOVE_CTL_MIDI_CHAN,
-                                ));
-                                self.handle_event(Events::Transport(rolling));
-                            }
+                        && self.rolling != rolling
+                    {
+                        self.rolling = rolling;
+                        let _ = self.midi_out_queue.send(Midi::cc(
+                            PLAY_MIDI,
+                            if rolling {
+                                MoveColor::Green
+                            } else {
+                                MoveColor::LightGray
+                            } as _,
+                            MOVE_CTL_MIDI_CHAN,
+                        ));
+                        self.handle_event(Events::Transport(rolling));
+                    }
                 }
                 TRANSPORT_BPM_ADDR => {
                     if msg.args.len() == 1
@@ -1667,10 +1668,11 @@ impl StateController {
                             OscType::Double(v) => Some(*v as f32),
                             OscType::Float(v) => Some(*v),
                             _ => None,
-                        } {
-                            self.bpm = bpm;
-                            self.handle_event(Events::Tempo(bpm));
                         }
+                    {
+                        self.bpm = bpm;
+                        self.handle_event(Events::Tempo(bpm));
+                    }
                 }
                 SET_CURRENT_ADDR => {
                     if msg.args.len() == 1 {
@@ -1718,34 +1720,35 @@ impl StateController {
                             OscType::Float(v) => Some(v.max(0.0) as usize),
                             OscType::Int(v) => Some(*v.max(&0) as usize),
                             _ => None,
-                        } {
-                            let mut page = 0;
-                            if msg.args.len() > 1 {
-                                if let Some(p) = match &msg.args[1] {
-                                    OscType::Double(v) => Some(v.max(0.0) as usize),
-                                    OscType::Float(v) => Some(v.max(0.0) as usize),
-                                    OscType::Int(v) => Some(*v.max(&0) as usize),
-                                    _ => None,
-                                } {
-                                    page = p
-                                } else {
-                                    eprintln!("invalid 2nd arg for set view select");
-                                    return;
-                                }
-                            }
-
-                            //clamp
-                            let ctx = self.sm.context();
-                            let cnt = ctx.param_view_count();
-                            if cnt > 0 {
-                                index = index.min(cnt - 1);
-                                let pages = ctx.view_param_pages(index);
-                                if pages > 0 {
-                                    page = page.min(pages - 1);
-                                    self.handle_event(Events::SetViewSelected((index, page)));
-                                }
+                        }
+                    {
+                        let mut page = 0;
+                        if msg.args.len() > 1 {
+                            if let Some(p) = match &msg.args[1] {
+                                OscType::Double(v) => Some(v.max(0.0) as usize),
+                                OscType::Float(v) => Some(v.max(0.0) as usize),
+                                OscType::Int(v) => Some(*v.max(&0) as usize),
+                                _ => None,
+                            } {
+                                page = p
+                            } else {
+                                eprintln!("invalid 2nd arg for set view select");
+                                return;
                             }
                         }
+
+                        //clamp
+                        let ctx = self.sm.context();
+                        let cnt = ctx.param_view_count();
+                        if cnt > 0 {
+                            index = index.min(cnt - 1);
+                            let pages = ctx.view_param_pages(index);
+                            if pages > 0 {
+                                page = page.min(pages - 1);
+                                self.handle_event(Events::SetViewSelected((index, page)));
+                            }
+                        }
+                    }
                 }
                 SET_VIEW_PAGE_DISPLAY => {
                     if msg.args.len() == 1
@@ -1754,9 +1757,10 @@ impl StateController {
                             OscType::Float(v) => Some(v.max(0.0) as usize),
                             OscType::Int(v) => Some(*v.max(&0) as usize),
                             _ => None,
-                        } {
-                            self.handle_event(Events::SetViewPageSelected(index));
                         }
+                    {
+                        self.handle_event(Events::SetViewPageSelected(index));
+                    }
                 }
                 _ => {
                     if let Some(captures) = INST_ALIAS_REGEX.captures(&msg.addr) {
@@ -1785,32 +1789,34 @@ impl StateController {
                         self.update_patcher_instance_names();
                     } else if let Some(index) = self.param_lookup.get(&msg.addr) {
                         if let Some(param) = self.params.get_mut(*index)
-                            && msg.args.len() == 1 {
-                                //ignore, we wait for normalized
-                                match &msg.args[0] {
-                                    OscType::Double(v) => param.update_f64(*v),
-                                    OscType::Float(v) => param.update_f64(*v as f64),
-                                    OscType::Int(v) => param.update_f64(*v as f64),
-                                    OscType::String(v) => param.update_s(v),
-                                    _ => (),
-                                };
-                            }
+                            && msg.args.len() == 1
+                        {
+                            //ignore, we wait for normalized
+                            match &msg.args[0] {
+                                OscType::Double(v) => param.update_f64(*v),
+                                OscType::Float(v) => param.update_f64(*v as f64),
+                                OscType::Int(v) => param.update_f64(*v as f64),
+                                OscType::String(v) => param.update_s(v),
+                                _ => (),
+                            };
+                        }
                     } else if let Some(index) = self.param_norm_lookup.get(&msg.addr) {
                         if let Some(param) = self.params.get_mut(*index)
-                            && msg.args.len() == 1 {
-                                let v = match &msg.args[0] {
-                                    OscType::Double(v) => {
-                                        param.set_norm_pending(*v);
-                                        Some((param.instance_index(), param.index()))
-                                    }
-                                    OscType::Float(v) => {
-                                        let v = *v as f64;
-                                        param.set_norm_pending(v);
-                                        Some((param.instance_index(), param.index()))
-                                    }
-                                    _ => None,
-                                };
-                            }
+                            && msg.args.len() == 1
+                        {
+                            let v = match &msg.args[0] {
+                                OscType::Double(v) => {
+                                    param.set_norm_pending(*v);
+                                    Some((param.instance_index(), param.index()))
+                                }
+                                OscType::Float(v) => {
+                                    let v = *v as f64;
+                                    param.set_norm_pending(v);
+                                    Some((param.instance_index(), param.index()))
+                                }
+                                _ => None,
+                            };
+                        }
                     } else if let Some((index, name)) = self.dataref_lookup.get(&msg.addr) {
                         if msg.args.len() == 1 {
                             let mapping = match &msg.args[0] {
@@ -1824,25 +1830,28 @@ impl StateController {
                                 _ => None,
                             };
                             if let Some(inst) = self.instances.get_mut(*index)
-                                && let Some(d) = inst.dataref_mappings_mut().get_mut(name) {
-                                    *d.mapping_mut() = mapping;
-                                    self.handle_event(Events::DatarefMappingChanged);
-                                }
+                                && let Some(d) = inst.dataref_mappings_mut().get_mut(name)
+                            {
+                                *d.mapping_mut() = mapping;
+                                self.handle_event(Events::DatarefMappingChanged);
+                            }
                         }
                     } else if let Some((index, name)) = self.dataref_meta_lookup.get(&msg.addr)
-                        && msg.args.len() == 1 {
-                            let meta = match &msg.args[0] {
-                                OscType::String(v) => {
-                                    serde_json::from_str(v).unwrap_or(serde_json::Value::Null)
-                                }
-                                _ => serde_json::Value::Null,
-                            };
-                            if let Some(inst) = self.instances.get_mut(*index)
-                                && let Some(d) = inst.dataref_mappings_mut().get_mut(name)
-                                    && d.set_meta(&meta) {
-                                        self.handle_event(Events::DatarefVisibleChanged);
-                                    }
+                        && msg.args.len() == 1
+                    {
+                        let meta = match &msg.args[0] {
+                            OscType::String(v) => {
+                                serde_json::from_str(v).unwrap_or(serde_json::Value::Null)
+                            }
+                            _ => serde_json::Value::Null,
+                        };
+                        if let Some(inst) = self.instances.get_mut(*index)
+                            && let Some(d) = inst.dataref_mappings_mut().get_mut(name)
+                            && d.set_meta(&meta)
+                        {
+                            self.handle_event(Events::DatarefVisibleChanged);
                         }
+                    }
                 }
             }
         }
@@ -2126,27 +2135,28 @@ impl StateController {
                     if let Some(focused) = focused {
                         let pindex = offset + focused;
                         if let Some(pindex) = params.get(pindex)
-                            && let Some(param) = self.params.get(*pindex) {
-                                /*
-                                let label = format!(
-                                    "inst: {} - {}",
-                                    param.instance_index(),
-                                    param.display_name(),
-                                );
-                                */
-                                title = if let Some(alias) =
-                                    self.instance_alias_map.get(&param.instance_index())
-                                {
-                                    alias.clone()
-                                } else {
-                                    format!("inst: {}", param.instance_index())
-                                };
-                                let label = param.display_name().to_string();
-                                let value = param.render_value();
-                                let norm = param.norm_prefer_pending();
+                            && let Some(param) = self.params.get(*pindex)
+                        {
+                            /*
+                            let label = format!(
+                                "inst: {} - {}",
+                                param.instance_index(),
+                                param.display_name(),
+                            );
+                            */
+                            title = if let Some(alias) =
+                                self.instance_alias_map.get(&param.instance_index())
+                            {
+                                alias.clone()
+                            } else {
+                                format!("inst: {}", param.instance_index())
+                            };
+                            let label = param.display_name().to_string();
+                            let value = param.render_value();
+                            let norm = param.norm_prefer_pending();
 
-                                focus = Some(ParamFocus { label, value, norm });
-                            }
+                            focus = Some(ParamFocus { label, value, norm });
+                        }
                     }
                     render_param_page(frame, &title, focus, page, pages);
                 } else {
@@ -2720,9 +2730,10 @@ impl StateController {
                     offset,
                 } => {
                     if let Some(instance) = self.instance_params.get(instance)
-                        && let Some(index) = instance.get(index) {
-                            self.offset_param(*index, offset).await;
-                        }
+                        && let Some(index) = instance.get(index)
+                    {
+                        self.offset_param(*index, offset).await;
+                    }
                     //self.render_param(instance, param);
                 }
                 Cmd::OffsetViewParam {
@@ -2731,9 +2742,10 @@ impl StateController {
                     offset,
                 } => {
                     if let Some(params) = self.param_view_params.get(view)
-                        && let Some(index) = params.get(index) {
-                            self.offset_param(*index, offset).await;
-                        }
+                        && let Some(index) = params.get(index)
+                    {
+                        self.offset_param(*index, offset).await;
+                    }
                 }
                 Cmd::OffsetVolume(amt) => {
                     let cur = self.config.volume as isize;
@@ -2894,15 +2906,15 @@ impl StateController {
                     };
                     if let Some(instance) = self.patchers_datarefs_instance_indexes.get(instance)
                         && let Some(instance) = self.instances.get(*instance)
-                            && let Some(name) = instance.visible_datarefs().get(datarefindex) {
-                                let addr =
-                                    format!("/rnbo/inst/{}/data_refs/{}", instance.index(), name);
-                                let msg = OscMessage {
-                                    addr,
-                                    args: vec![OscType::String(filename.to_string())],
-                                };
-                                self.send_osc(msg).await;
-                            }
+                        && let Some(name) = instance.visible_datarefs().get(datarefindex)
+                    {
+                        let addr = format!("/rnbo/inst/{}/data_refs/{}", instance.index(), name);
+                        let msg = OscMessage {
+                            addr,
+                            args: vec![OscType::String(filename.to_string())],
+                        };
+                        self.send_osc(msg).await;
+                    }
                 }
                 Cmd::ReportViewParamPage(index, page) => {
                     let msg = OscMessage {

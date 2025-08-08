@@ -64,11 +64,11 @@
 */
 
 use {
+    palette::{Darken, Srgb},
     std::{
         cmp::PartialOrd,
         time::{Duration, Instant},
     },
-    palette::{Darken, Srgb},
 };
 
 const NORM_PENDING_DELAY: Duration = Duration::from_millis(50);
@@ -112,7 +112,7 @@ pub struct Param {
 
     norm_offset_step: f64, //how much do we step our norm value when we offset via MIDI?
 
-    color: Srgb<u8>
+    color: Srgb<u8>,
 }
 
 impl Param {
@@ -148,10 +148,11 @@ impl Param {
 
     pub fn norm(&mut self) -> f64 {
         if let Some((v, time)) = self.norm_pending
-            && time + NORM_PENDING_DELAY < Instant::now() {
-                self.norm = v;
-                self.norm_pending = None;
-            }
+            && time + NORM_PENDING_DELAY < Instant::now()
+        {
+            self.norm = v;
+            self.norm_pending = None;
+        }
         self.norm
     }
 
@@ -168,8 +169,14 @@ impl Param {
         self.norm = v;
     }
 
-    pub fn offset(&mut self, offset: isize) -> f64{
-        self.norm = (self.norm + if offset > 0 { self.norm_offset_step } else { -self.norm_offset_step}).clamp(0.0, 1.0);
+    pub fn offset(&mut self, offset: isize) -> f64 {
+        self.norm = (self.norm
+            + if offset > 0 {
+                self.norm_offset_step
+            } else {
+                -self.norm_offset_step
+            })
+        .clamp(0.0, 1.0);
         self.norm
     }
 
@@ -194,8 +201,15 @@ impl Param {
 
     pub fn update_f64(&mut self, val: f64) {
         match self.detail {
-            ParamDetail::Float { min, max, steps, .. } => {
-                self.detail = ParamDetail::Float { val, min, max, steps };
+            ParamDetail::Float {
+                min, max, steps, ..
+            } => {
+                self.detail = ParamDetail::Float {
+                    val,
+                    min,
+                    max,
+                    steps,
+                };
             }
             _ => (), //XXX error
         }
@@ -244,8 +258,9 @@ impl Param {
                 None
             };
 
-
-            let display_order = contents.get("display_order").and_then(|n| n.get("VALUE")?.as_number()?.as_i64().map(|v| v as isize));
+            let display_order = contents
+                .get("display_order")
+                .and_then(|n| n.get("VALUE")?.as_number()?.as_i64().map(|v| v as isize));
 
             match obj.get("TYPE")?.as_str()? {
                 "s" => {
@@ -291,12 +306,20 @@ impl Param {
                         range.get("MIN")?.as_number()?.as_f64()?,
                         range.get("MAX")?.as_number()?.as_f64()?,
                     );
-                    let steps = contents.get("steps").and_then(|s| s.get("VALUE")?.as_number()?.as_i64().map(|v| v as usize));
-                    let detail = ParamDetail::Float { val, min, max, steps };
+                    let steps = contents
+                        .get("steps")
+                        .and_then(|s| s.get("VALUE")?.as_number()?.as_i64().map(|v| v as usize));
+                    let detail = ParamDetail::Float {
+                        val,
+                        min,
+                        max,
+                        steps,
+                    };
                     if let Some(steps) = steps
-                        && steps > 1 {
-                            norm_offset_step = 1.0 / (2.0 * steps as f64 - 1.0); //0..1 inclusive
-                        }
+                        && steps > 1
+                    {
+                        norm_offset_step = 1.0 / (2.0 * steps as f64 - 1.0); //0..1 inclusive
+                    }
                     Some(Param {
                         index,
                         instance_index,
