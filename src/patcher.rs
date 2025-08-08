@@ -1,5 +1,5 @@
 use {
-    crate::{param::Param, util::parse_meta},
+    crate::{param::Param, util::parse_body_meta},
     serde_json::Value,
     std::collections::{BTreeMap, HashMap},
 };
@@ -52,7 +52,7 @@ fn parse_datarefs(
             None
         };
 
-        let meta = parse_meta(body).unwrap_or(Value::Null);
+        let meta = parse_body_meta(body).unwrap_or(Value::Null);
 
         let mapping = Dataref { mapping, meta };
 

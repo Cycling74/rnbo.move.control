@@ -64,7 +64,7 @@
 */
 
 use {
-    crate::util::parse_meta,
+    crate::util::parse_contents_meta,
     palette::{Darken, Srgb},
     serde_json::Value,
     std::{
@@ -243,6 +243,10 @@ impl Param {
         &self.meta
     }
 
+    pub fn visible(&self) -> bool {
+        !self.hidden()
+    }
+
     pub fn hidden(&self) -> bool {
         if let Some(meta) = self.meta.as_object()
             && meta.contains_key("hidden")
@@ -270,7 +274,7 @@ impl Param {
                 .as_number()?
                 .as_f64()?;
 
-            let meta = parse_meta(contents).unwrap_or(Value::Null);
+            let meta = parse_contents_meta(contents).unwrap_or(Value::Null);
 
             let index = contents.get("index")?.get("VALUE")?.as_number()?.as_u64()? as usize;
             let color = get_color(norm);
