@@ -2175,15 +2175,26 @@ impl StateController {
                 self.do_once(line!(), |s| {
                     s.render_buttons([(MENU_MIDI, MoveColor::LightGray)]);
                 });
-                render_menu(
-                    frame,
-                    Some("Param Views"),
-                    self.param_view_names.as_slice(),
-                    default_indicator,
-                    all_enabled,
-                    selected,
-                    None,
-                );
+                let title = "Param Views";
+                if self.param_view_names.len() == 0 {
+                    let title = format_title(title);
+                    let content = vec![Line::default(), Line::from("None to List").centered()];
+                    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+
+                    let layout = titled_layout(frame.area());
+                    frame.render_widget(title, layout[0]);
+                    frame.render_widget(paragraph, layout[1]);
+                } else {
+                    render_menu(
+                        frame,
+                        Some(title),
+                        self.param_view_names.as_slice(),
+                        default_indicator,
+                        all_enabled,
+                        selected,
+                        None,
+                    );
+                }
             }
             States::ViewParams(state) => {
                 self.do_once(line!(), |s| {
