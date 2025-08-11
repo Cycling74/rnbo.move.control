@@ -1,4 +1,4 @@
-* **current**
+* **0.1.0-beta.10**
     * using param `steps` and `enum` values to inform normalized parameter updates and better reach all steps of enum and stepped values
     * updated param pager display to use scrollbar
     * hiding params from device params and default param views that have @meta `{ "hidden": true }`
