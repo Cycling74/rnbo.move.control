@@ -842,7 +842,7 @@ pub mod view {
         transitions: {
             *ParamViewMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < ctx.param_view_count()] = ParamViewMenu(*state + 1),
             ParamViewMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = ParamViewMenu(*state - 1),
-            ParamViewMenu(usize) + BtnDown(Button::JogWheel) /
+            ParamViewMenu(usize) + BtnDown(Button::JogWheel) [*state < ctx.param_view_count()] /
                 ctx.emit(Cmd::ReportViewParamPage(*state, 0)); =
                 ViewParams(ParamPage { index: *state, page: 0, focused: None }),
 
