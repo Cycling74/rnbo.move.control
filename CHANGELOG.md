@@ -4,6 +4,8 @@
     * hiding params from device params and default param views that have @meta `{ "hidden": true }`
     * simplified param rendering
         * should fix cases where some param lights were lit mistakenly when there was no param present
+    * disabled navigating to an empty Param View
+    * displaying message in Param View menu when there are none to list
 * **0.1.0-beta.9**
     * added Graph Preset Features
         * Save (currently the name is automatically created from the current time)
