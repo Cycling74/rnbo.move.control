@@ -1058,10 +1058,10 @@ pub struct StateController {
     param_values: [Srgb<u8>; 8],
     param_values_last: [Srgb<u8>; 8],
 
-    //(sparce instance index, param_id) -> (local instance_index, param index)
+    //(sparse instance index, param_id) -> (local instance_index, param index)
     instance_param_map: HashMap<(usize, String), (usize, usize)>,
 
-    //sparce instance index -> alias
+    //sparse instance index -> alias
     instance_alias_map: HashMap<usize, String>,
 
     param_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
@@ -1593,8 +1593,8 @@ impl StateController {
         for v in self.param_views.iter() {
             //find the param indexes indicated by the sparse (instance, param) pair
             let mut params = Vec::new();
-            for sparce in v.params().iter() {
-                if let Some((instance, param)) = self.instance_param_map.get(sparce) {
+            for sparse in v.params().iter() {
+                if let Some((instance, param)) = self.instance_param_map.get(sparse) {
                     if let Some(instance) = self.instance_params.get(*instance) {
                         if let Some(index) = instance.get(*param) {
                             params.push(*index);
@@ -1605,7 +1605,7 @@ impl StateController {
                         eprintln!("couldn't get instance at local index {}", *instance);
                     }
                 } else {
-                    eprintln!("couldn't find instance at index {:?}", sparce);
+                    eprintln!("couldn't find instance at index {:?}", sparse);
                 }
             }
             if !params.is_empty() {
