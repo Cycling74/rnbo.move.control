@@ -72,6 +72,7 @@ static PARAM_META_REGEX: Lazy<Regex> = Lazy::new(|| {
 pub const SET_VIEW_DISPLAY: &str = "/rnboctl/view/display";
 pub const SET_VIEW_PAGE_DISPLAY: &str = "/rnboctl/view/page";
 pub const DEVICE_PARAM_DISPLAY: &str = "/rnboctl/device/params";
+pub const DEVICE_DATA_DISPLAY: &str = "/rnboctl/device/data";
 
 const JOG_WHEEL_TOUCH: usize = 9;
 const VOLUME_WHEEL_TOUCH: usize = 8;
@@ -562,6 +563,7 @@ enum Events {
     PopupTimeout,
 
     DeviceParamsSelected((usize, usize)), //index, page
+    DeviceDataSelected(usize),            //index
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -827,6 +829,10 @@ pub mod top {
 
             ParamViews + DeviceParamsSelected(_) = Main,
             VolumeEditor(LastView) + DeviceParamsSelected(_) = Main,
+            Popup(LastView) + DeviceParamsSelected(_) = Main,
+            ParamViews + DeviceDataSelected(_) = Main,
+            VolumeEditor(LastView) + DeviceDataSelected(_) = Main,
+            Popup(LastView) + DeviceDataSelected(_) = Main,
 
             Main + PopupRequested = Popup(LastView::Main),
             ParamViews + PopupRequested = Popup(LastView::ParamViews),
@@ -955,8 +961,6 @@ smlang::statemachine! {
         PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::new(InstSelType::Datarefs, state.instance(), ctx.instances_count(InstSelType::Datarefs))),
         PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) == 1] = Menu(DEVICE_DATA_INDEX),
 
-        _ + DeviceParamsSelected(_) = PatcherParams(ParamPage { index: event.0, page: event.1, focused: None }),
-
         PatcherParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1]
             = PatcherParams(ParamPage { index: state.index, page: state.page + 1, focused: state.focused }),
         PatcherParams(ParamPage) + EncLeft(JOG_WHEEL_ENCODER) [state.page > 0]
@@ -1009,6 +1013,10 @@ smlang::statemachine! {
         TempoEditor + Tempo(_) = TempoEditor,
 
         About + BtnDown(Button::Back) = Menu(ABOUT_INDEX),
+
+        //direct OSC based state changes
+        _ + DeviceParamsSelected(_) = PatcherParams(ParamPage { index: event.0, page: event.1, focused: None }),
+        _ + DeviceDataSelected(_) = PatcherDatarefs(DataSel::new(*event, ctx.dataref_count(*event))),
     }
 }
 
@@ -1712,6 +1720,14 @@ impl StateController {
                 self.handle_event(Events::SetViewListChanged);
             }
         } else {
+            let as_index = |arg: &OscType| -> Option<usize> {
+                match arg {
+                    OscType::Double(v) => Some(v.max(0.0) as usize),
+                    OscType::Float(v) => Some(v.max(0.0) as usize),
+                    OscType::Int(v) => Some(*v.max(&0) as usize),
+                    _ => None,
+                }
+            };
             //println!("got osc {}", msg.addr);
             //let mut update = None;
             match msg.addr.as_str() {
@@ -1786,12 +1802,7 @@ impl StateController {
                 }
                 SET_VIEW_DISPLAY => {
                     if !msg.args.is_empty()
-                        && let Some(mut index) = match &msg.args[0] {
-                            OscType::Double(v) => Some(v.max(0.0) as usize),
-                            OscType::Float(v) => Some(v.max(0.0) as usize),
-                            OscType::Int(v) => Some(*v.max(&0) as usize),
-                            _ => None,
-                        }
+                        && let Some(mut index) = as_index(&msg.args[0])
                     {
                         let mut page = 0;
                         if msg.args.len() > 1 {
@@ -1822,34 +1833,19 @@ impl StateController {
                     }
                 }
                 SET_VIEW_PAGE_DISPLAY => {
-                    if msg.args.len() == 1
-                        && let Some(index) = match &msg.args[0] {
-                            OscType::Double(v) => Some(v.max(0.0) as usize),
-                            OscType::Float(v) => Some(v.max(0.0) as usize),
-                            OscType::Int(v) => Some(*v.max(&0) as usize),
-                            _ => None,
-                        }
+                    if !msg.args.is_empty()
+                        && let Some(index) = as_index(&msg.args[0])
                     {
                         self.handle_event(Events::SetViewPageSelected(index));
                     }
                 }
                 DEVICE_PARAM_DISPLAY => {
                     if !msg.args.is_empty()
-                        && let Some(mut index) = match &msg.args[0] {
-                            OscType::Double(v) => Some(v.max(0.0) as usize),
-                            OscType::Float(v) => Some(v.max(0.0) as usize),
-                            OscType::Int(v) => Some(*v.max(&0) as usize),
-                            _ => None,
-                        }
+                        && let Some(index) = as_index(&msg.args[0])
                     {
                         let mut page = 0;
                         if msg.args.len() > 1 {
-                            if let Some(p) = match &msg.args[1] {
-                                OscType::Double(v) => Some(v.max(0.0) as usize),
-                                OscType::Float(v) => Some(v.max(0.0) as usize),
-                                OscType::Int(v) => Some(*v.max(&0) as usize),
-                                _ => None,
-                            } {
+                            if let Some(p) = as_index(&msg.args[1]) {
                                 page = p
                             } else {
                                 eprintln!("invalid 2nd arg for device param display select");
@@ -1878,6 +1874,26 @@ impl StateController {
                             page = page.min(pages - 1);
                             self.handle_event(Events::DeviceParamsSelected((local, page)));
                         }
+                    }
+                }
+                DEVICE_DATA_DISPLAY => {
+                    if !msg.args.is_empty()
+                        && let Some(index) = as_index(&msg.args[0])
+                    {
+                        let mut local: Option<usize> = None;
+                        for (l, (_, sparse)) in
+                            self.patchers_datarefs_instance_indexes.iter().enumerate()
+                        {
+                            if index == *sparse {
+                                local = Some(l);
+                                break;
+                            }
+                        }
+                        if let Some(local) = local {
+                            self.handle_event(Events::DeviceDataSelected(local));
+                        } else {
+                            eprintln!("no instance with visible datarefs and index {}", index);
+                        };
                     }
                 }
                 _ => {
@@ -2778,6 +2794,7 @@ impl StateController {
         match e {
             Events::EncTouch(e) if e < 8 => doprocess = true,
             Events::DeviceParamsSelected(_)
+            | Events::DeviceDataSelected(_)
             | Events::SetViewSelected(_)
             | Events::SetViewPageSelected(_) => doprocess = true,
             Events::SetNamesChanged
