@@ -73,6 +73,8 @@ conan create .  -s os=Linux -s arch=armv8 -s compiler=gcc -s compiler.version=11
   * this message should also be sent from the control app to indicate what view/page it is displaying
 * `/rnboctl/view/page <page index>`
   * send this message if you're in a param view and the view should display the page you've given (clamped to be in range)
+* `/rnboctl/device/params <device index> [<optional page index>]`
+  * send this message to display the parameters for the device thaat has the given instance index, optionally at the specified 0-indexed page
 
 
 ## Notes
