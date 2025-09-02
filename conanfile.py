@@ -5,7 +5,8 @@ import re
 BUILD_SCRIPT = r""" #!/bin/bash
 
 . "$HOME/.cargo/env"
-cd /build/
+cp -r /build /home/node/build
+cd /home/node/build/
 
 CONAN_SETTINGS="-s os=Linux -s arch=armv8 -s compiler=gcc -s compiler.version=11.4 -s compiler.libcxx=libstdc++11"
 
@@ -22,6 +23,7 @@ cargo build --target=aarch64-unknown-linux-gnu --release \
 --config './.cargo/config-docker.toml' \
 --config 'target.aarch64-unknown-linux-gnu.linker="/usr/local/oecore-x86_64/sysroots/x86_64-oesdk-linux/usr/bin/aarch64-oe-linux/aarch64-oe-linux-gcc"' \
 --config "target.aarch64-unknown-linux-gnu.rustflags=[\"-C\", \"link-arg=-Wl,-rpath,/data/UserData/rnbo/lib/\", \"-C\", \"link-arg=--sysroot=/usr/local/oecore-x86_64/sysroots/cortexa72-oe-linux\", \"-C\", \"link-arg=-L${{JACK_PACKAGE_FOLDER}}/lib/\"]"
+cp -r /home/node/build/target /build/target
 """
 
 class RNBOMoveControl(ConanFile):
