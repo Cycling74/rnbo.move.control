@@ -71,6 +71,8 @@ static PARAM_META_REGEX: Lazy<Regex> = Lazy::new(|| {
 
 pub const SET_VIEW_DISPLAY: &str = "/rnboctl/view/display";
 pub const SET_VIEW_PAGE_DISPLAY: &str = "/rnboctl/view/page";
+pub const DEVICE_PARAM_DISPLAY: &str = "/rnboctl/device/params";
+pub const DEVICE_DATA_DISPLAY: &str = "/rnboctl/device/data";
 
 const JOG_WHEEL_TOUCH: usize = 9;
 const VOLUME_WHEEL_TOUCH: usize = 8;
@@ -559,6 +561,9 @@ enum Events {
     ChildProcessError,
     PopupRequested,
     PopupTimeout,
+
+    DeviceParamsSelected((usize, usize)), //index, page
+    DeviceDataSelected(usize),            //index
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -822,6 +827,13 @@ pub mod top {
             VolumeEditor(LastView) + SetViewSelected(_) = ParamViews,
             VolumeEditor(LastView) + SetViewPageSelected(_) = ParamViews,
 
+            ParamViews + DeviceParamsSelected(_) = Main,
+            VolumeEditor(LastView) + DeviceParamsSelected(_) = Main,
+            Popup(LastView) + DeviceParamsSelected(_) = Main,
+            ParamViews + DeviceDataSelected(_) = Main,
+            VolumeEditor(LastView) + DeviceDataSelected(_) = Main,
+            Popup(LastView) + DeviceDataSelected(_) = Main,
+
             Main + PopupRequested = Popup(LastView::Main),
             ParamViews + PopupRequested = Popup(LastView::ParamViews),
             Popup(LastView) + PopupTimeout [*state == LastView::Main] = Main,
@@ -1001,6 +1013,10 @@ smlang::statemachine! {
         TempoEditor + Tempo(_) = TempoEditor,
 
         About + BtnDown(Button::Back) = Menu(ABOUT_INDEX),
+
+        //direct OSC based state changes
+        _ + DeviceParamsSelected(_) = PatcherParams(ParamPage { index: event.0, page: event.1, focused: None }),
+        _ + DeviceDataSelected(_) = PatcherDatarefs(DataSel::new(*event, ctx.dataref_count(*event))),
     }
 }
 
@@ -1058,10 +1074,10 @@ pub struct StateController {
     param_values: [Srgb<u8>; 8],
     param_values_last: [Srgb<u8>; 8],
 
-    //(sparce instance index, param_id) -> (local instance_index, param index)
+    //(sparse instance index, param_id) -> (local instance_index, param index)
     instance_param_map: HashMap<(usize, String), (usize, usize)>,
 
-    //sparce instance index -> alias
+    //sparse instance index -> alias
     instance_alias_map: HashMap<usize, String>,
 
     param_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
@@ -1082,8 +1098,8 @@ pub struct StateController {
     patchers_params_instance_names: Vec<String>, //only those that have params
     patchers_datarefs_instance_names: Vec<String>, //only those that have datarefs
 
-    patchers_params_instance_indexes: Vec<usize>, //only those that have params, index into self.instances
-    patchers_datarefs_instance_indexes: Vec<usize>, //only those that have datarefs, index into self.instances
+    patchers_params_instance_indexes: Vec<(usize, usize)>, //only those that have params, (index into self.instances, sparse index)
+    patchers_datarefs_instance_indexes: Vec<(usize, usize)>, //only those that have datarefs, (index into self.instances, sparse index)
 
     child_process_error: Option<(String, std::io::Result<std::process::ExitStatus>)>,
 
@@ -1399,7 +1415,7 @@ impl StateController {
                     self.instance_params.push(instindexes);
                     self.patchers_params_instance_names.push(name.clone());
                     self.patchers_params_instance_indexes
-                        .push(local_instance_index);
+                        .push((local_instance_index, inst.index()));
                 }
             }
 
@@ -1408,7 +1424,7 @@ impl StateController {
                 if !visible.is_empty() {
                     self.patchers_datarefs_instance_names.push(name.clone());
                     self.patchers_datarefs_instance_indexes
-                        .push(local_instance_index);
+                        .push((local_instance_index, inst.index()));
                     common.dataref_count.push(visible.len());
                 }
                 for d in inst.dataref_mappings().keys() {
@@ -1460,7 +1476,7 @@ impl StateController {
                 self.patchers_params_instance_names
                     .push(self.instances[local_instance_index].alias_or_index_name());
                 self.patchers_params_instance_indexes
-                    .push(local_instance_index);
+                    .push((local_instance_index, inst_index));
             }
         };
 
@@ -1497,7 +1513,7 @@ impl StateController {
         self.patchers_params_instance_names = self
             .patchers_params_instance_indexes
             .iter()
-            .map(|index| {
+            .map(|(index, _sparse)| {
                 let inst = self.instances.get(*index).expect("to get instance");
                 inst.alias_or_index_name()
             })
@@ -1505,7 +1521,7 @@ impl StateController {
         self.patchers_datarefs_instance_names = self
             .patchers_datarefs_instance_indexes
             .iter()
-            .map(|index| {
+            .map(|(index, _sparse)| {
                 let inst = self.instances.get(*index).expect("to get instance");
                 inst.alias_or_index_name()
             })
@@ -1593,8 +1609,8 @@ impl StateController {
         for v in self.param_views.iter() {
             //find the param indexes indicated by the sparse (instance, param) pair
             let mut params = Vec::new();
-            for sparce in v.params().iter() {
-                if let Some((instance, param)) = self.instance_param_map.get(sparce) {
+            for sparse in v.params().iter() {
+                if let Some((instance, param)) = self.instance_param_map.get(sparse) {
                     if let Some(instance) = self.instance_params.get(*instance) {
                         if let Some(index) = instance.get(*param) {
                             params.push(*index);
@@ -1605,7 +1621,7 @@ impl StateController {
                         eprintln!("couldn't get instance at local index {}", *instance);
                     }
                 } else {
-                    eprintln!("couldn't find instance at index {:?}", sparce);
+                    eprintln!("couldn't find instance at index {:?}", sparse);
                 }
             }
             if !params.is_empty() {
@@ -1704,6 +1720,14 @@ impl StateController {
                 self.handle_event(Events::SetViewListChanged);
             }
         } else {
+            let as_index = |arg: &OscType| -> Option<usize> {
+                match arg {
+                    OscType::Double(v) => Some(v.max(0.0) as usize),
+                    OscType::Float(v) => Some(v.max(0.0) as usize),
+                    OscType::Int(v) => Some(*v.max(&0) as usize),
+                    _ => None,
+                }
+            };
             //println!("got osc {}", msg.addr);
             //let mut update = None;
             match msg.addr.as_str() {
@@ -1778,12 +1802,7 @@ impl StateController {
                 }
                 SET_VIEW_DISPLAY => {
                     if !msg.args.is_empty()
-                        && let Some(mut index) = match &msg.args[0] {
-                            OscType::Double(v) => Some(v.max(0.0) as usize),
-                            OscType::Float(v) => Some(v.max(0.0) as usize),
-                            OscType::Int(v) => Some(*v.max(&0) as usize),
-                            _ => None,
-                        }
+                        && let Some(mut index) = as_index(&msg.args[0])
                     {
                         let mut page = 0;
                         if msg.args.len() > 1 {
@@ -1814,15 +1833,67 @@ impl StateController {
                     }
                 }
                 SET_VIEW_PAGE_DISPLAY => {
-                    if msg.args.len() == 1
-                        && let Some(index) = match &msg.args[0] {
-                            OscType::Double(v) => Some(v.max(0.0) as usize),
-                            OscType::Float(v) => Some(v.max(0.0) as usize),
-                            OscType::Int(v) => Some(*v.max(&0) as usize),
-                            _ => None,
-                        }
+                    if !msg.args.is_empty()
+                        && let Some(index) = as_index(&msg.args[0])
                     {
                         self.handle_event(Events::SetViewPageSelected(index));
+                    }
+                }
+                DEVICE_PARAM_DISPLAY => {
+                    if !msg.args.is_empty()
+                        && let Some(index) = as_index(&msg.args[0])
+                    {
+                        let mut page = 0;
+                        if msg.args.len() > 1 {
+                            if let Some(p) = as_index(&msg.args[1]) {
+                                page = p
+                            } else {
+                                eprintln!("invalid 2nd arg for device param display select");
+                                return;
+                            }
+                        }
+
+                        let mut local: Option<usize> = None;
+                        for (l, (_, sparse)) in
+                            self.patchers_params_instance_indexes.iter().enumerate()
+                        {
+                            if index == *sparse {
+                                local = Some(l);
+                                break;
+                            }
+                        }
+                        let ctx = self.sm.context();
+
+                        let (local, pages) = if let Some(local) = local {
+                            (local, ctx.instance_param_pages(local))
+                        } else {
+                            eprintln!("no instance with visible params and index {}", index);
+                            return;
+                        };
+                        if pages > 0 {
+                            page = page.min(pages - 1);
+                            self.handle_event(Events::DeviceParamsSelected((local, page)));
+                        }
+                    }
+                }
+                DEVICE_DATA_DISPLAY => {
+                    if !msg.args.is_empty()
+                        && let Some(index) = as_index(&msg.args[0])
+                    {
+                        let mut local: Option<usize> = None;
+                        for (l, (_, sparse)) in
+                            self.patchers_datarefs_instance_indexes.iter().enumerate()
+                        {
+                            if index == *sparse {
+                                local = Some(l);
+                                break;
+                            }
+                        }
+                        if let Some(local) = local {
+                            self.handle_event(Events::DeviceDataSelected(local));
+                        } else {
+                            eprintln!("no instance with visible datarefs and index {}", index);
+                        };
                     }
                 }
                 _ => {
@@ -2483,7 +2554,7 @@ impl StateController {
                 setup_common(line!(), self);
                 if let Some(inst) = self
                     .instances
-                    .get(self.patchers_datarefs_instance_indexes[entry.instance()])
+                    .get(self.patchers_datarefs_instance_indexes[entry.instance()].0)
                 {
                     let name = self
                         .patchers_datarefs_instance_names
@@ -2506,7 +2577,7 @@ impl StateController {
                 setup_common(line!(), self);
                 if let Some(inst) = self
                     .instances
-                    .get(self.patchers_datarefs_instance_indexes[entry.dataref().instance()])
+                    .get(self.patchers_datarefs_instance_indexes[entry.dataref().instance()].0)
                 {
                     let indicated =
                         inst.visible_datarefs()
@@ -2717,46 +2788,35 @@ impl StateController {
             }
         }
 
-        //if we're coming out of volume into a parameter editor for instance, we want to
-        //know what we've touched
-        let mut touch = false;
-
-        //pass thru some events that always need to get thru
+        //if some events come through, we always process even if there isn't a transition,
+        //if some events come through we always forward them to one of the state machines
+        let mut doprocess = !top_trans;
         match e {
-            Events::EncTouch(e) if e < 8 => touch = true,
+            Events::EncTouch(e) if e < 8 => doprocess = true,
+            Events::DeviceParamsSelected(_)
+            | Events::DeviceDataSelected(_)
+            | Events::SetViewSelected(_)
+            | Events::SetViewPageSelected(_) => doprocess = true,
             Events::SetNamesChanged
             | Events::SetPresetNamesChanged
             | Events::SetCurrentChanged
             | Events::SetPresetLoadedChanged
-                if top_cur != top::States::Main =>
+                if top_cur != top::States::Main && !doprocess =>
             {
                 let _ = self.sm.process_event(e);
             }
-            Events::SetViewListChanged if top_cur != top::States::ParamViews => {
+            Events::SetViewListChanged if top_cur != top::States::ParamViews && !doprocess => {
                 let _ = self.viewsm.process_event(e);
             }
             _ => (),
         };
 
-        //println!("top state {:?}", self.topsm.state());
-
         match top_cur {
-            top::States::Main => {
-                if touch || !top_trans {
-                    let _ = self.sm.process_event(e);
-                }
+            top::States::Main if doprocess => {
+                let _ = self.sm.process_event(e);
             }
-            top::States::ParamViews => {
-                match e {
-                    Events::SetViewSelected(_) | Events::SetViewPageSelected(_) => {
-                        touch = true; //hack to pass event thru
-                    }
-                    _ => (),
-                };
-
-                if touch || !top_trans {
-                    let _ = self.viewsm.process_event(e);
-                }
+            top::States::ParamViews if doprocess => {
+                let _ = self.viewsm.process_event(e);
             }
             _ => (),
         };
@@ -2958,7 +3018,8 @@ impl StateController {
                     } else {
                         return;
                     };
-                    if let Some(instance) = self.patchers_datarefs_instance_indexes.get(instance)
+                    if let Some((instance, _sparse)) =
+                        self.patchers_datarefs_instance_indexes.get(instance)
                         && let Some(instance) = self.instances.get(*instance)
                         && let Some(name) = instance.visible_datarefs().get(datarefindex)
                     {
