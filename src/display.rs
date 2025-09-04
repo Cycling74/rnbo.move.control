@@ -1,7 +1,7 @@
 use embedded_graphics_core::{draw_target::DrawTarget, pixelcolor::BinaryColor, prelude::*};
 
 const HEADER_LEN: usize = 8;
-const DISPLAY_BYTES: usize = 1024;
+pub const DISPLAY_BYTES: usize = 1024;
 
 pub const DISPLAY_WIDTH: u32 = 128;
 pub const DISPLAY_HEIGHT: u32 = 64;
