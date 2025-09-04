@@ -1235,17 +1235,7 @@ impl StateController {
             view::StateMachine::new_with_state(context.clone(), view::States::ParamViewMenu(0));
         let topsm = top::StateMachine::new(context);
 
-        //do config
-        let config = if std::path::Path::exists(&config_path) {
-            if let Ok(file) = File::open(&config_path) {
-                let reader = BufReader::new(file);
-                serde_json::from_reader(reader).unwrap_or_default()
-            } else {
-                Config::default()
-            }
-        } else {
-            Config::default()
-        };
+        let config = Config::read_or_default(&config_path);
 
         //init volume
         volume.store(config.volume, AtomicOrdering::SeqCst);
