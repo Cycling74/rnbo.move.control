@@ -1,7 +1,11 @@
+* **current**
+    * added a UDP OSC listener
+        * port defaults to: 2345
+        * lets you send `/rnboctl/` messages directly from your host instead of having to use RNBO.
 * **0.1.0-beta.11**
     * added new osc routes
-      * `/rnboctl/device/params <device index> [<optional page index>]`
-      * `/rnboctl/device/data <device index>`
+        * `/rnboctl/device/params <device index> [<optional page index>]`
+        * `/rnboctl/device/data <device index>`
 * **0.1.0-beta.10**
     * using param `steps` and `enum` values to inform normalized parameter updates and better reach all steps of enum and stepped values
     * updated param pager display to use scrollbar
