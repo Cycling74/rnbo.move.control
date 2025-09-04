@@ -1322,7 +1322,7 @@ dependencies = [
 [[package]]
 name = "mousefood"
 version = "0.2.1"
-source = "git+https://github.com/x37v/mousefood?branch=main#bbcc2720e516875360f234b9b4eec0cc79b42c9e"
+source = "git+https://github.com/x37v/mousefood?branch=main#21666407529dee43484fb0dd18290296dc480417"
 dependencies = [
  "embedded-graphics",
  "embedded-graphics-unicodefonts",
