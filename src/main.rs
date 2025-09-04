@@ -531,12 +531,7 @@ async fn with_client(
             tokio::time::sleep(Duration::from_millis(23)).await;
 
             let mut g = state.lock().await;
-            let _ = terminal.clear();
-            terminal
-                .draw(|frame| {
-                    g.render(frame);
-                })
-                .expect("to render frame");
+            g.render(&mut terminal);
             g.process_cmds().await;
         }
     };

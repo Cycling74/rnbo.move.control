@@ -562,6 +562,8 @@ enum Events {
     PopupRequested,
     PopupTimeout,
 
+    UserDisplayRequested,
+
     DeviceParamsSelected((usize, usize)), //index, page
     DeviceDataSelected(usize),            //index
 }
@@ -841,6 +843,13 @@ pub mod top {
             Popup(LastView) + EncTouch(JOG_WHEEL_TOUCH) [*state == LastView::Main] = Main,
             Popup(LastView) + EncTouch(JOG_WHEEL_TOUCH) [*state == LastView::ParamViews] = ParamViews,
 
+            Main + UserDisplayRequested = UserDisplay(LastView::Main),
+            ParamViews + UserDisplayRequested = UserDisplay(LastView::ParamViews),
+            VolumeEditor(LastView) + UserDisplayRequested = UserDisplay(state.clone()),
+
+            UserDisplay(LastView) + BtnDown(Button::Back) [*state == LastView::Main] = Main,
+            UserDisplay(LastView) + BtnDown(Button::Back) [*state == LastView::ParamViews] = ParamViews,
+
             _ + ChildProcessError = DisplayChildProcessError,
             DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
         }
@@ -1032,6 +1041,23 @@ impl Caps {
     }
 }
 
+struct UserDisplayLayer {
+    buffer: [u8; crate::display::DISPLAY_BYTES],
+}
+
+impl Default for UserDisplayLayer {
+    fn default() -> Self {
+        Self {
+            buffer: [0; crate::display::DISPLAY_BYTES],
+        }
+    }
+}
+
+#[derive(Default)]
+struct UserDisplay {
+    layers: std::collections::BTreeMap<isize, UserDisplayLayer>,
+}
+
 pub struct StateController {
     line_token: u32, //used for "once" actions (lighting leds from render methods)
     tracked_buttons: HashMap<u8, MoveColor>,
@@ -1111,6 +1137,7 @@ pub struct StateController {
     datafile_menu: Vec<String>,
 
     popup: Popup,
+    user_display: UserDisplay,
 }
 
 #[derive(Clone, Debug)]
@@ -1322,6 +1349,7 @@ impl StateController {
             datafile_menu: Vec::new(),
 
             popup: Default::default(),
+            user_display: Default::default(),
         };
 
         s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
@@ -2611,138 +2639,165 @@ impl StateController {
         }
     }
 
-    pub fn render(&mut self, frame: &mut ratatui::Frame) {
+    pub fn render(
+        &mut self,
+        terminal: &mut ratatui::Terminal<
+            mousefood::EmbeddedBackend<
+                '_,
+                crate::display::MoveDisplay,
+                embedded_graphics_core::pixelcolor::BinaryColor,
+            >,
+        >,
+    ) {
         use top::States;
 
         let state = self.topsm.state().clone();
         self.param_values = [Srgb::new(0, 0, 0); 8]; //clear out params, they may then get updated
-        match state {
-            States::Init => {
-                self.do_once(line!(), |s| {
-                    s.render_buttons([
-                        (MENU_MIDI, MoveColor::LightGray),
-                        (BACK_MIDI, MoveColor::LightGray),
-                    ]);
-                });
 
-                use pad::PadStr;
-                use std::collections::VecDeque;
-                let w = frame.area().width as usize;
-                let cnt = (frame.count() / ANIMATION_FRAME_DIV) % w;
+        let _ = terminal.clear();
+        let mut draw_raw = false;
+        terminal
+            .draw(|frame| match state {
+                States::Init => {
+                    self.do_once(line!(), |s| {
+                        s.render_buttons([
+                            (MENU_MIDI, MoveColor::LightGray),
+                            (BACK_MIDI, MoveColor::LightGray),
+                        ]);
+                    });
 
-                let mut text: Text = Default::default();
+                    use pad::PadStr;
+                    use std::collections::VecDeque;
+                    let w = frame.area().width as usize;
+                    let cnt = (frame.count() / ANIMATION_FRAME_DIV) % w;
 
-                let heading = "RNBO on Move!".pad_to_width(w);
-                let (s, e) = heading.split_at(cnt);
-                let s = e.to_string() + s;
-                let mut line: VecDeque<char> = s.chars().collect();
-                let e = if self.has_all_capabilities { 4 } else { 2 };
-                for _ in 0..e {
-                    text.push_line(Line::from(line.iter().collect::<String>()));
-                    line.rotate_left(1);
-                }
-                if !self.has_all_capabilities {
-                    text.push_line(Line::from("REDUCED"));
-                    text.push_line(Line::from("CAPABILITIES"));
-                }
+                    let mut text: Text = Default::default();
 
-                frame.render_widget(Paragraph::new(text.centered()).centered(), frame.area());
-            }
-            States::LaunchMove => {
-                self.do_once(line!(), |s| {
-                    s.render_buttons([]);
-                });
-                frame.render_widget(
-                    Paragraph::new(Text::from("Launching Move").centered()).centered(),
-                    frame.area(),
-                );
-            }
-            States::PowerOff => {
-                self.do_once(line!(), |s| {
-                    s.render_buttons([]);
-                });
-                frame.render_widget(
-                    Paragraph::new(Text::from("Powering Down").centered()).centered(),
-                    frame.area(),
-                );
-            }
-            States::PromptExit(selected) => {
-                let can_exit = self.child_process_error.is_none();
-                self.do_once(line!(), |s| {
-                    if can_exit {
-                        s.render_buttons([(BACK_MIDI, MoveColor::LightGray)]);
-                    } else {
-                        s.render_buttons([]);
+                    let heading = "RNBO on Move!".pad_to_width(w);
+                    let (s, e) = heading.split_at(cnt);
+                    let s = e.to_string() + s;
+                    let mut line: VecDeque<char> = s.chars().collect();
+                    let e = if self.has_all_capabilities { 4 } else { 2 };
+                    for _ in 0..e {
+                        text.push_line(Line::from(line.iter().collect::<String>()));
+                        line.rotate_left(1);
                     }
-                });
+                    if !self.has_all_capabilities {
+                        text.push_line(Line::from("REDUCED"));
+                        text.push_line(Line::from("CAPABILITIES"));
+                    }
 
-                render_menu(
-                    frame,
-                    Some("Exit"),
-                    &EXIT_MENU,
-                    default_indicator,
-                    all_enabled,
-                    selected,
-                    None,
-                );
-            }
-            States::VolumeEditor(_) => {
-                self.do_once(line!(), |s| {
-                    s.render_buttons([
-                        (BACK_MIDI, MoveColor::LightGray),
-                        (MENU_MIDI, MoveColor::LightGray),
-                    ]);
-                });
-
-                let title = format_title("Volume");
-                let volume = format!("{:.2}", self.volume());
-                let content = vec![Line::default(), Line::from(volume).centered()];
-                let paragraph = Paragraph::new(content).alignment(Alignment::Center);
-
-                let layout = titled_layout(frame.area());
-                frame.render_widget(title, layout[0]);
-                frame.render_widget(paragraph, layout[1]);
-            }
-            States::DisplayChildProcessError => {
-                self.do_once(line!(), |s| {
-                    s.render_buttons([]);
-                });
-
-                let title = format_title("Crashed");
-
-                let name = self.child_process_error.as_ref().unwrap().0.clone();
-                let p = std::path::Path::new(name.as_str());
-                let prog = p.file_name().unwrap().to_str().unwrap();
-                let content = vec![
-                    Line::from(prog),
-                    Line::from("please report"),
-                    Line::from("then hit power"),
-                ];
-                let paragraph = Paragraph::new(content).alignment(Alignment::Center);
-
-                let layout = titled_layout(frame.area());
-                frame.render_widget(title, layout[0]);
-                frame.render_widget(paragraph, layout[1]);
-            }
-            States::Popup(_) => {
-                if self.popup.timed_out() {
-                    self.handle_event(Events::PopupTimeout);
+                    frame.render_widget(Paragraph::new(text.centered()).centered(), frame.area());
                 }
+                States::LaunchMove => {
+                    self.do_once(line!(), |s| {
+                        s.render_buttons([]);
+                    });
+                    frame.render_widget(
+                        Paragraph::new(Text::from("Launching Move").centered()).centered(),
+                        frame.area(),
+                    );
+                }
+                States::PowerOff => {
+                    self.do_once(line!(), |s| {
+                        s.render_buttons([]);
+                    });
+                    frame.render_widget(
+                        Paragraph::new(Text::from("Powering Down").centered()).centered(),
+                        frame.area(),
+                    );
+                }
+                States::PromptExit(selected) => {
+                    let can_exit = self.child_process_error.is_none();
+                    self.do_once(line!(), |s| {
+                        if can_exit {
+                            s.render_buttons([(BACK_MIDI, MoveColor::LightGray)]);
+                        } else {
+                            s.render_buttons([]);
+                        }
+                    });
 
-                let width = frame.area().width;
-                let layout = titled_layout(frame.area());
+                    render_menu(
+                        frame,
+                        Some("Exit"),
+                        &EXIT_MENU,
+                        default_indicator,
+                        all_enabled,
+                        selected,
+                        None,
+                    );
+                }
+                States::UserDisplay(_) => {
+                    self.do_once(line!(), |s| {
+                        s.render_buttons([(BACK_MIDI, MoveColor::LightGray)]);
+                    });
+                    draw_raw = true;
+                }
+                States::VolumeEditor(_) => {
+                    self.do_once(line!(), |s| {
+                        s.render_buttons([
+                            (BACK_MIDI, MoveColor::LightGray),
+                            (MENU_MIDI, MoveColor::LightGray),
+                        ]);
+                    });
 
-                let title = format_title(animate_text(self.popup.title(), width, frame.count()));
-                frame.render_widget(title, layout[0]);
+                    let title = format_title("Volume");
+                    let volume = format!("{:.2}", self.volume());
+                    let content = vec![Line::default(), Line::from(volume).centered()];
+                    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
 
-                let content = animate_text(self.popup.content(), width, frame.count());
-                let content = vec![Line::from(""), Line::from(content), Line::from("")];
-                let paragraph = Paragraph::new(content).alignment(Alignment::Center);
-                frame.render_widget(paragraph, layout[1]);
-            }
-            States::Main => self.render_main(frame),
-            States::ParamViews => self.render_param_views(frame),
+                    let layout = titled_layout(frame.area());
+                    frame.render_widget(title, layout[0]);
+                    frame.render_widget(paragraph, layout[1]);
+                }
+                States::DisplayChildProcessError => {
+                    self.do_once(line!(), |s| {
+                        s.render_buttons([]);
+                    });
+
+                    let title = format_title("Crashed");
+
+                    let name = self.child_process_error.as_ref().unwrap().0.clone();
+                    let p = std::path::Path::new(name.as_str());
+                    let prog = p.file_name().unwrap().to_str().unwrap();
+                    let content = vec![
+                        Line::from(prog),
+                        Line::from("please report"),
+                        Line::from("then hit power"),
+                    ];
+                    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+
+                    let layout = titled_layout(frame.area());
+                    frame.render_widget(title, layout[0]);
+                    frame.render_widget(paragraph, layout[1]);
+                }
+                States::Popup(_) => {
+                    if self.popup.timed_out() {
+                        self.handle_event(Events::PopupTimeout);
+                    }
+
+                    let width = frame.area().width;
+                    let layout = titled_layout(frame.area());
+
+                    let title =
+                        format_title(animate_text(self.popup.title(), width, frame.count()));
+                    frame.render_widget(title, layout[0]);
+
+                    let content = animate_text(self.popup.content(), width, frame.count());
+                    let content = vec![Line::from(""), Line::from(content), Line::from("")];
+                    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+                    frame.render_widget(paragraph, layout[1]);
+                }
+                States::Main => self.render_main(frame),
+                States::ParamViews => self.render_param_views(frame),
+            })
+            .expect("to render frame");
+
+        if draw_raw {
+            let mut _display = terminal.backend_mut().display_mut();
+            //here
         }
+
         self.render_params();
     }
 
