@@ -219,7 +219,7 @@ async fn with_client(
     c: Client,
     logger: &mut syslog::Logger<syslog::LoggerBackend, syslog::Formatter3164>,
     startup: &Vec<StartupProcess>,
-    config: &Path,
+    config_path: &Path,
     caps: Caps,
 ) -> Result<(), Box<dyn Error>> {
     let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
@@ -491,12 +491,16 @@ async fn with_client(
         None
     };
 
+    let config_path = config_path.to_path_buf();
+    let config = Config::read_or_default(&config_path);
+    let oscport = config.oscport();
+
     let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(StateController::new(
             midi_out_tx,
             volume,
             package_version,
-            config.to_path_buf(),
+            config_path,
             has_all_capabilities,
         )));
 
@@ -534,6 +538,66 @@ async fn with_client(
                 })
                 .expect("to render frame");
             g.process_cmds().await;
+        }
+    };
+
+    let osc_future = async {
+        use {
+            smol::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+            std::{future::Future, pin::Pin},
+            tokio::sync::Mutex,
+        };
+
+        async fn handle_osc(
+            packet: rosc::OscPacket,
+            state: Arc<Mutex<StateController>>,
+        ) -> Pin<Box<dyn Future<Output = ()>>> {
+            Box::pin(async move {
+                match packet {
+                    rosc::OscPacket::Message(msg) => {
+                        let mut c = state.lock().await;
+                        c.handle_osc(&msg).await;
+                    }
+                    rosc::OscPacket::Bundle(bundle) => {
+                        for packet in bundle.content.iter() {
+                            let _ = handle_osc(packet.clone(), state.clone()).await;
+                        }
+                    }
+                }
+            })
+        }
+
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), oscport);
+        let state = state.clone();
+        match UdpSocket::bind(addr.clone()).await {
+            Ok(socket) => {
+                let mut buf = [0u8; rosc::decoder::MTU];
+                loop {
+                    match socket.recv_from(&mut buf).await {
+                        Ok((size, _addr)) => {
+                            let (_, packet) = rosc::decoder::decode_udp(&buf[..size]).unwrap();
+                            if let rosc::OscPacket::Message(msg) = &packet {
+                                //hot path
+                                let mut c = state.lock().await;
+                                c.handle_osc(&msg).await;
+                            } else {
+                                let _ = handle_osc(packet, state.clone()).await;
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error receiving from socket: {}", e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("error {} getting osc socket at addr {}", e, addr);
+            }
+        };
+
+        //do we need this loop?
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     };
 
@@ -1012,6 +1076,7 @@ async fn with_client(
     tokio::select! {
         _ = display_future => (), _ = web_future => (),  _ = http_query_future => (),
         _ = signal_future => (), _ = process_midi => (), _ = disconnect_future => (),
+        _ = osc_future => (),
         _ = children_future => ()
     };
 
@@ -1110,13 +1175,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let homedir = home::home_dir().expect("to get home directory");
 
-    let config = args.config;
-    let config = if let Some(config) = config.strip_prefix("~/") {
+    let config_path = args.config;
+    let config_path = if let Some(config_path) = config_path.strip_prefix("~/") {
         let mut p = homedir.clone();
-        p.push(config);
+        p.push(config_path);
         p
     } else {
-        PathBuf::from(config)
+        PathBuf::from(config_path)
     };
 
     //request changes to resource limits
@@ -1180,7 +1245,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             break;
         }
         if let Ok((c, _status)) = Client::new(name, ClientOptions::NO_START_SERVER) {
-            if let Err(e) = with_client(c, &mut logger, &tostartup, &config, caps).await {
+            if let Err(e) = with_client(c, &mut logger, &tostartup, &config_path, caps).await {
                 let _ = logger.err(e);
             }
             break;
