@@ -1,4 +1,9 @@
-use serde::{Deserialize, Serialize};
+use {
+    serde::{Deserialize, Serialize},
+    std::{fs::File, io::BufReader, path::PathBuf},
+};
+
+const DEFAULT_OSC_PORT: u16 = 2345;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct StartupProcess {
@@ -15,10 +20,33 @@ pub struct StartupConfig {
 #[derive(Deserialize, Serialize, Debug)]
 pub struct Config {
     pub volume: u8, //0..255
+    pub oscport: Option<u16>,
+}
+
+impl Config {
+    pub fn read_or_default(config_path: &PathBuf) -> Self {
+        if std::path::Path::exists(&config_path) {
+            if let Ok(file) = File::open(&config_path) {
+                let reader = BufReader::new(file);
+                serde_json::from_reader(reader).unwrap_or_default()
+            } else {
+                Self::default()
+            }
+        } else {
+            Self::default()
+        }
+    }
+
+    pub fn oscport(&self) -> u16 {
+        self.oscport.unwrap_or(DEFAULT_OSC_PORT)
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { volume: 127 }
+        Self {
+            volume: 127,
+            oscport: Some(DEFAULT_OSC_PORT),
+        }
     }
 }
