@@ -508,13 +508,6 @@ async fn with_client(
         use mousefood::{TerminalAlignment, prelude::*};
 
         let config = EmbeddedBackendConfig {
-            flush_callback: Box::new(move |d: &mut MoveDisplay| {
-                draw_tx
-                    .send(DrawCommand {
-                        data: *d.framebuffer(),
-                    })
-                    .unwrap();
-            }),
             font_regular: font::SPLEEN_8X16,
             font_bold: None,
             vertical_alignment: TerminalAlignment::Center,
@@ -532,6 +525,11 @@ async fn with_client(
 
             let mut g = state.lock().await;
             g.render(&mut terminal);
+            draw_tx
+                .send(DrawCommand {
+                    data: *terminal.backend_mut().display_mut().framebuffer(),
+                })
+                .unwrap();
             g.process_cmds().await;
         }
     };
