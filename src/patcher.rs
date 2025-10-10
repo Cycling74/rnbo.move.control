@@ -1,5 +1,5 @@
 use {
-    crate::{param::Param, util::parse_body_meta},
+    crate::{param::Param, userview::ViewData, util::parse_body_meta},
     serde_json::Value,
     std::collections::{BTreeMap, HashMap},
 };
@@ -33,6 +33,20 @@ fn parse_presets(contents: &serde_json::Map<String, serde_json::Value>) -> Optio
     Some(presets)
 }
 
+fn parse_shm_name(body: &serde_json::Value) -> Option<String> {
+    match body
+        .as_object()?
+        .get("CONTENTS")?
+        .as_object()?
+        .get("shm")?
+        .as_object()?
+        .get("VALUE")?
+    {
+        serde_json::Value::String(name) => Some(name.to_owned()),
+        _ => None,
+    }
+}
+
 fn parse_datarefs(
     contents: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<BTreeMap<String, Dataref>> {
@@ -53,8 +67,13 @@ fn parse_datarefs(
         };
 
         let meta = parse_body_meta(body).unwrap_or(Value::Null);
+        let shm_name = parse_shm_name(body);
 
-        let mapping = Dataref { mapping, meta };
+        let mapping = Dataref {
+            mapping,
+            meta,
+            shm_name,
+        };
 
         datarefs.insert(name.clone(), mapping);
     }
@@ -66,6 +85,7 @@ fn parse_datarefs(
 pub struct Dataref {
     mapping: Option<String>,
     meta: Value,
+    shm_name: Option<String>,
 }
 
 impl Dataref {
@@ -74,6 +94,14 @@ impl Dataref {
     }
     pub fn mapping_mut(&mut self) -> &mut Option<String> {
         &mut self.mapping
+    }
+
+    pub fn set_shm_name(&mut self, shmname: Option<String>) {
+        self.shm_name = shmname;
+    }
+
+    pub fn shm_name(&self) -> &Option<String> {
+        &self.shm_name
     }
 
     //returns true if visibility changes
@@ -90,12 +118,84 @@ impl Dataref {
     pub fn hidden(&self) -> bool {
         if let Some(meta) = self.meta.as_object()
             && meta.contains_key("hidden")
-            && let Some(hidden) = meta.get("hidden")
-            && let Some(v) = hidden.as_bool()
+            && let Some(v) = meta.get("hidden")
+            && let Some(v) = v.as_bool()
         {
             return v;
         }
         false
+    }
+
+    pub fn view_index(&self) -> Option<usize> {
+        if let Some(meta) = self.meta.as_object()
+            && meta.contains_key("view")
+            && let Some(v) = meta.get("view")
+            && let Some(v) = v.as_number()
+        {
+            if let Some(v) = v.as_u64() {
+                Some(v as usize)
+            } else if let Some(v) = v.as_f64() {
+                Some(v.max(0.0) as usize)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn view_z(&self) -> Option<i8> {
+        if let Some(meta) = self.meta.as_object()
+            && meta.contains_key("z")
+            && let Some(v) = meta.get("z")
+            && let Some(v) = v.as_number()
+        {
+            if let Some(v) = v.as_i64() {
+                Some(v as i8)
+            } else if let Some(v) = v.as_f64() {
+                Some(v as i8)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    pub fn view_hidden(&self) -> bool {
+        if let Some(meta) = self.meta.as_object()
+            && meta.contains_key("viewhidden")
+            && let Some(v) = meta.get("viewhidden")
+            && let Some(v) = v.as_bool()
+        {
+            v
+        } else {
+            false
+        }
+    }
+
+    pub fn view_name(&self) -> Option<&str> {
+        if let Some(meta) = self.meta.as_object()
+            && meta.contains_key("viewname")
+            && let Some(v) = meta.get("viewname")
+            && let Some(v) = v.as_str()
+        {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    pub fn view_data(&self) -> Option<ViewData> {
+        self.view_index().map(|view_index| {
+            ViewData::new(
+                view_index,
+                self.view_z(),
+                self.view_hidden(),
+                self.view_name().map(|v| v.to_owned()),
+                self.shm_name().clone(),
+            )
+        })
     }
 }
 

@@ -1,5 +1,17 @@
 use {
-    crate::{config::Config, midi::Midi, param::Param, patcher::PatcherInst, view::ParamView},
+    crate::{
+        config::Config,
+        midi::Midi,
+        param::Param,
+        patcher::PatcherInst,
+        userview::{UserView, ViewData},
+        view::ParamView,
+    },
+    embedded_graphics::{
+        image::{Image, ImageRaw},
+        pixelcolor::BinaryColor,
+        prelude::*,
+    },
     futures_util::{SinkExt, stream::SplitSink},
     once_cell::sync::Lazy,
     palette::Srgb,
@@ -14,7 +26,7 @@ use {
     rosc::{OscMessage, OscPacket, OscType},
     std::{
         cmp::PartialEq,
-        collections::HashMap,
+        collections::{BTreeMap, HashMap},
         fs::File,
         io::BufReader,
         path::PathBuf,
@@ -156,6 +168,10 @@ fn param_layout(rect: ratatui::layout::Rect) -> Rc<[ratatui::layout::Rect]> {
             Constraint::Length(1),
         ])
         .split(rect)
+}
+
+fn dataref_key(instance: usize, drefname: &String) -> String {
+    format!("{} {}", instance, drefname).to_string()
 }
 
 struct ParamFocus {
@@ -548,6 +564,8 @@ enum Events {
     DatarefMappingChanged,
     DatarefVisibleChanged,
 
+    UserViewsChanged,
+
     SetNamesChanged,
     SetPresetNamesChanged,
 
@@ -697,9 +715,10 @@ impl DataLoad {
     }
 }
 
-const MENU_ITEMS: [&str; 7] = [
+const MENU_ITEMS: [&str; 8] = [
     "Device Params",
     "Device Data",
+    "User Views",
     "Graphs",
     "Graph Presets",
     "Patchers",
@@ -711,11 +730,13 @@ const PRESET_MENU_ITEMS: [&str; 5] = ["Load", "Save", "Overwrite", "Set Initial"
 
 const DEVICE_PARAMS_INDEX: usize = 0;
 const DEVICE_DATA_INDEX: usize = 1;
-const GRAPHS_INDEX: usize = 2;
-const GRAPH_PRESETS_INDEX: usize = 3;
-const PATCHERS_INDEX: usize = 4;
-const TEMPO_INDEX: usize = 5;
-const ABOUT_INDEX: usize = 6;
+const USER_VIEWS_INDEX: usize = 2;
+
+const GRAPHS_INDEX: usize = 3;
+const GRAPH_PRESETS_INDEX: usize = 4;
+const PATCHERS_INDEX: usize = 5;
+const TEMPO_INDEX: usize = 6;
+const ABOUT_INDEX: usize = 7;
 
 const PRESET_MENU_LOAD_INDEX: usize = 0;
 const PRESET_MENU_SAVE_INDEX: usize = 1;
@@ -843,13 +864,6 @@ pub mod top {
             Popup(LastView) + EncTouch(JOG_WHEEL_TOUCH) [*state == LastView::Main] = Main,
             Popup(LastView) + EncTouch(JOG_WHEEL_TOUCH) [*state == LastView::ParamViews] = ParamViews,
 
-            Main + UserDisplayRequested = UserDisplay(LastView::Main),
-            ParamViews + UserDisplayRequested = UserDisplay(LastView::ParamViews),
-            VolumeEditor(LastView) + UserDisplayRequested = UserDisplay(state.clone()),
-
-            UserDisplay(LastView) + BtnDown(Button::Back) [*state == LastView::Main] = Main,
-            UserDisplay(LastView) + BtnDown(Button::Back) [*state == LastView::ParamViews] = ParamViews,
-
             _ + ChildProcessError = DisplayChildProcessError,
             DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
         }
@@ -914,6 +928,9 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) == 1] = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
+
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() > 1] = UserViewList(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() == 1] = UserView(0),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHERS_INDEX && ctx.patchers_count() > 0] = PatchersList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
@@ -1014,6 +1031,16 @@ smlang::statemachine! {
         PatchersList(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::LoadPatcher(*state)); = PatchersList(*state),
         PatchersList(usize) + PatcherNamesChanged = Menu(PATCHERS_INDEX), //backout, TODO be smarter
 
+        UserViewList(usize) + BtnDown(Button::Back) = Menu(USER_VIEWS_INDEX),
+        UserViewList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.userviews_count() > *state + 1] = UserViewList(*state + 1),
+        UserViewList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = UserViewList(*state - 1),
+        UserViewList(usize) + BtnDown(Button::JogWheel) = UserView(*state),
+        UserViewList(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
+
+        UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() > 1] = UserViewList(*state),
+        UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() < 2] = Menu(USER_VIEWS_INDEX),
+        UserView(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
+
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
         TempoEditor + EncRight(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(1)); = TempoEditor,
         TempoEditor + EncLeft(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(-1)); = TempoEditor,
@@ -1051,11 +1078,6 @@ impl Default for UserDisplayLayer {
             buffer: [0; crate::display::DISPLAY_BYTES],
         }
     }
-}
-
-#[derive(Default)]
-struct UserDisplay {
-    layers: std::collections::BTreeMap<isize, UserDisplayLayer>,
 }
 
 pub struct StateController {
@@ -1110,6 +1132,7 @@ pub struct StateController {
     param_norm_lookup: HashMap<String, usize>, //OSC addr -> index into self.params
     dataref_lookup: HashMap<String, (usize, String)>, //OSC addr -> (index into self.instances, datarefname)
     dataref_meta_lookup: HashMap<String, (usize, String)>, //OSC addr -> (index into self.instances, datarefname)
+    dataref_shm_lookup: HashMap<String, (usize, String)>, //OSC addr -> (index into self.instances, datarefname)
 
     param_views: Vec<ParamView>,
     param_view_order: Vec<usize>,
@@ -1120,6 +1143,7 @@ pub struct StateController {
     set_names: Vec<String>,
     patcher_names: Vec<String>,
     set_preset_names: Vec<String>,
+    userview_names: Vec<String>,
 
     patchers_params_instance_names: Vec<String>, //only those that have params
     patchers_datarefs_instance_names: Vec<String>, //only those that have datarefs
@@ -1137,7 +1161,8 @@ pub struct StateController {
     datafile_menu: Vec<String>,
 
     popup: Popup,
-    user_display: UserDisplay,
+
+    userviews: BTreeMap<usize, UserView>,
 }
 
 #[derive(Clone, Debug)]
@@ -1156,6 +1181,8 @@ struct CommonContext {
     pub(crate) datafile_count: usize,
 
     pub(crate) can_exit_powermenu: bool,
+
+    pub(crate) userviews_count: usize,
 }
 
 impl Default for CommonContext {
@@ -1174,6 +1201,8 @@ impl Default for CommonContext {
             datafile_count: 0,
 
             can_exit_powermenu: true,
+
+            userviews_count: 0,
         }
     }
 }
@@ -1242,6 +1271,10 @@ impl Context {
 
     fn can_exit_powermenu(&self) -> bool {
         self.common.can_exit_powermenu
+    }
+
+    fn userviews_count(&self) -> usize {
+        self.common.userviews_count
     }
 }
 
@@ -1323,6 +1356,7 @@ impl StateController {
             param_norm_lookup: HashMap::new(),
             dataref_lookup: HashMap::new(),
             dataref_meta_lookup: HashMap::new(),
+            dataref_shm_lookup: HashMap::new(),
 
             param_views: Vec::new(),
             param_view_order: Vec::new(),
@@ -1333,6 +1367,7 @@ impl StateController {
             set_names: Vec::new(),
             patcher_names: Vec::new(),
             set_preset_names: Vec::new(),
+            userview_names: Vec::new(),
 
             patchers_params_instance_names: Vec::new(),
             patchers_datarefs_instance_names: Vec::new(),
@@ -1349,7 +1384,7 @@ impl StateController {
             datafile_menu: Vec::new(),
 
             popup: Default::default(),
-            user_display: Default::default(),
+            userviews: Default::default(),
         };
 
         s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
@@ -1390,7 +1425,9 @@ impl StateController {
         self.param_lookup.clear();
         self.param_norm_lookup.clear();
         self.dataref_meta_lookup.clear();
+        self.dataref_shm_lookup.clear();
         self.instances.clear();
+        self.userviews.clear();
 
         let mut common = self.sm.context().common();
         common.instance_param_pages.clear();
@@ -1437,6 +1474,12 @@ impl StateController {
                 }
             }
 
+            for (name, dataref) in inst.dataref_mappings().iter() {
+                let view_data = dataref.view_data();
+                let key = dataref_key(local_instance_index, name);
+                self.update_userview_layer(&key, None, view_data);
+            }
+
             {
                 let visible = inst.visible_datarefs();
                 if !visible.is_empty() {
@@ -1449,9 +1492,16 @@ impl StateController {
                     let addr = format!("/rnbo/inst/{}/data_refs/{}", inst.index(), d.clone());
                     self.dataref_lookup
                         .insert(addr.clone(), (local_instance_index, d.clone()));
-                    let addr = format!("{}/meta", addr);
-                    self.dataref_meta_lookup
-                        .insert(addr, (local_instance_index, d.clone()));
+                    {
+                        let addr = format!("{}/meta", addr);
+                        self.dataref_meta_lookup
+                            .insert(addr, (local_instance_index, d.clone()));
+                    }
+                    {
+                        let addr = format!("{}/shm", addr);
+                        self.dataref_shm_lookup
+                            .insert(addr, (local_instance_index, d.clone()));
+                    }
                 }
             }
 
@@ -1466,10 +1516,13 @@ impl StateController {
             InstSelType::Datarefs,
             self.patchers_datarefs_instance_names.len(),
         );
+        common.userviews_count = self.userviews.len();
+
         self.clear_param_views(); //to be updated later
         self.update_common(common);
 
         self.handle_event(Events::InstancesChanged(indexes.len()));
+        self.handle_event(Events::UserViewsChanged);
     }
 
     fn update_instance_params(&mut self) {
@@ -1524,6 +1577,32 @@ impl StateController {
         self.handle_event(Events::InstancesChanged(
             self.patchers_params_instance_names.len(),
         ));
+    }
+
+    fn update_visible_datarefs(&mut self) {
+        let mut common = self.sm.context().common();
+        common.dataref_count.clear();
+
+        self.patchers_datarefs_instance_names.clear();
+        self.patchers_datarefs_instance_indexes.clear();
+
+        for (local_instance_index, inst) in self.instances.iter().enumerate() {
+            let visible = inst.visible_datarefs();
+            if !visible.is_empty() {
+                let name = inst.alias_or_index_name();
+                self.patchers_datarefs_instance_names.push(name.clone());
+                self.patchers_datarefs_instance_indexes
+                    .push((local_instance_index, inst.index()));
+                common.dataref_count.push(visible.len());
+            }
+        }
+
+        common.instances_count.insert(
+            InstSelType::Datarefs,
+            self.patchers_datarefs_instance_names.len(),
+        );
+
+        self.update_common(common);
     }
 
     //rewrite the names we use based on aliases (if they exist)
@@ -1746,7 +1825,7 @@ impl StateController {
                     _ => None,
                 }
             };
-            //println!("got osc {}", msg.addr);
+            //println!("got osc {:?}", msg);
             //let mut update = None;
             match msg.addr.as_str() {
                 TRANSPORT_ROLLING_ADDR => {
@@ -2023,15 +2102,92 @@ impl StateController {
                             }
                             _ => serde_json::Value::Null,
                         };
+
+                        let key = dataref_key(*index, name);
+                        let mut old_view_index = None;
+                        let mut view_data = None;
+
                         if let Some(inst) = self.instances.get_mut(*index)
                             && let Some(d) = inst.dataref_mappings_mut().get_mut(name)
-                            && d.set_meta(&meta)
                         {
-                            self.handle_event(Events::DatarefVisibleChanged);
+                            old_view_index = d.view_index();
+                            let changed = d.set_meta(&meta);
+                            view_data = d.view_data();
+                            if changed {
+                                inst.update_visible_datarefs();
+                                self.update_visible_datarefs();
+                                self.handle_event(Events::DatarefVisibleChanged);
+                            }
                         }
+                        self.update_userview_layer(&key, old_view_index, view_data);
+                    } else if let Some((index, name)) = self.dataref_shm_lookup.get(&msg.addr)
+                        && msg.args.len() == 1
+                    {
+                        let key = dataref_key(*index, name);
+                        let mut old_view_index = None;
+                        let mut view_data = None;
+
+                        let shmname = match &msg.args[0] {
+                            OscType::String(v) => Some(v.to_owned()),
+                            _ => None,
+                        };
+
+                        if let Some(inst) = self.instances.get_mut(*index)
+                            && let Some(d) = inst.dataref_mappings_mut().get_mut(name)
+                        {
+                            old_view_index = d.view_index();
+                            d.set_shm_name(shmname);
+                            view_data = d.view_data();
+                        }
+                        self.update_userview_layer(&key, old_view_index, view_data);
                     }
                 }
             }
+        }
+    }
+
+    fn update_userview_layer(
+        &mut self,
+        dataref_key: &str,
+        old_view_index: Option<usize>,
+        new_data: Option<ViewData>,
+    ) {
+        let mut changed = false;
+        if let Some(old_view_index) = old_view_index {
+            let remove = if let Some(v) = self.userviews.get_mut(&old_view_index) {
+                v.remove_layer(dataref_key)
+            } else {
+                false
+            };
+            if remove {
+                self.userviews.remove(&old_view_index);
+                changed = true;
+            }
+        }
+        if let Some(new_data) = new_data {
+            let view_index = new_data.view_index();
+            if !self.userviews.contains_key(&view_index) {
+                self.userviews
+                    .insert(view_index, UserView::new(new_data.view_name().clone()));
+            }
+            if let Some(view) = self.userviews.get_mut(&view_index) {
+                if let Some(view_name) = new_data.view_name() {
+                    view.set_name(Some(view_name.clone()));
+                }
+                view.add_layer(dataref_key, &new_data);
+                changed = true;
+            }
+        }
+        if changed {
+            self.userview_names = self
+                .userviews
+                .iter()
+                .map(|(index, v)| v.name_or_default(*index))
+                .collect();
+            let mut common = self.sm.context().common();
+            common.userviews_count = self.userviews.len();
+            self.update_common(common);
+            self.handle_event(Events::UserViewsChanged);
         }
     }
 
@@ -2361,7 +2517,7 @@ impl StateController {
         }
     }
 
-    fn render_main(&mut self, frame: &mut ratatui::Frame) {
+    fn render_main(&mut self, frame: &mut ratatui::Frame) -> Option<usize> {
         let state = self.sm.state().clone();
 
         let setup_common = |line: u32, s: &mut Self| {
@@ -2372,6 +2528,8 @@ impl StateController {
                 ]);
             });
         };
+
+        let mut userview: Option<usize> = None;
 
         match state {
             States::Menu(selected) => {
@@ -2388,6 +2546,7 @@ impl StateController {
                         DEVICE_DATA_INDEX if ctx.instances_count(InstSelType::Datarefs) < 2 => {
                             ITEM_INDICATOR
                         }
+                        USER_VIEWS_INDEX if ctx.userviews_count() < 2 => ITEM_INDICATOR,
                         _ => SUB_MENU_INDICATOR,
                     }
                 };
@@ -2397,6 +2556,7 @@ impl StateController {
                     match index {
                         DEVICE_PARAMS_INDEX => ctx.instances_count(InstSelType::Params) > 0,
                         DEVICE_DATA_INDEX => ctx.instances_count(InstSelType::Datarefs) > 0,
+                        USER_VIEWS_INDEX => ctx.userviews_count() > 0,
                         GRAPHS_INDEX => ctx.sets_count() > 0,
                         GRAPH_PRESETS_INDEX => ctx.set_presets_count() > 0,
                         PATCHERS_INDEX => ctx.patchers_count() > 0,
@@ -2635,8 +2795,25 @@ impl StateController {
                     None, //TODO should there be an indicator(/
                 );
             }
+            States::UserViewList(selected) => {
+                setup_common(line!(), self);
+                render_menu(
+                    frame,
+                    Some("User Views"),
+                    self.userview_names.as_slice(),
+                    default_indicator,
+                    all_enabled,
+                    selected,
+                    None,
+                );
+            }
+            States::UserView(selected) => {
+                setup_common(line!(), self);
+                userview = Some(selected);
+            }
             _ => (), //TODO
-        }
+        };
+        userview
     }
 
     pub fn render(
@@ -2655,6 +2832,9 @@ impl StateController {
         self.param_values = [Srgb::new(0, 0, 0); 8]; //clear out params, they may then get updated
 
         let _ = terminal.clear();
+
+        let mut userview: Option<usize> = None;
+
         let mut draw_raw = false;
         terminal
             .draw(|frame| match state {
@@ -2727,12 +2907,6 @@ impl StateController {
                         None,
                     );
                 }
-                States::UserDisplay(_) => {
-                    self.do_once(line!(), |s| {
-                        s.render_buttons([(BACK_MIDI, MoveColor::LightGray)]);
-                    });
-                    draw_raw = true;
-                }
                 States::VolumeEditor(_) => {
                     self.do_once(line!(), |s| {
                         s.render_buttons([
@@ -2788,14 +2962,15 @@ impl StateController {
                     let paragraph = Paragraph::new(content).alignment(Alignment::Center);
                     frame.render_widget(paragraph, layout[1]);
                 }
-                States::Main => self.render_main(frame),
+                States::Main => userview = self.render_main(frame),
                 States::ParamViews => self.render_param_views(frame),
             })
             .expect("to render frame");
 
-        if draw_raw {
-            let mut _display = terminal.backend_mut().display_mut();
-            //here
+        if let Some(index) = userview {
+            if let Some(userview) = self.userviews.get_mut(&index) {
+                userview.render(terminal.backend_mut().display_mut());
+            }
         }
 
         self.render_params();
@@ -2846,6 +3021,8 @@ impl StateController {
             | Events::SetPresetNamesChanged
             | Events::SetCurrentChanged
             | Events::SetPresetLoadedChanged
+            | Events::DatarefVisibleChanged
+            | Events::UserViewsChanged
                 if top_cur != top::States::Main && !doprocess =>
             {
                 let _ = self.sm.process_event(e);
