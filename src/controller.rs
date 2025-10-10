@@ -1411,6 +1411,8 @@ impl StateController {
         let mut indexes: Vec<usize> = instances.keys().copied().collect();
         indexes.sort();
 
+        let old_view_indexes: Vec<usize> = self.userviews.keys().map(|v| *v).collect();
+
         //XXX what about visible params?
 
         self.patchers_params_instance_names.clear();
@@ -1522,7 +1524,11 @@ impl StateController {
         self.update_common(common);
 
         self.handle_event(Events::InstancesChanged(indexes.len()));
-        self.handle_event(Events::UserViewsChanged);
+
+        let view_indexes: Vec<usize> = self.userviews.keys().map(|v| *v).collect();
+        if view_indexes != old_view_indexes {
+            self.handle_event(Events::UserViewsChanged);
+        }
     }
 
     fn update_instance_params(&mut self) {
@@ -2119,7 +2125,9 @@ impl StateController {
                                 self.handle_event(Events::DatarefVisibleChanged);
                             }
                         }
-                        self.update_userview_layer(&key, old_view_index, view_data);
+                        if self.update_userview_layer(&key, old_view_index, view_data) {
+                            self.handle_event(Events::UserViewsChanged);
+                        }
                     } else if let Some((index, name)) = self.dataref_shm_lookup.get(&msg.addr)
                         && msg.args.len() == 1
                     {
@@ -2139,7 +2147,9 @@ impl StateController {
                             d.set_shm_name(shmname);
                             view_data = d.view_data();
                         }
-                        self.update_userview_layer(&key, old_view_index, view_data);
+                        if self.update_userview_layer(&key, old_view_index, view_data) {
+                            self.handle_event(Events::UserViewsChanged);
+                        }
                     }
                 }
             }
@@ -2151,8 +2161,9 @@ impl StateController {
         dataref_key: &str,
         old_view_index: Option<usize>,
         new_data: Option<ViewData>,
-    ) {
+    ) -> bool {
         let mut changed = false;
+        let old_view_indexes: Vec<usize> = self.userviews.keys().map(|v| *v).collect();
         if let Some(old_view_index) = old_view_index {
             let remove = if let Some(v) = self.userviews.get_mut(&old_view_index) {
                 v.remove_layer(dataref_key)
@@ -2179,16 +2190,20 @@ impl StateController {
             }
         }
         if changed {
+            let view_indexes: Vec<usize> = self.userviews.keys().map(|v| *v).collect();
             self.userview_names = self
                 .userviews
                 .iter()
                 .map(|(index, v)| v.name_or_default(*index))
                 .collect();
-            let mut common = self.sm.context().common();
-            common.userviews_count = self.userviews.len();
-            self.update_common(common);
-            self.handle_event(Events::UserViewsChanged);
+            if view_indexes != old_view_indexes {
+                let mut common = self.sm.context().common();
+                common.userviews_count = self.userviews.len();
+                self.update_common(common);
+                return true;
+            }
         }
+        false
     }
 
     pub async fn handle_sysex(&mut self) {
