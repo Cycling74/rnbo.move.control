@@ -286,9 +286,11 @@ impl UserViewLayer {
             if self.rendering.len() > 0 {
                 let image = ImageRaw::<BinaryColor>::new(self.rendering.as_slice(), width);
                 let image = Image::new(&image, offset);
-                if image.draw(display).is_err() {
-                    eprintln!("error drawing image");
-                }
+                display.with_summing(|display| {
+                    if image.draw(display).is_err() {
+                        eprintln!("error drawing image");
+                    }
+                });
             }
         }
     }
