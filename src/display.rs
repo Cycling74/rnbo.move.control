@@ -17,6 +17,7 @@ pub struct DrawCommand {
 pub struct MoveDisplay {
     framebuffer: [u8; BUFFER_LEN],
     dirty: bool,
+    sum: bool,
 }
 
 impl MoveDisplay {
@@ -33,6 +34,7 @@ impl MoveDisplay {
         Self {
             framebuffer,
             dirty: true,
+            sum: false,
         }
     }
 
@@ -41,6 +43,17 @@ impl MoveDisplay {
             f(&self.framebuffer);
             self.dirty = false;
         }
+    }
+
+    pub fn sum(&mut self, s: bool) {
+        self.sum = s;
+    }
+
+    pub fn with_summing<T, F: FnOnce(&mut Self) -> T>(&mut self, f: F) -> T {
+        self.sum = true;
+        let v = f(self);
+        self.sum = false;
+        v
     }
 
     pub fn framebuffer(&self) -> &[u8; BUFFER_LEN] {
@@ -78,7 +91,8 @@ impl DrawTarget for MoveDisplay {
                 let bit: u8 = 1 << (y as usize % 8);
                 match color {
                     BinaryColor::On => self.framebuffer[byte] |= bit,
-                    BinaryColor::Off => self.framebuffer[byte] &= !bit,
+                    BinaryColor::Off if !self.sum => self.framebuffer[byte] &= !bit,
+                    _ => (),
                 }
             }
         }
