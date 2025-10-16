@@ -85,6 +85,7 @@ pub const SET_VIEW_DISPLAY: &str = "/rnboctl/view/display";
 pub const SET_VIEW_PAGE_DISPLAY: &str = "/rnboctl/view/page";
 pub const DEVICE_PARAM_DISPLAY: &str = "/rnboctl/device/params";
 pub const DEVICE_DATA_DISPLAY: &str = "/rnboctl/device/data";
+pub const USER_VIEW_DISPLAY: &str = "/rnboctl/userview/display";
 
 const JOG_WHEEL_TOUCH: usize = 9;
 const VOLUME_WHEEL_TOUCH: usize = 8;
@@ -580,7 +581,7 @@ enum Events {
     PopupRequested,
     PopupTimeout,
 
-    UserDisplayRequested,
+    UserViewRequested(usize), // which view index, translated into a local index
 
     DeviceParamsSelected((usize, usize)), //index, page
     DeviceDataSelected(usize),            //index
@@ -864,6 +865,8 @@ pub mod top {
             Popup(LastView) + EncTouch(JOG_WHEEL_TOUCH) [*state == LastView::Main] = Main,
             Popup(LastView) + EncTouch(JOG_WHEEL_TOUCH) [*state == LastView::ParamViews] = ParamViews,
 
+            _ + UserViewRequested(_) = Main,
+
             _ + ChildProcessError = DisplayChildProcessError,
             DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
         }
@@ -1040,6 +1043,8 @@ smlang::statemachine! {
         UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() > 1] = UserViewList(*state),
         UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() < 2] = Menu(USER_VIEWS_INDEX),
         UserView(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
+
+        _ + UserViewRequested(_) [ctx.userviews_count() > *event] = UserView(*event),
 
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
         TempoEditor + EncRight(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(1)); = TempoEditor,
@@ -1940,6 +1945,18 @@ impl StateController {
                         && let Some(index) = as_index(&msg.args[0])
                     {
                         self.handle_event(Events::SetViewPageSelected(index));
+                    }
+                }
+                USER_VIEW_DISPLAY => {
+                    if !msg.args.is_empty()
+                        && let Some(viewindex) = as_index(&msg.args[0])
+                    {
+                        for (index, key) in self.userviews.keys().enumerate() {
+                            if *key == viewindex {
+                                self.handle_event(Events::UserViewRequested(index));
+                                break;
+                            }
+                        }
                     }
                 }
                 DEVICE_PARAM_DISPLAY => {
@@ -3031,7 +3048,8 @@ impl StateController {
             Events::DeviceParamsSelected(_)
             | Events::DeviceDataSelected(_)
             | Events::SetViewSelected(_)
-            | Events::SetViewPageSelected(_) => doprocess = true,
+            | Events::SetViewPageSelected(_)
+            | Events::UserViewRequested(_) => doprocess = true,
             Events::SetNamesChanged
             | Events::SetPresetNamesChanged
             | Events::SetCurrentChanged
