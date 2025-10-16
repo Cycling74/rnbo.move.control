@@ -10,6 +10,13 @@ pub const DISPLAY_HEIGHT_M1: u32 = 64 - 1;
 
 pub const BUFFER_LEN: usize = HEADER_LEN + DISPLAY_BYTES;
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+enum DrawMode {
+    Set,
+    Sum,
+    Xor,
+}
+
 pub struct DrawCommand {
     pub data: [u8; BUFFER_LEN],
 }
@@ -17,7 +24,7 @@ pub struct DrawCommand {
 pub struct MoveDisplay {
     framebuffer: [u8; BUFFER_LEN],
     dirty: bool,
-    sum: bool,
+    mode: DrawMode,
 }
 
 impl MoveDisplay {
@@ -34,7 +41,7 @@ impl MoveDisplay {
         Self {
             framebuffer,
             dirty: true,
-            sum: false,
+            mode: DrawMode::Set,
         }
     }
 
@@ -45,14 +52,19 @@ impl MoveDisplay {
         }
     }
 
-    pub fn sum(&mut self, s: bool) {
-        self.sum = s;
+    pub fn with_summing<T, F: FnOnce(&mut Self) -> T>(&mut self, f: F) -> T {
+        let mode = self.mode;
+        self.mode = DrawMode::Sum;
+        let v = f(self);
+        self.mode = mode;
+        v
     }
 
-    pub fn with_summing<T, F: FnOnce(&mut Self) -> T>(&mut self, f: F) -> T {
-        self.sum = true;
+    pub fn with_xor<T, F: FnOnce(&mut Self) -> T>(&mut self, f: F) -> T {
+        let mode = self.mode;
+        self.mode = DrawMode::Xor;
         let v = f(self);
-        self.sum = false;
+        self.mode = mode;
         v
     }
 
@@ -76,6 +88,27 @@ impl OriginDimensions for MoveDisplay {
     }
 }
 
+fn render_set(color: BinaryColor, bit: u8, cur: u8) -> u8 {
+    match color {
+        BinaryColor::On => cur | bit,
+        BinaryColor::Off => cur & !bit,
+    }
+}
+
+fn render_sum(color: BinaryColor, bit: u8, cur: u8) -> u8 {
+    match color {
+        BinaryColor::On => cur | bit,
+        BinaryColor::Off => cur,
+    }
+}
+
+fn render_xnor(color: BinaryColor, bit: u8, cur: u8) -> u8 {
+    match color {
+        BinaryColor::On => cur ^ bit,
+        BinaryColor::Off => cur,
+    }
+}
+
 impl DrawTarget for MoveDisplay {
     type Color = BinaryColor;
     type Error = core::convert::Infallible;
@@ -85,15 +118,18 @@ impl DrawTarget for MoveDisplay {
         I: IntoIterator<Item = Pixel<Self::Color>>,
     {
         self.dirty = true;
+
+        let render: fn(BinaryColor, u8, u8) -> u8 = match self.mode {
+            DrawMode::Set => render_set,
+            DrawMode::Sum => render_sum,
+            DrawMode::Xor => render_xnor,
+        };
+
         for Pixel(coord, color) in pixels.into_iter() {
             if let Ok((x @ 0..=DISPLAY_WIDTH_M1, y @ 0..=DISPLAY_HEIGHT_M1)) = coord.try_into() {
                 let byte: usize = (x + y / 8 * DISPLAY_WIDTH) as usize + HEADER_LEN;
                 let bit: u8 = 1 << (y as usize % 8);
-                match color {
-                    BinaryColor::On => self.framebuffer[byte] |= bit,
-                    BinaryColor::Off if !self.sum => self.framebuffer[byte] &= !bit,
-                    _ => (),
-                }
+                self.framebuffer[byte] = render(color, bit, self.framebuffer[byte]);
             }
         }
 
