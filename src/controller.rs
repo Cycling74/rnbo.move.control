@@ -86,6 +86,8 @@ pub const SET_VIEW_PAGE_DISPLAY: &str = "/rnboctl/view/page";
 pub const DEVICE_PARAM_DISPLAY: &str = "/rnboctl/device/params";
 pub const DEVICE_DATA_DISPLAY: &str = "/rnboctl/device/data";
 pub const USER_VIEW_DISPLAY: &str = "/rnboctl/userview/display";
+pub const USER_VIEW_LAYER_HIDE: &str = "/rnboctl/userview/layer/hide";
+pub const USER_VIEW_LAYER_XOR: &str = "/rnboctl/userview/layer/xor";
 
 const JOG_WHEEL_TOUCH: usize = 9;
 const VOLUME_WHEEL_TOUCH: usize = 8;
@@ -1836,6 +1838,16 @@ impl StateController {
                     _ => None,
                 }
             };
+
+            let as_bool = |arg: &OscType| -> Option<bool> {
+                match arg {
+                    OscType::Double(v) => Some(*v != 0.0),
+                    OscType::Float(v) => Some(*v != 0.0),
+                    OscType::Int(v) => Some(*v != 0),
+                    OscType::Bool(v) => Some(*v),
+                    _ => None,
+                }
+            };
             //println!("got osc {:?}", msg);
             //let mut update = None;
             match msg.addr.as_str() {
@@ -1956,6 +1968,28 @@ impl StateController {
                                 self.handle_event(Events::UserViewRequested(index));
                                 break;
                             }
+                        }
+                    }
+                }
+                USER_VIEW_LAYER_HIDE => {
+                    if !msg.args.len() >= 3
+                        && let Some(viewindex) = as_index(&msg.args[0])
+                        && let Some(layerindex) = as_index(&msg.args[1])
+                        && let Some(hide) = as_bool(&msg.args[2])
+                    {
+                        if let Some(view) = self.userviews.get_mut(&viewindex) {
+                            view.set_layer_hidden(layerindex as i8, hide);
+                        }
+                    }
+                }
+                USER_VIEW_LAYER_XOR => {
+                    if !msg.args.len() >= 3
+                        && let Some(viewindex) = as_index(&msg.args[0])
+                        && let Some(layerindex) = as_index(&msg.args[1])
+                        && let Some(v) = as_bool(&msg.args[2])
+                    {
+                        if let Some(view) = self.userviews.get_mut(&viewindex) {
+                            view.set_layer_xor(layerindex as i8, v);
                         }
                     }
                 }

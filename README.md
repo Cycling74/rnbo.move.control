@@ -87,13 +87,15 @@ conan create .  -s os=Linux -s arch=armv8 -s compiler=gcc -s compiler.version=11
 * `/rnboctl/userview/display <index>`
   * send this message to display the user drawn view with index 0
   * TODO: use a 2nd index to indicate the display to draw it on
-* `/rnboctl/userview/layer/hidden <index> <layer> 1/0`
+* `/rnboctl/userview/layer/hide <index> <layer> 1/0`
   * send this message to selectively hide or reveal a layer, `1` to hide, `0` to reveal
-* `/rnboctl/userview/layer/redraw <index> <layer>`
-  * send this message to tell the controller to re-read and draw a layer, useful when waveform contents change
+* `/rnboctl/userview/layer/xor <index> <layer> 1/0`
+  * send this message to selectively change the rendering style of a layer. `1` to xor and `0` to sum (default)
 
 TODO:
 
+* `/rnboctl/userview/layer/redraw <index> <layer>`
+  * send this message to tell the controller to re-read and draw a layer, useful when waveform contents change
 * `/rnboctl/userview/zoomfull <index>`
   * send this message to display the user drawn view with index 0
   * TODO: use a 2nd index to indicate the display to draw it on

@@ -115,9 +115,20 @@ impl UserView {
         self.name = name;
     }
 
+    /*
     fn with_layer<F: FnOnce(&mut UserViewLayer)>(&mut self, buffer: &str, f: F) {
         for layer in self.layers.iter_mut() {
             if layer.buffer == buffer {
+                f(layer);
+                break;
+            }
+        }
+    }
+    */
+
+    fn with_layer_z<F: FnOnce(&mut UserViewLayer)>(&mut self, z: i8, f: F) {
+        for layer in self.layers.iter_mut() {
+            if layer.z == z {
                 f(layer);
                 break;
             }
@@ -134,20 +145,16 @@ impl UserView {
         self.layers.len() == 0
     }
 
-    pub fn set_layer_dirty(&mut self, buffer: &str) {
-        self.with_layer(buffer, |l| l.dirty = true);
+    pub fn set_layer_dirty(&mut self, z: i8) {
+        self.with_layer_z(z, |l| l.dirty = true);
     }
 
-    pub fn set_layer_hidden(&mut self, buffer: &str, hidden: bool) {
-        self.with_layer(buffer, |l| l.hidden = hidden);
+    pub fn set_layer_hidden(&mut self, z: i8, hidden: bool) {
+        self.with_layer_z(z, |l| l.hidden = hidden);
     }
 
-    pub fn set_layer_z(&mut self, buffer: &str, z: i8) {
-        self.with_layer(buffer, |l| l.z = z);
-    }
-
-    pub fn set_layer_shm_name(&mut self, buffer: &str, shm_name: Option<String>) {
-        self.with_layer(buffer, |l| l.shm_name = shm_name);
+    pub fn set_layer_xor(&mut self, z: i8, xor: bool) {
+        self.with_layer_z(z, |l| l.do_xor = xor);
     }
 
     pub fn render(&mut self, display: &mut MoveDisplay) {
