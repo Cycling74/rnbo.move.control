@@ -1,6 +1,7 @@
 use {
     crate::{
         config::Config,
+        display::{DISPLAY_FRAME_PERIOD_MS, DISPLAY_HEIGHT, DISPLAY_WIDTH},
         midi::Midi,
         param::Param,
         patcher::PatcherInst,
@@ -88,6 +89,9 @@ pub const DEVICE_DATA_DISPLAY: &str = "/rnboctl/device/data";
 pub const USER_VIEW_DISPLAY: &str = "/rnboctl/userview/display";
 pub const USER_VIEW_LAYER_HIDE: &str = "/rnboctl/userview/layer/hide";
 pub const USER_VIEW_LAYER_XOR: &str = "/rnboctl/userview/layer/xor";
+
+pub const DISPLAY_COUNT_OSC: &str = "/rnboctl/display/count";
+pub const DISPLAY_INFO_ADDR: &str = "/rnboctl/display/info";
 
 const JOG_WHEEL_TOUCH: usize = 9;
 const VOLUME_WHEEL_TOUCH: usize = 8;
@@ -1991,6 +1995,32 @@ impl StateController {
                         if let Some(view) = self.userviews.get_mut(&viewindex) {
                             view.set_layer_xor(layerindex as i8, v);
                         }
+                    }
+                }
+                DISPLAY_COUNT_OSC => {
+                    if msg.args.is_empty() {
+                        let args = vec![OscType::Int(1)];
+                        let msg = OscMessage {
+                            addr: DISPLAY_COUNT_OSC.to_owned(),
+                            args,
+                        };
+                        self.send_osc(msg).await;
+                    }
+                }
+                DISPLAY_INFO_ADDR => {
+                    if msg.args.len() == 1 && Some(0) == as_index(&msg.args[0]) {
+                        let args = vec![
+                            OscType::Int(0),                               //index
+                            OscType::Int(DISPLAY_WIDTH as _),              //width
+                            OscType::Int(DISPLAY_HEIGHT as _),             //height
+                            OscType::Int(0),                               //color format
+                            OscType::Double(DISPLAY_FRAME_PERIOD_MS as _), //frame period
+                        ];
+                        let msg = OscMessage {
+                            addr: DISPLAY_INFO_ADDR.to_owned(),
+                            args,
+                        };
+                        self.send_osc(msg).await;
                     }
                 }
                 DEVICE_PARAM_DISPLAY => {

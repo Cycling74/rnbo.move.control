@@ -91,6 +91,14 @@ conan create .  -s os=Linux -s arch=armv8 -s compiler=gcc -s compiler.version=11
   * send this message to selectively hide or reveal a layer, `1` to hide, `0` to reveal
 * `/rnboctl/userview/layer/xor <index> <layer> 1/0`
   * send this message to selectively change the rendering style of a layer. `1` to xor and `0` to sum (default)
+* `/rnboctl/display/count`
+  * send an empty message here to get a number echoed back
+* `/rnboctl/display/info <index>`
+  * send a message here with the index to get details about the display echoed back
+  * response will come to the same endpoint in the format:
+    * index, pixel width, pixel height, color format, frame period in milliseconds
+    * current color formats:
+      * 0: 1-bit black and white
 
 TODO:
 
@@ -99,16 +107,6 @@ TODO:
 * `/rnboctl/userview/zoomfull <index>`
   * send this message to display the user drawn view with index 0
   * TODO: use a 2nd index to indicate the display to draw it on
-
-
-* `/rnboctl/display/count`
-  * send an empty message here to get a number echoed back
-* `/rnboctl/display/0/info`
-  * send an empty message here to get details about the display echoed back
-  * response will come to the same endpoint in the format:
-    * pixel width, pixel height, color format, frame period in milliseconds
-    * current color formats:
-      * 0: 1-bit black and white
 
 
 ## User Views
