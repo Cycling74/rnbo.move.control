@@ -2,7 +2,7 @@ use {
     crate::{
         config::*,
         controller::{Caps, StateController},
-        display::{DrawCommand, MoveDisplay},
+        display::{DISPLAY_FRAME_PERIOD_MS, DrawCommand, MoveDisplay},
         midi::Midi,
         view::ParamView,
     },
@@ -522,7 +522,7 @@ async fn with_client(
 
         loop {
             //frame rate
-            tokio::time::sleep(Duration::from_millis(23)).await;
+            tokio::time::sleep(Duration::from_millis(DISPLAY_FRAME_PERIOD_MS)).await;
 
             let mut g = state.lock().await;
             g.render(&mut terminal);

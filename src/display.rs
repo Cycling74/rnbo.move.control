@@ -8,6 +8,8 @@ pub const DISPLAY_HEIGHT: u32 = 64;
 pub const DISPLAY_WIDTH_M1: u32 = 128 - 1;
 pub const DISPLAY_HEIGHT_M1: u32 = 64 - 1;
 
+pub const DISPLAY_FRAME_PERIOD_MS: u64 = 23;
+
 pub const BUFFER_LEN: usize = HEADER_LEN + DISPLAY_BYTES;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
