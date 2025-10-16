@@ -27,7 +27,7 @@ use {
         path::{Path, PathBuf},
         sync::{
             Arc,
-            atomic::{AtomicU8, Ordering},
+            atomic::{AtomicBool, AtomicU8, Ordering},
             mpsc as sync_mpsc,
         },
         thread,
@@ -83,6 +83,7 @@ struct Driver {
     draw_queue: sync_mpsc::Receiver<DrawCommand>,
     midi_in_queue: async_mpsc::Sender<Midi>,
     midi_out_queue: sync_mpsc::Receiver<Midi>,
+    filter_encoders: Arc<AtomicBool>,
 }
 
 //display rate: 22.928ms
@@ -108,16 +109,18 @@ impl jack::ProcessHandler for Driver {
                 3 => match i.bytes[0] {
                     //Note on/off
                     0x9F | 0x8F => match i.bytes[1] {
-                        //encoders, volume, wheel
-                        0..=9 => true,
+                        //encoders
+                        0..=7 => self.filter_encoders.load(Ordering::Acquire),
+                        //volume, wheel
+                        8..=9 => true,
                         _ => false,
                     },
                     //CC
                     0xBF => match i.bytes[1] {
-                        //wheel press/turn, back, play/stop, menu (session/note)
-                        3 | 14 | 51 | 85 | 50 => true,
-                        //encoders.., volume
-                        71..=79 => true,
+                        //wheel press/turn, back, play/stop, menu (session/note), volume
+                        3 | 14 | 51 | 85 | 50 | 79 => true,
+                        //encoders
+                        71..=78 => self.filter_encoders.load(Ordering::Acquire),
                         _ => false,
                     },
                     0xF0 | 0xF7 => true,         //sysex start or end
@@ -420,6 +423,8 @@ async fn with_client(
         let _ = logger.warning("could not get requested capabilites");
     }
 
+    let filter_encoders = Arc::new(AtomicBool::new(false));
+
     let driver = Driver {
         display: display_port,
         midi_thru,
@@ -428,6 +433,7 @@ async fn with_client(
         draw_queue: draw_rx,
         midi_in_queue: midi_in_tx,
         midi_out_queue: midi_out_rx,
+        filter_encoders: filter_encoders.clone(),
     };
 
     let c = c
@@ -503,6 +509,7 @@ async fn with_client(
             package_version,
             config_path,
             has_all_capabilities,
+            filter_encoders,
         )));
 
     let display_future = async {

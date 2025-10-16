@@ -34,7 +34,7 @@ use {
         rc::Rc,
         sync::{
             Arc,
-            atomic::{AtomicU8, Ordering as AtomicOrdering},
+            atomic::{AtomicBool, AtomicU8, Ordering as AtomicOrdering},
             mpsc as sync_mpsc,
         },
         time::{Duration, Instant},
@@ -1174,6 +1174,8 @@ pub struct StateController {
     popup: Popup,
 
     userviews: BTreeMap<usize, UserView>,
+
+    filter_encoders: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Debug)]
@@ -1296,6 +1298,7 @@ impl StateController {
         package_version: Option<String>,
         config_path: PathBuf,
         has_all_capabilities: bool,
+        filter_encoders: Arc<AtomicBool>,
     ) -> Self {
         let (tx, rx) = sync_mpsc::channel();
 
@@ -1396,6 +1399,8 @@ impl StateController {
 
             popup: Default::default(),
             userviews: Default::default(),
+
+            filter_encoders,
         };
 
         s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
@@ -3130,15 +3135,35 @@ impl StateController {
             _ => (),
         };
 
+        let mut filter_encoders = false;
         match top_cur {
-            top::States::Main if doprocess => {
-                let _ = self.sm.process_event(e);
+            top::States::Main => {
+                if doprocess {
+                    let _ = self.sm.process_event(e);
+                }
+                match self.sm.state() {
+                    States::PatcherParams(_) => {
+                        filter_encoders = true;
+                    }
+                    _ => (),
+                };
             }
-            top::States::ParamViews if doprocess => {
-                let _ = self.viewsm.process_event(e);
+            top::States::ParamViews => {
+                if doprocess {
+                    let _ = self.viewsm.process_event(e);
+                }
+                match self.viewsm.state() {
+                    view::States::ViewParams(_) => {
+                        filter_encoders = true;
+                    }
+                    _ => (),
+                };
             }
-            _ => (),
+            _ => filter_encoders = true, //volume editor, etc etc
         };
+
+        self.filter_encoders
+            .store(filter_encoders, AtomicOrdering::Release);
     }
 
     async fn offset_param(&mut self, index: usize, offset: isize) {
