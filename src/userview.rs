@@ -23,6 +23,7 @@ pub struct ViewData {
     view_hidden: bool,
     view_name: Option<String>,
     shm_name: Option<String>,
+    view_xor: bool,
 }
 
 struct UserViewLayer {
@@ -35,6 +36,7 @@ struct UserViewLayer {
     dirty: bool,
     rendering: Vec<u8>,
     hidden: bool,
+    do_xor: bool,
 
     buffer: String,
 
@@ -54,6 +56,7 @@ impl ViewData {
         view_hidden: bool,
         view_name: Option<String>,
         shm_name: Option<String>,
+        view_xor: bool,
     ) -> Self {
         Self {
             view_index,
@@ -61,6 +64,7 @@ impl ViewData {
             view_hidden,
             view_name,
             shm_name,
+            view_xor,
         }
     }
 
@@ -82,6 +86,10 @@ impl ViewData {
 
     pub fn shm_name(&self) -> &Option<String> {
         &self.shm_name
+    }
+
+    pub fn view_xor(&self) -> bool {
+        self.view_xor
     }
 }
 
@@ -155,23 +163,7 @@ impl UserView {
             view_data.view_z().unwrap_or(0),
             view_data.shm_name().clone(),
             view_data.view_hidden(),
-        ));
-        self.layers.sort_by_key(|l| l.z);
-    }
-
-    pub fn add_user_layer(
-        &mut self,
-        buffer: &str,
-        shm_name: Option<String>,
-        z: Option<i8>,
-        hidden: Option<bool>,
-    ) {
-        self.remove_layer(buffer);
-        self.layers.push(UserViewLayer::new(
-            buffer,
-            z.unwrap_or(0),
-            shm_name,
-            hidden.unwrap_or(false),
+            view_data.view_xor(),
         ));
         self.layers.sort_by_key(|l| l.z);
     }
@@ -187,7 +179,7 @@ impl UserView {
 }
 
 impl UserViewLayer {
-    fn new(buffer: &str, z: i8, shm_name: Option<String>, hidden: bool) -> Self {
+    fn new(buffer: &str, z: i8, shm_name: Option<String>, hidden: bool, do_xor: bool) -> Self {
         use std::str::FromStr;
         let mut format = Format::UserImage;
         let mut channels = 0;
@@ -218,6 +210,7 @@ impl UserViewLayer {
             dirty: true,
             rendering: Vec::new(),
             hidden,
+            do_xor,
 
             buffer: buffer.to_owned(),
 
@@ -286,11 +279,19 @@ impl UserViewLayer {
             if self.rendering.len() > 0 {
                 let image = ImageRaw::<BinaryColor>::new(self.rendering.as_slice(), width);
                 let image = Image::new(&image, offset);
-                display.with_summing(|display| {
-                    if image.draw(display).is_err() {
-                        eprintln!("error drawing image");
-                    }
-                });
+                if self.do_xor {
+                    display.with_xor(|display| {
+                        if image.draw(display).is_err() {
+                            eprintln!("error drawing image");
+                        }
+                    });
+                } else {
+                    display.with_summing(|display| {
+                        if image.draw(display).is_err() {
+                            eprintln!("error drawing image");
+                        }
+                    });
+                }
             }
         }
     }

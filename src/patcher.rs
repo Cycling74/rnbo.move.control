@@ -174,6 +174,18 @@ impl Dataref {
         }
     }
 
+    pub fn view_xor(&self) -> bool {
+        if let Some(meta) = self.meta.as_object()
+            && meta.contains_key("viewxor")
+            && let Some(v) = meta.get("viewxor")
+            && let Some(v) = v.as_bool()
+        {
+            v
+        } else {
+            false
+        }
+    }
+
     pub fn view_name(&self) -> Option<&str> {
         if let Some(meta) = self.meta.as_object()
             && meta.contains_key("viewname")
@@ -194,6 +206,7 @@ impl Dataref {
                 self.view_hidden(),
                 self.view_name().map(|v| v.to_owned()),
                 self.shm_name().clone(),
+                self.view_xor(),
             )
         })
     }
