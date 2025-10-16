@@ -44,8 +44,14 @@ PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.12/sysro
 release:
 
 ```
-PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.12/sysroot/ cargo build --target=aarch64-unknown-linux-gnu release
+PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.12/sysroot/ cargo build --target=aarch64-unknown-linux-gnu --release
 ```
+
+release and send
+```
+PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.12/sysroot/ cargo build --target=aarch64-unknown-linux-gnu --release && scp ./target/aarch64-unknown-linux-gnu/release/rnbomovecontrol move-usb:rnbo/bin
+```
+
 
 ## Building in docker image
 
@@ -77,6 +83,93 @@ conan create .  -s os=Linux -s arch=armv8 -s compiler=gcc -s compiler.version=11
   * send this message to display the parameters for the device that has the given instance index, optionally at the specified 0-indexed page
 * `/rnboctl/device/data <device index>`
   * send this message to display the data page for the device that has the given instance index
+
+* `/rnboctl/userview/display <index>`
+  * send this message to display the user drawn view with index 0
+  * TODO: use a 2nd index to indicate the display to draw it on
+* `/rnboctl/userview/layer/hidden <index> <layer> 1/0`
+  * send this message to selectively hide or reveal a layer, `1` to hide, `0` to reveal
+* `/rnboctl/userview/layer/redraw <index> <layer>`
+  * send this message to tell the controller to re-read and draw a layer, useful when waveform contents change
+
+TODO:
+
+* `/rnboctl/userview/zoomfull <index>`
+  * send this message to display the user drawn view with index 0
+  * TODO: use a 2nd index to indicate the display to draw it on
+
+
+* `/rnboctl/display/count`
+  * send an empty message here to get a number echoed back
+* `/rnboctl/display/0/info`
+  * send an empty message here to get details about the display echoed back
+  * response will come to the same endpoint in the format:
+    * pixel width, pixel height, color format, frame period in milliseconds
+    * current color formats:
+      * 0: 1-bit black and white
+
+
+## User Views
+
+Users can draw to the display using shared memory and buffers.
+
+### Metadata
+
+To create a view, you must add a meta entry to a buffer. You can let the
+controller render your buffer contents as a waveform or use the "direct
+drawing" approach. Both are detailed below.
+
+Here is an example metadata with all of the fields that define a view.
+
+```
+{ "view": 0, "viewname": "foo", "z": 1, "viewhidden": false, "system": true }
+```
+
+* `view` - defines the view and gives an index for selecting this via the `/rnboctl/userview` OSC message.
+* `viewname` - an optional name for the view, the first `viewname` seen for a specific `view` index will be the one that is used if there are multiple.
+* `z` - this defines a 'z' index to use while rendering the view, you can have multiple buffers share the same `view` index and then the `z` order will define how the buffer contents are layered, with higher values covering lower ones.
+* `viewhidden` - this is a boolean value that indicates if the associated data should be hidden initially or not. The default is false if it isn't supplied.
+* `viewxor` - this is a boolean value that indicates if the associated data should xor with the data in lower layers. This sets white to black and black to white for each bit set in this layer.
+* `system` - this boolean indicates if the buffer should be shared via shared memory so that other processes can access it. `system` sharing is how views are seen by the RNBO control application.
+* `share` - this string value indicates a name that allows for buffers to be shared between devices in the graph.
+* `observe` - this string value indicates a `share` name that this buffer should follow.
+
+### Direct Drawing
+
+You can render bits directly to a buffer and have the controller interpret that
+as an image. This gives you the option to draw arbitrary, even animated, images
+to the screen.
+
+To do Direct Drawing, you must use the `UInt8` type for your buffer and provide
+the `view` and `"system": true` metadata entries.
+
+The buffer is interpreted as a 16 byte header followed by pixel data.
+
+#### Header Format
+
+* The first byte of the header is a dirty flag, atomically look for it to be
+clear, then you write pixel data, then atomically set it to 1. When your view
+is visible, the controller will look for this 1, read the data, then atomically
+clear that byte.  The controller does not access this data unless it is displaying it.
+* The 2nd byte of the header indicates the pixel format of your image.
+  * `0` - 1 bit per pixel black and white
+* The 3rd and 4th bytes are reserved.
+* The 5th thru 8th byte are treated as a 32-bit little endian unsigned int, they
+represent the width of the image you're drawing. If this is zero then it is expected
+that the image is the same width as the display it is being drawn to.
+* The rest of the bytes are reserved.
+
+```
+00..03 - dirty, format, reserved, reserved
+04..07 - width (32-bit) *TODO*
+08..11 - x offset (32-bit) *TODO*
+12..15 - y offset (32-bit) *TODO*
+```
+
+
+### Waveform rendering
+
+**TODO**
 
 
 ## Notes
