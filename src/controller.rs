@@ -765,6 +765,10 @@ enum Cmd {
         index: usize,
         offset: isize,
     },
+    OffsetCurrentViewParam {
+        index: usize,
+        offset: isize,
+    },
     OffsetVolume(isize),
     OffsetTempo(isize),
     MulTempoOffset(bool),
@@ -788,6 +792,8 @@ enum Cmd {
     DeleteSetPreset(usize),
 
     LoadPatcher(usize),
+
+    LoadUserView(usize), //might alter the param view
 
     ReportViewParamPage(usize, usize),
 }
@@ -939,7 +945,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() > 1] = UserViewList(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() == 1] = UserView(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() == 1] / ctx.emit(Cmd::LoadUserView(0)); = UserView(0),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHERS_INDEX && ctx.patchers_count() > 0] = PatchersList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
@@ -1023,7 +1029,7 @@ smlang::statemachine! {
         PatcherDatarefLoad(DataLoad) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefLoad(state.prev()),
         PatcherDatarefLoad(DataLoad) + DatarefMappingChanged = PatcherDatarefLoad(state.clone()), //redraw, TODO filter to only redraw if it is a dataref we care about?
 
-         //TODO can we be less drastic?
+        //TODO can we be less drastic?
         PatcherDatarefs(DataSel) + DatarefVisibleChanged = Menu(DEVICE_DATA_INDEX),
         PatcherDatarefLoad(DataLoad) + DatarefVisibleChanged = Menu(DEVICE_DATA_INDEX),
         PatcherInstances(InstSel) + DatarefVisibleChanged [state.typ() == InstSelType::Datarefs] = Menu(DEVICE_DATA_INDEX),
@@ -1043,14 +1049,17 @@ smlang::statemachine! {
         UserViewList(usize) + BtnDown(Button::Back) = Menu(USER_VIEWS_INDEX),
         UserViewList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.userviews_count() > *state + 1] = UserViewList(*state + 1),
         UserViewList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = UserViewList(*state - 1),
-        UserViewList(usize) + BtnDown(Button::JogWheel) = UserView(*state),
+        UserViewList(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::LoadUserView(*state)); = UserView(*state),
         UserViewList(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
 
         UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() > 1] = UserViewList(*state),
         UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() < 2] = Menu(USER_VIEWS_INDEX),
         UserView(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
 
-        _ + UserViewRequested(_) [ctx.userviews_count() > *event] = UserView(*event),
+        UserView(usize) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetCurrentViewParam{index: *event, offset: -1});,
+        UserView(usize) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetCurrentViewParam{index: *event, offset: 1});,
+
+        _ + UserViewRequested(_) [ctx.userviews_count() > *event] / ctx.emit(Cmd::LoadUserView(*event)); = UserView(*event),
 
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
         TempoEditor + EncRight(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(1)); = TempoEditor,
@@ -2271,8 +2280,13 @@ impl StateController {
         if let Some(new_data) = new_data {
             let view_index = new_data.view_index();
             if !self.userviews.contains_key(&view_index) {
-                self.userviews
-                    .insert(view_index, UserView::new(new_data.view_name().clone()));
+                self.userviews.insert(
+                    view_index,
+                    UserView::new(
+                        new_data.view_name().clone(),
+                        new_data.param_view_name().clone(),
+                    ),
+                );
             }
             if let Some(view) = self.userviews.get_mut(&view_index) {
                 if let Some(view_name) = new_data.view_name() {
@@ -2592,9 +2606,9 @@ impl StateController {
                         {
                             /*
                             let label = format!(
-                                "inst: {} - {}",
-                                param.instance_index(),
-                                param.display_name(),
+                            "inst: {} - {}",
+                            param.instance_index(),
+                            param.display_name(),
                             );
                             */
                             title = if let Some(alias) =
@@ -2918,6 +2932,36 @@ impl StateController {
             States::UserView(selected) => {
                 setup_common(line!(), self);
                 userview = Some(selected);
+
+                //render params, may be a different paramview than originally tied to userview but we
+                //reset the paramview on entry to the UserView then let users navigate after that
+                if let Some(userview) = self.userviews.get(&selected)
+                    && userview.param_view_name().is_some()
+                    && let view::States::ViewParams(state) = self.viewsm.state()
+                {
+                    let index = state.index;
+                    let page = state.page;
+
+                    if let Some((_name, params)) = self
+                        .param_view_names
+                        .iter()
+                        .zip(self.param_view_params.iter())
+                        .nth(index)
+                    {
+                        let offset = page * PARAM_PAGE_SIZE;
+
+                        for (pindex, o) in params
+                            .iter()
+                            .skip(offset)
+                            .take(PARAM_PAGE_SIZE)
+                            .zip(self.param_values.iter_mut())
+                        {
+                            if let Some(param) = self.params.get(*pindex) {
+                                *o = param.color();
+                            }
+                        }
+                    }
+                }
             }
             _ => (), //TODO
         };
@@ -3152,6 +3196,11 @@ impl StateController {
                     States::PatcherParams(_) => {
                         filter_encoders = true;
                     }
+                    States::UserView(index) => {
+                        if let Some(view) = self.userviews.get(index) {
+                            filter_encoders = view.param_view_name().is_some();
+                        }
+                    }
                     _ => (),
                 };
             }
@@ -3210,6 +3259,18 @@ impl StateController {
                         && let Some(index) = params.get(index)
                     {
                         self.offset_param(*index, offset).await;
+                    }
+                }
+                Cmd::OffsetCurrentViewParam { index, offset } => {
+                    //we're in a user view but we're altering parameters
+                    if let view::States::ViewParams(state) = self.viewsm.state() {
+                        let index = index + state.page * PARAM_PAGE_SIZE;
+
+                        if let Some(params) = self.param_view_params.get(state.index)
+                            && let Some(index) = params.get(index)
+                        {
+                            self.offset_param(*index, offset).await;
+                        }
                     }
                 }
                 Cmd::OffsetVolume(amt) => {
@@ -3339,6 +3400,24 @@ impl StateController {
                             args: vec![OscType::Int(-1), OscType::String(name.clone())],
                         };
                         self.send_osc(msg).await;
+                    }
+                }
+                Cmd::LoadUserView(index) => {
+                    //local index of user view, select first page of associated param view if there
+                    //is one
+                    if let Some((_, view)) = self.userviews.iter().skip(index).next() {
+                        if let Some(paramviewname) = view.param_view_name() {
+                            if let Some((index, _paramview)) = self
+                                .param_views
+                                .iter()
+                                .enumerate()
+                                .find(|(_index, view)| view.name() == paramviewname)
+                            {
+                                let _ = self
+                                    .viewsm
+                                    .process_event(Events::SetViewSelected((index, 0)));
+                            }
+                        }
                     }
                 }
                 Cmd::UpdateDataFileList => {
