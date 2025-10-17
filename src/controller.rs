@@ -1059,6 +1059,9 @@ smlang::statemachine! {
         UserView(usize) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetCurrentViewParam{index: *event, offset: -1});,
         UserView(usize) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetCurrentViewParam{index: *event, offset: 1});,
 
+        UserView(usize) + EncLeft(_) [*event == JOG_WHEEL_ENCODER && *state > 0] / ctx.emit(Cmd::LoadUserView(*state - 1)); = UserView(*state - 1),
+        UserView(usize) + EncRight(_) [*event == JOG_WHEEL_ENCODER && ctx.userviews_count() > *state + 1] / ctx.emit(Cmd::LoadUserView(*state + 1)); = UserView(*state + 1),
+
         _ + UserViewRequested(_) [ctx.userviews_count() > *event] / ctx.emit(Cmd::LoadUserView(*event)); = UserView(*event),
 
         TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
