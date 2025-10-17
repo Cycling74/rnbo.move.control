@@ -115,16 +115,15 @@ impl UserView {
         self.name = name;
     }
 
-    /*
-    fn with_layer<F: FnOnce(&mut UserViewLayer)>(&mut self, buffer: &str, f: F) {
+    fn with_layer<F: FnOnce(&mut UserViewLayer)>(&mut self, buffer: &str, f: F) -> bool {
         for layer in self.layers.iter_mut() {
             if layer.buffer == buffer {
                 f(layer);
-                break;
+                return true;
             }
         }
+        false
     }
-    */
 
     fn with_layer_z<F: FnOnce(&mut UserViewLayer)>(&mut self, z: i8, f: F) {
         for layer in self.layers.iter_mut() {
@@ -163,15 +162,19 @@ impl UserView {
         }
     }
 
-    pub fn add_layer(&mut self, buffer: &str, view_data: &ViewData) {
-        self.remove_layer(buffer);
-        self.layers.push(UserViewLayer::new(
-            buffer,
-            view_data.view_z().unwrap_or(0),
-            view_data.shm_name().clone(),
-            view_data.view_hidden(),
-            view_data.view_xor(),
-        ));
+    //update or add
+    pub fn update_layers(&mut self, buffer: &str, view_data: &ViewData) {
+        if !self.with_layer(buffer, |layer| {
+            layer.update(view_data);
+        }) {
+            self.layers.push(UserViewLayer::new(
+                buffer,
+                view_data.view_z().unwrap_or(0),
+                view_data.shm_name().clone(),
+                view_data.view_hidden(),
+                view_data.view_xor(),
+            ));
+        }
         self.layers.sort_by_key(|l| l.z);
     }
 
@@ -224,6 +227,18 @@ impl UserViewLayer {
             channels,
             samplerate,
         }
+    }
+
+    fn update(&mut self, view_data: &ViewData) {
+        self.z = view_data.view_z().unwrap_or(0);
+        if self.shm_name != view_data.shm_name {
+            self.rendering.clear();
+            self.shm_name = view_data.shm_name.clone();
+        }
+        self.hidden = view_data.view_hidden();
+        self.do_xor = view_data.view_xor();
+
+        //TODO assert format stays the same?
     }
 
     fn exit(&mut self) {

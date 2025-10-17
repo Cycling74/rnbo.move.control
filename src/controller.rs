@@ -2251,14 +2251,21 @@ impl StateController {
         let mut changed = false;
         let old_view_indexes: Vec<usize> = self.userviews.keys().map(|v| *v).collect();
         if let Some(old_view_index) = old_view_index {
-            let remove = if let Some(v) = self.userviews.get_mut(&old_view_index) {
-                v.remove_layer(dataref_key)
+            let remove_layer = if let Some(new_data) = &new_data {
+                old_view_index != new_data.view_index()
             } else {
-                false
+                true
             };
-            if remove {
-                self.userviews.remove(&old_view_index);
-                changed = true;
+            if remove_layer {
+                let remove = if let Some(v) = self.userviews.get_mut(&old_view_index) {
+                    v.remove_layer(dataref_key)
+                } else {
+                    false
+                };
+                if remove {
+                    self.userviews.remove(&old_view_index);
+                    changed = true;
+                }
             }
         }
         if let Some(new_data) = new_data {
@@ -2271,7 +2278,7 @@ impl StateController {
                 if let Some(view_name) = new_data.view_name() {
                     view.set_name(Some(view_name.clone()));
                 }
-                view.add_layer(dataref_key, &new_data);
+                view.update_layers(dataref_key, &new_data);
                 changed = true;
             }
         }
