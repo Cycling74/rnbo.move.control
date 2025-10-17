@@ -254,6 +254,7 @@ impl UserViewLayer {
         if self.shm_name != view_data.shm_name {
             self.rendering.clear();
             self.shm_name = view_data.shm_name.clone();
+            self.shm = None;
         }
         self.hidden = view_data.view_hidden();
         self.do_xor = view_data.view_xor();
