@@ -19,6 +19,8 @@ enum Format {
 #[derive(Clone)]
 pub struct ViewData {
     view_index: usize,
+    param_view_name: Option<String>,
+
     view_z: Option<i8>,
     view_hidden: bool,
     view_name: Option<String>,
@@ -46,12 +48,15 @@ struct UserViewLayer {
 
 pub struct UserView {
     name: Option<String>,
+    param_view_name: Option<String>,
     layers: Vec<UserViewLayer>,
 }
 
 impl ViewData {
     pub fn new(
         view_index: usize,
+        param_view_name: Option<String>,
+
         view_z: Option<i8>,
         view_hidden: bool,
         view_name: Option<String>,
@@ -60,6 +65,8 @@ impl ViewData {
     ) -> Self {
         Self {
             view_index,
+            param_view_name,
+
             view_z,
             view_hidden,
             view_name,
@@ -70,6 +77,10 @@ impl ViewData {
 
     pub fn view_index(&self) -> usize {
         self.view_index
+    }
+
+    pub fn param_view_name(&self) -> &Option<String> {
+        &self.param_view_name
     }
 
     pub fn view_z(&self) -> Option<i8> {
@@ -94,9 +105,10 @@ impl ViewData {
 }
 
 impl UserView {
-    pub fn new(name: Option<String>) -> Self {
+    pub fn new(name: Option<String>, param_view_name: Option<String>) -> Self {
         Self {
             name,
+            param_view_name,
             layers: Vec::new(),
         }
     }
@@ -113,6 +125,14 @@ impl UserView {
 
     pub fn set_name(&mut self, name: Option<String>) {
         self.name = name;
+    }
+
+    pub fn set_param_view_name(&mut self, name: Option<String>) {
+        self.param_view_name = name;
+    }
+
+    pub fn param_view_name(&self) -> &Option<String> {
+        &self.param_view_name
     }
 
     fn with_layer<F: FnOnce(&mut UserViewLayer)>(&mut self, buffer: &str, f: F) -> bool {

@@ -198,10 +198,23 @@ impl Dataref {
         }
     }
 
+    pub fn param_view_name(&self) -> Option<&str> {
+        if let Some(meta) = self.meta.as_object()
+            && meta.contains_key("paramview")
+            && let Some(v) = meta.get("paramview")
+            && let Some(v) = v.as_str()
+        {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
     pub fn view_data(&self) -> Option<ViewData> {
         self.view_index().map(|view_index| {
             ViewData::new(
                 view_index,
+                self.param_view_name().map(|v| v.to_owned()),
                 self.view_z(),
                 self.view_hidden(),
                 self.view_name().map(|v| v.to_owned()),
