@@ -289,6 +289,10 @@ impl UserViewLayer {
         if !self.hidden {
             let width: u32 = display.size().width;
             let offset: Point = Point::new(0, 0);
+            //kinda sketcy but this shm could have been opened and the
+            //flag could be clear already.. so we just always read after
+            //first open no matter what the flag is
+            let mut firstopen = false;
             if self.dirty {
                 if self.shm.is_none() {
                     if let Some(shm_name) = &self.shm_name {
@@ -297,6 +301,7 @@ impl UserViewLayer {
                             rustix::shm::OFlags::RDWR,
                             rustix::shm::Mode::empty(),
                         ) {
+                            firstopen = true;
                             self.shm = Some(shm);
                         } else {
                             return;
@@ -316,7 +321,9 @@ impl UserViewLayer {
                                         std::sync::atomic::AtomicU8::from_ptr(contents.as_mut_ptr())
                                     };
 
-                                    if header.load(std::sync::atomic::Ordering::SeqCst) == 1 {
+                                    if header.load(std::sync::atomic::Ordering::SeqCst) == 1
+                                        || firstopen
+                                    {
                                         //dirty flag
                                         //header
                                         self.rendering =
