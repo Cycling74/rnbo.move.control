@@ -101,16 +101,16 @@ impl jack::ProcessHandler for Driver {
 
         let midi_in = self.midi_in.iter(ps);
         let mut midi_thru = self.midi_thru.writer(ps);
+        let filter_encoders = self.filter_encoders.load(Ordering::Acquire);
         for i in midi_in {
             //println!("got midi: {:?}", i);
             //only filter out sysex, jog wheel, volume, back and menu
-            //optionally (TODO) filter out encoders
             let filter = match i.bytes.len() {
                 3 => match i.bytes[0] {
                     //Note on/off
                     0x9F | 0x8F => match i.bytes[1] {
                         //encoders
-                        0..=7 => self.filter_encoders.load(Ordering::Acquire),
+                        0..=7 => filter_encoders,
                         //volume, wheel
                         8..=9 => true,
                         _ => false,
@@ -120,7 +120,7 @@ impl jack::ProcessHandler for Driver {
                         //wheel press/turn, back, play/stop, menu (session/note), volume
                         3 | 14 | 51 | 85 | 50 | 79 => true,
                         //encoders
-                        71..=78 => self.filter_encoders.load(Ordering::Acquire),
+                        71..=78 => filter_encoders,
                         _ => false,
                     },
                     0xF0 | 0xF7 => true,         //sysex start or end
