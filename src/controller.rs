@@ -2289,9 +2289,6 @@ impl StateController {
                 );
             }
             if let Some(view) = self.userviews.get_mut(&view_index) {
-                if let Some(view_name) = new_data.view_name() {
-                    view.set_name(Some(view_name.clone()));
-                }
                 view.update_layers(dataref_key, &new_data);
                 changed = true;
             }

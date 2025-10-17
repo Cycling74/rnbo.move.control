@@ -44,6 +44,8 @@ struct UserViewLayer {
 
     channels: usize,
     samplerate: usize,
+
+    param_view_name: Option<String>,
 }
 
 pub struct UserView {
@@ -184,18 +186,25 @@ impl UserView {
 
     //update or add
     pub fn update_layers(&mut self, buffer: &str, view_data: &ViewData) {
+        if let Some(view_name) = view_data.view_name() {
+            self.set_name(Some(view_name.clone()));
+        }
+
         if !self.with_layer(buffer, |layer| {
             layer.update(view_data);
         }) {
-            self.layers.push(UserViewLayer::new(
-                buffer,
-                view_data.view_z().unwrap_or(0),
-                view_data.shm_name().clone(),
-                view_data.view_hidden(),
-                view_data.view_xor(),
-            ));
+            self.layers.push(UserViewLayer::new(buffer, view_data));
         }
         self.layers.sort_by_key(|l| l.z);
+
+        let mut param_view_name = None;
+        for layer in self.layers.iter() {
+            if let Some(name) = layer.param_view_name() {
+                param_view_name = Some(name.clone());
+                break;
+            }
+        }
+        self.param_view_name = param_view_name;
     }
 
     pub fn remove_layer(&mut self, buffer: &str) -> bool {
@@ -209,11 +218,13 @@ impl UserView {
 }
 
 impl UserViewLayer {
-    fn new(buffer: &str, z: i8, shm_name: Option<String>, hidden: bool, do_xor: bool) -> Self {
+    fn new(buffer: &str, view_data: &ViewData) -> Self {
         use std::str::FromStr;
         let mut format = Format::UserImage;
         let mut channels = 0;
         let mut samplerate = 0;
+
+        let shm_name = view_data.shm_name().clone();
 
         if let Some(shm_name) = &shm_name {
             let parts: Vec<&str> = shm_name.split("-").collect();
@@ -235,18 +246,24 @@ impl UserViewLayer {
             shm: None,
 
             format,
-            z,
+            z: view_data.view_z().unwrap_or(0),
 
             dirty: true,
             rendering: Vec::new(),
-            hidden,
-            do_xor,
+            hidden: view_data.view_hidden(),
+            do_xor: view_data.view_xor(),
 
             buffer: buffer.to_owned(),
 
             channels,
             samplerate,
+
+            param_view_name: view_data.param_view_name().clone(),
         }
+    }
+
+    fn param_view_name(&self) -> &Option<String> {
+        &self.param_view_name
     }
 
     fn update(&mut self, view_data: &ViewData) {
@@ -258,6 +275,7 @@ impl UserViewLayer {
         }
         self.hidden = view_data.view_hidden();
         self.do_xor = view_data.view_xor();
+        self.param_view_name = view_data.param_view_name().clone();
 
         //TODO assert format stays the same?
     }
