@@ -133,6 +133,7 @@ Here is an example metadata with all of the fields that define a view.
 * `system` - this boolean indicates if the buffer should be shared via shared memory so that other processes can access it. `system` sharing is how views are seen by the RNBO control application.
 * `share` - this string value indicates a name that allows for buffers to be shared between devices in the graph.
 * `observe` - this string value indicates a `share` name that this buffer should follow.
+* `paramview` - this string value indicates a `Parameter View` name that should be loaded and available while the view is loaded.
 
 ### Direct Drawing
 
