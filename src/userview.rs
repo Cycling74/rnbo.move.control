@@ -229,35 +229,119 @@ impl UserView {
     }
 }
 
-impl UserViewLayer {
-    fn new(buffer: &str, view_data: &ViewData) -> Self {
-        use std::str::FromStr;
-        let mut format = Format::UserImage;
-        let mut channels = 0;
-        let mut samplerate = 0;
+struct FormatInfo {
+    format: Format,
+    channels: usize,
+    samplerate: usize,
+}
 
-        let shm_name = view_data.shm_name().clone();
+impl Default for FormatInfo {
+    fn default() -> Self {
+        Self {
+            format: Format::UserImage,
+            channels: 0,
+            samplerate: 0,
+        }
+    }
+}
 
-        if let Some(shm_name) = &shm_name {
-            let parts: Vec<&str> = shm_name.split("-").collect();
-            if parts.len() >= 4 {
-                match parts[1] {
-                    "u8" => format = Format::UserImage,
-                    "f32" => format = Format::Float32Buffer,
-                    "f64" => format = Format::Float64Buffer,
-                    _ => (),
-                }
-                if format != Format::UserImage {
-                    channels = usize::from_str(parts[2]).unwrap_or(0);
-                    samplerate = usize::from_str(parts[3]).unwrap_or(0);
-                }
+fn get_format(shm_name: &str) -> FormatInfo {
+    use std::str::FromStr;
+    let mut format = Format::UserImage;
+    let mut channels = 0;
+    let mut samplerate = 0;
+    let parts: Vec<&str> = shm_name.split("-").collect();
+    if parts.len() >= 4 {
+        match parts[1] {
+            "u8" => format = Format::UserImage,
+            "f32" => format = Format::Float32Buffer,
+            "f64" => format = Format::Float64Buffer,
+            _ => (),
+        }
+        if format != Format::UserImage {
+            channels = usize::from_str(parts[2]).unwrap_or(0);
+            samplerate = usize::from_str(parts[3]).unwrap_or(0);
+        }
+    }
+    FormatInfo {
+        format,
+        channels,
+        samplerate,
+    }
+}
+
+fn render_waveform<
+    T: num_traits::Float + num_traits::Zero + PartialOrd + num_traits::ToPrimitive,
+>(
+    rendered: &mut Vec<u8>,
+    rows: usize,
+    cols: usize,
+    channels: usize,
+    buffer: &[u8],
+) {
+    use num_traits::clamp;
+
+    let col_bytes = cols / 8;
+    let bytes = col_bytes * rows;
+
+    rendered.resize(bytes as _, 0);
+    rendered.fill(0);
+
+    let len = buffer.len() / size_of::<T>();
+    let data = unsafe {
+        std::slice::from_raw_parts::<'_, T>(
+            std::mem::transmute::<_, *const T>(buffer.as_ptr()),
+            len,
+        )
+    };
+
+    let mid_1 = rows / 2 - 1;
+    let mid_1_t = T::from(mid_1).unwrap();
+
+    //TODO chunk rendering??
+    let frames = len / channels;
+    if frames > 0 {
+        let chunksize = len / cols as usize;
+        for col in 0..cols {
+            let start = col * chunksize;
+            let cbyte = col / 8;
+            let cbit = 7 - (col % 8);
+            let mut max: T = T::zero();
+            for v in data.iter().skip(start).take(chunksize) {
+                max = v.abs().max(max);
+            }
+
+            let rows = clamp(mid_1_t * max, T::zero(), mid_1_t)
+                .to_usize()
+                .unwrap_or(0);
+            let mask = 1 << cbit;
+            for r in 0..rows {
+                //positive from center
+                let byte = cbyte + (mid_1 - 1 - r) * col_bytes;
+                rendered[byte] = rendered[byte] | mask;
+
+                //negative from center
+                let byte = cbyte + (mid_1 + r) * col_bytes;
+                rendered[byte] = rendered[byte] | mask;
             }
         }
+    }
+}
+
+impl UserViewLayer {
+    fn new(buffer: &str, view_data: &ViewData) -> Self {
+        let shm_name = view_data.shm_name().clone();
+
+        let format = if let Some(shm_name) = &shm_name {
+            get_format(shm_name)
+        } else {
+            FormatInfo::default()
+        };
         Self {
             shm_name,
             shm: None,
 
-            format,
+            format: format.format,
             z: view_data.view_z().unwrap_or(0),
 
             dirty: true,
@@ -267,8 +351,8 @@ impl UserViewLayer {
 
             buffer: buffer.to_owned(),
 
-            channels,
-            samplerate,
+            channels: format.channels,
+            samplerate: format.samplerate,
 
             param_view_name: view_data.param_view_name().clone(),
         }
@@ -284,12 +368,20 @@ impl UserViewLayer {
             self.rendering.clear();
             self.shm_name = view_data.shm_name.clone();
             self.shm = None;
+            self.dirty = true;
         }
         self.hidden = view_data.view_hidden();
         self.do_xor = view_data.view_xor();
         self.param_view_name = view_data.param_view_name().clone();
 
-        //TODO assert format stays the same?
+        let format = if let Some(shm_name) = &self.shm_name {
+            get_format(shm_name)
+        } else {
+            FormatInfo::default()
+        };
+        self.format = format.format; //XXX assert no change?
+        self.samplerate = format.samplerate;
+        self.channels = format.channels;
     }
 
     fn exit(&mut self) {
@@ -299,6 +391,7 @@ impl UserViewLayer {
 
     fn render(&mut self, display: &mut MoveDisplay) {
         if !self.hidden {
+            let height: u32 = display.size().height;
             let width: u32 = display.size().width;
             let offset: Point = Point::new(0, 0);
             if self.dirty {
@@ -317,12 +410,12 @@ impl UserViewLayer {
                         return;
                     }
                 }
-                match self.format {
-                    Format::UserImage => {
-                        if let Some(shm) = &mut self.shm {
-                            if let Ok(mut map) = unsafe { shm.map(0) } {
-                                let map = map.map();
-                                let contents = map.as_mut();
+                if let Some(shm) = &mut self.shm {
+                    if let Ok(mut map) = unsafe { shm.map(0) } {
+                        let map = map.map();
+                        let contents = map.as_mut();
+                        match self.format {
+                            Format::UserImage => {
                                 if contents.len() > HEADER_BYTES {
                                     let header = unsafe {
                                         std::sync::atomic::AtomicU8::from_ptr(contents.as_mut_ptr())
@@ -339,14 +432,33 @@ impl UserViewLayer {
                                     }
                                 }
                             }
-                        } else {
-                            return;
+                            Format::Float32Buffer if self.channels > 0 => {
+                                //TODO chunk rendering??
+                                render_waveform::<f32>(
+                                    &mut self.rendering,
+                                    height as _,
+                                    width as _,
+                                    self.channels,
+                                    &contents,
+                                );
+                                self.dirty = false;
+                            }
+                            Format::Float64Buffer if self.channels > 0 => {
+                                //TODO chunk rendering??
+                                render_waveform::<f64>(
+                                    &mut self.rendering,
+                                    height as _,
+                                    width as _,
+                                    self.channels,
+                                    &contents,
+                                );
+                                self.dirty = false;
+                            }
+                            _ => return,
                         }
                     }
-                    Format::Float32Buffer | Format::Float64Buffer => {
-                        //TODO
-                        return;
-                    }
+                } else {
+                    return;
                 }
             }
             if self.rendering.len() > 0 {
