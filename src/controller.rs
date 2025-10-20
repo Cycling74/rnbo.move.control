@@ -89,6 +89,7 @@ pub const DEVICE_DATA_DISPLAY: &str = "/rnboctl/device/data";
 pub const USER_VIEW_DISPLAY: &str = "/rnboctl/userview/display";
 pub const USER_VIEW_LAYER_HIDE: &str = "/rnboctl/userview/layer/hide";
 pub const USER_VIEW_LAYER_XOR: &str = "/rnboctl/userview/layer/xor";
+pub const USER_VIEW_LAYER_REDRAW: &str = "/rnboctl/userview/layer/redraw";
 
 pub const DISPLAY_COUNT_OSC: &str = "/rnboctl/display/count";
 pub const DISPLAY_INFO_ADDR: &str = "/rnboctl/display/info";
@@ -2017,6 +2018,16 @@ impl StateController {
                     {
                         if let Some(view) = self.userviews.get_mut(&viewindex) {
                             view.set_layer_xor(layerindex as i8, v);
+                        }
+                    }
+                }
+                USER_VIEW_LAYER_REDRAW => {
+                    if !msg.args.len() >= 2
+                        && let Some(viewindex) = as_index(&msg.args[0])
+                        && let Some(layerindex) = as_index(&msg.args[1])
+                    {
+                        if let Some(view) = self.userviews.get_mut(&viewindex) {
+                            view.set_layer_dirty(layerindex as i8);
                         }
                     }
                 }

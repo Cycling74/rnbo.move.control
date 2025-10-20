@@ -99,11 +99,11 @@ conan create .  -s os=Linux -s arch=armv8 -s compiler=gcc -s compiler.version=11
     * index, pixel width, pixel height, color format, frame period in milliseconds
     * current color formats:
       * 0: 1-bit black and white
+* `/rnboctl/userview/layer/redraw <index> <layer>`
+  * send this message to tell the controller to re-read and draw a layer, useful when waveform contents change
 
 TODO:
 
-* `/rnboctl/userview/layer/redraw <index> <layer>`
-  * send this message to tell the controller to re-read and draw a layer, useful when waveform contents change
 * `/rnboctl/userview/zoomfull <index>`
   * send this message to display the user drawn view with index 0
   * TODO: use a 2nd index to indicate the display to draw it on
