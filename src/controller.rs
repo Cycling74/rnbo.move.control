@@ -2472,6 +2472,10 @@ impl StateController {
         self.exit
     }
 
+    pub fn should_exit(&self) -> bool {
+        self.exit
+    }
+
     fn update_common(&mut self, common: CommonContext) {
         self.sm.context_mut().update_common(common.clone());
         self.viewsm.context_mut().update_common(common.clone());
@@ -2992,8 +2996,6 @@ impl StateController {
         let _ = terminal.clear();
 
         let mut userview: Option<usize> = None;
-
-        let mut draw_raw = false;
         terminal
             .draw(|frame| match state {
                 States::Init => {
