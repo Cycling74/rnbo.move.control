@@ -1,3 +1,5 @@
+use std::process::ExitStatus;
+
 use {
     crate::{
         config::*,
@@ -221,6 +223,7 @@ fn port_set_pretty<PS: jack::PortSpec + Send>(
 
 async fn with_client(
     c: Client,
+    run: Arc<AtomicBool>,
     logger: &mut syslog::Logger<syslog::LoggerBackend, syslog::Formatter3164>,
     startup: &Vec<StartupProcess>,
     config_path: &Path,
@@ -512,33 +515,46 @@ async fn with_client(
             filter_encoders,
         )));
 
-    let display_future = async {
-        use mousefood::{TerminalAlignment, prelude::*};
-
-        let config = EmbeddedBackendConfig {
-            font_regular: font::SPLEEN_8X16,
-            font_bold: None,
-            vertical_alignment: TerminalAlignment::Center,
-            horizontal_alignment: TerminalAlignment::Center,
-            ..Default::default()
-        };
-
-        let backend = EmbeddedBackend::new(&mut display, config);
-        let mut terminal = ratatui::Terminal::new(backend).expect("to create terminal");
+    let display_future = {
+        let run = run.clone();
         let state = state.clone();
+        async move {
+            use mousefood::{TerminalAlignment, prelude::*};
 
-        loop {
-            //frame rate
-            tokio::time::sleep(Duration::from_millis(DISPLAY_FRAME_PERIOD_MS)).await;
+            let config = EmbeddedBackendConfig {
+                font_regular: font::SPLEEN_8X16,
+                font_bold: None,
+                vertical_alignment: TerminalAlignment::Center,
+                horizontal_alignment: TerminalAlignment::Center,
+                ..Default::default()
+            };
 
-            let mut g = state.lock().await;
-            g.render(&mut terminal);
-            draw_tx
-                .send(DrawCommand {
-                    data: *terminal.backend_mut().display_mut().framebuffer(),
-                })
-                .unwrap();
-            g.process_cmds().await;
+            let backend = EmbeddedBackend::new(&mut display, config);
+            let mut terminal = ratatui::Terminal::new(backend).expect("to create terminal");
+            let state = state.clone();
+
+            while run.load(Ordering::Relaxed) {
+                //frame rate
+                tokio::time::sleep(Duration::from_millis(DISPLAY_FRAME_PERIOD_MS)).await;
+
+                let should_exit = {
+                    let mut g = state.lock().await;
+                    g.render(&mut terminal);
+                    draw_tx
+                        .send(DrawCommand {
+                            data: *terminal.backend_mut().display_mut().framebuffer(),
+                        })
+                        .unwrap();
+                    g.process_cmds().await;
+                    g.should_exit()
+                };
+
+                if should_exit {
+                    tokio::time::sleep(Duration::from_millis(1000)).await;
+                    run.store(false, Ordering::Relaxed);
+                    return;
+                }
+            }
         }
     };
 
@@ -548,6 +564,7 @@ async fn with_client(
             std::{future::Future, pin::Pin},
             tokio::sync::Mutex,
         };
+        let run = run.clone();
 
         async fn handle_osc(
             packet: rosc::OscPacket,
@@ -573,7 +590,7 @@ async fn with_client(
         match UdpSocket::bind(addr.clone()).await {
             Ok(socket) => {
                 let mut buf = [0u8; rosc::decoder::MTU];
-                loop {
+                while run.load(Ordering::Relaxed) {
                     match socket.recv_from(&mut buf).await {
                         Ok((size, _addr)) => {
                             let (_, packet) = rosc::decoder::decode_udp(&buf[..size]).unwrap();
@@ -595,11 +612,6 @@ async fn with_client(
                 eprintln!("error {} getting osc socket at addr {}", e, addr);
             }
         };
-
-        //do we need this loop?
-        loop {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
     };
 
     let process_midi = async {
@@ -714,7 +726,8 @@ async fn with_client(
     }
 
     let http_query_future = async {
-        loop {
+        let run = run.clone();
+        while run.load(Ordering::Relaxed) {
             tokio::time::sleep(HTTP_QUERY_DELAY).await;
             {
                 let mut g = sets_query.lock().await;
@@ -819,139 +832,154 @@ async fn with_client(
         }
     }
 
-    let web_future = async {
-        let state = state.clone();
-        loop {
-            if let Ok(res) = reqwest::Client::new()
-                .get("http://127.0.0.1:5678/rnbo/info/version?VALUE")
-                .send()
-                .await
-            {
-                let version: serde_json::Value = res.json().await.unwrap();
-                let version = version.get("VALUE").unwrap();
-                if let serde_json::Value::String(version) = version {
-                    let mut g = state.lock().await;
-                    g.set_runner_version(version.as_str());
-                }
-
+    let web_future = {
+        async {
+            let state = state.clone();
+            let run = run.clone();
+            while run.load(Ordering::Relaxed) {
                 if let Ok(res) = reqwest::Client::new()
-                    .get("http://127.0.0.1:5678")
-                    .upgrade()
+                    .get("http://127.0.0.1:5678/rnbo/info/version?VALUE")
                     .send()
                     .await
-                    && let Ok(websocket) = res.into_websocket().await
                 {
-                    let (tx, mut rx) = websocket.split();
-
-                    {
-                        //set up sender
+                    let version: serde_json::Value = res.json().await.unwrap();
+                    let version = version.get("VALUE").unwrap();
+                    if let serde_json::Value::String(version) = version {
                         let mut g = state.lock().await;
-                        g.set_ws(tx).await;
+                        g.set_runner_version(version.as_str());
                     }
 
-                    let timeout = Instant::now() + HTTP_INITIAL_QUERY_DELAY;
-
-                    //do initial queries
+                    if let Ok(res) = reqwest::Client::new()
+                        .get("http://127.0.0.1:5678")
+                        .upgrade()
+                        .send()
+                        .await
+                        && let Ok(websocket) = res.into_websocket().await
                     {
-                        let mut g = inst_query.lock().await;
-                        *g = Some(timeout);
-                    }
+                        let (tx, mut rx) = websocket.split();
 
-                    {
-                        let mut g = sets_query.lock().await;
-                        *g = Some(timeout);
-                    }
+                        {
+                            //set up sender
+                            let mut g = state.lock().await;
+                            g.set_ws(tx).await;
+                        }
 
-                    {
-                        let mut g = views_query.lock().await;
-                        *g = Some(timeout + HTTP_INITIAL_QUERY_DELAY);
-                    }
+                        let timeout = Instant::now() + HTTP_INITIAL_QUERY_DELAY;
 
-                    {
-                        let mut g = patchers_query.lock().await;
-                        *g = Some(timeout + HTTP_INITIAL_QUERY_DELAY);
-                    }
+                        //do initial queries
+                        {
+                            let mut g = inst_query.lock().await;
+                            *g = Some(timeout);
+                        }
 
-                    {
-                        let mut g = set_current_query.lock().await;
-                        *g = Some(timeout);
-                    }
+                        {
+                            let mut g = sets_query.lock().await;
+                            *g = Some(timeout);
+                        }
 
-                    while let Ok(message) = rx.try_next().await {
-                        if let Some(message) = message {
-                            match message {
-                                Message::Text(text) => {
-                                    let cmd: serde_json::Result<serde_json::Value> =
-                                        serde_json::from_str(text.as_str());
-                                    if let Ok(cmd) = cmd
-                                        && let (Some(name), Some(data)) =
-                                            (cmd.get("COMMAND").unwrap().as_str(), cmd.get("DATA"))
-                                        && let Some(path) = match name {
-                                            "ATTRIBUTES_CHANGED" => {
-                                                match data.get("FULL_PATH").and_then(|p| p.as_str())
-                                                {
-                                                    Some(controller::SET_LOAD_ADDR) => {
-                                                        let range: Result<StringRange, _> =
-                                                            serde_json::from_value(data.clone());
-                                                        if let Ok(range) = range {
-                                                            let mut g = state.lock().await;
-                                                            let range = range.range();
-                                                            g.set_set_names(range).await;
+                        {
+                            let mut g = views_query.lock().await;
+                            *g = Some(timeout + HTTP_INITIAL_QUERY_DELAY);
+                        }
+
+                        {
+                            let mut g = patchers_query.lock().await;
+                            *g = Some(timeout + HTTP_INITIAL_QUERY_DELAY);
+                        }
+
+                        {
+                            let mut g = set_current_query.lock().await;
+                            *g = Some(timeout);
+                        }
+
+                        while let Ok(message) = rx.try_next().await {
+                            if let Some(message) = message {
+                                match message {
+                                    Message::Text(text) => {
+                                        let cmd: serde_json::Result<serde_json::Value> =
+                                            serde_json::from_str(text.as_str());
+                                        if let Ok(cmd) = cmd
+                                            && let (Some(name), Some(data)) = (
+                                                cmd.get("COMMAND").unwrap().as_str(),
+                                                cmd.get("DATA"),
+                                            )
+                                            && let Some(path) = match name {
+                                                "ATTRIBUTES_CHANGED" => {
+                                                    match data
+                                                        .get("FULL_PATH")
+                                                        .and_then(|p| p.as_str())
+                                                    {
+                                                        Some(controller::SET_LOAD_ADDR) => {
+                                                            let range: Result<StringRange, _> =
+                                                                serde_json::from_value(
+                                                                    data.clone(),
+                                                                );
+                                                            if let Ok(range) = range {
+                                                                let mut g = state.lock().await;
+                                                                let range = range.range();
+                                                                g.set_set_names(range).await;
+                                                            }
+                                                        }
+                                                        Some(controller::SET_PRESETS_LOAD_ADDR) => {
+                                                            let range: Result<StringRange, _> =
+                                                                serde_json::from_value(
+                                                                    data.clone(),
+                                                                );
+                                                            if let Ok(range) = range {
+                                                                let mut g = state.lock().await;
+                                                                let range = range.range();
+                                                                g.set_set_preset_names(range).await;
+                                                            }
+                                                        }
+                                                        _ => {
+                                                            //println!("data {:?}", cmd);
                                                         }
                                                     }
-                                                    Some(controller::SET_PRESETS_LOAD_ADDR) => {
-                                                        let range: Result<StringRange, _> =
-                                                            serde_json::from_value(data.clone());
-                                                        if let Ok(range) = range {
-                                                            let mut g = state.lock().await;
-                                                            let range = range.range();
-                                                            g.set_set_preset_names(range).await;
-                                                        }
-                                                    }
-                                                    _ => {
-                                                        //println!("data {:?}", cmd);
-                                                    }
+                                                    None
+                                                    /*
+                                                    data
+                                                    .get("FULL_PATH")
+                                                    .map(|p| p.as_str())
+                                                    .flatten(),
+                                                    */
                                                 }
-                                                None
-                                                /*
-                                                data
-                                                .get("FULL_PATH")
-                                                .map(|p| p.as_str())
-                                                .flatten(),
-                                                */
+                                                "PATH_ADDED" | "PATH_REMOVED" => data.as_str(),
+                                                _ => None,
                                             }
-                                            "PATH_ADDED" | "PATH_REMOVED" => data.as_str(),
-                                            _ => None,
-                                        }
-                                    {
-                                        //println!("path {:?}", path);
-                                        //added or removed
-                                        if inst_path_regex.is_match(path) {
-                                            let mut g = inst_query.lock().await;
-                                            *g = Some(Instant::now());
-                                        } else if patchers_path_regex.is_match(path) {
-                                            let mut g = patchers_query.lock().await;
-                                            *g = Some(Instant::now() + Duration::from_millis(100));
-                                        } else if set_view_regex.is_match(path) {
-                                            let mut g = views_query.lock().await;
-                                            *g = Some(Instant::now() + Duration::from_millis(100));
+                                        {
+                                            //println!("path {:?}", path);
+                                            //added or removed
+                                            if inst_path_regex.is_match(path) {
+                                                let mut g = inst_query.lock().await;
+                                                *g = Some(Instant::now());
+                                            } else if patchers_path_regex.is_match(path) {
+                                                let mut g = patchers_query.lock().await;
+                                                *g = Some(
+                                                    Instant::now() + Duration::from_millis(100),
+                                                );
+                                            } else if set_view_regex.is_match(path) {
+                                                let mut g = views_query.lock().await;
+                                                *g = Some(
+                                                    Instant::now() + Duration::from_millis(100),
+                                                );
+                                            }
                                         }
                                     }
-                                }
-                                Message::Binary(vec) => {
-                                    if let Ok((_, OscPacket::Message(m))) =
-                                        rosc::decoder::decode_udp(vec.as_slice())
-                                    {
-                                        let mut g = state.lock().await;
-                                        g.handle_osc(&m).await;
+                                    Message::Binary(vec) => {
+                                        if let Ok((_, OscPacket::Message(m))) =
+                                            rosc::decoder::decode_udp(vec.as_slice())
+                                        {
+                                            let mut g = state.lock().await;
+                                            g.handle_osc(&m).await;
+                                        }
                                     }
                                 }
                             }
                         }
                     }
                 }
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     };
 
@@ -1001,53 +1029,57 @@ async fn with_client(
             .to_os_string()
             .into_string()
             .expect("to get string");
-        handles.spawn(async move {
-            let formatter = syslog::Formatter3164 {
-                facility: syslog::Facility::LOG_USER,
-                hostname: None,
-                process: name.clone(),
-                pid: child.id().unwrap_or(0),
-            };
-            let mut logger = syslog::unix(formatter).expect("to get syslog");
-            let exit_status;
-            loop {
-                tokio::select! {
-                    result = stdout_reader.next_line() => {
-                        match result {
-                            Ok(Some(line)) => {
-                                let _ = logger.info(line);
-                            },
-                            Err(e) => {
-                                //XXX should actually go in top level log but, whatever
-                                let _ = logger.err(e);
-                            },
-                            _ => (),
-                        }
-                    }
-                    result = stderr_reader.next_line() => {
-                        match result {
-                            Ok(Some(line)) => {
-                                let _ = logger.err(line);
-                            },
-                            Err(e) => {
-                                //XXX should actually go in top level log but, whatever
-                                let _ = logger.err(e);
-                            },
-                            _ => (),
-                        }
-                    }
-                    result = child.wait() => {
-                        exit_status = result;
-                        break // child process exited
-                    }
+        {
+            let run = run.clone();
+            handles.spawn(async move {
+                let formatter = syslog::Formatter3164 {
+                    facility: syslog::Facility::LOG_USER,
+                    hostname: None,
+                    process: name.clone(),
+                    pid: child.id().unwrap_or(0),
                 };
-            }
-            (name, exit_status)
-        });
+                let mut logger = syslog::unix(formatter).expect("to get syslog");
+                let mut exit_status = Ok(ExitStatus::default());
+                while run.load(Ordering::Relaxed) {
+                    tokio::select! {
+                        result = stdout_reader.next_line() => {
+                            match result {
+                                Ok(Some(line)) => {
+                                    let _ = logger.info(line);
+                                },
+                                Err(e) => {
+                                    //XXX should actually go in top level log but, whatever
+                                    let _ = logger.err(e);
+                                },
+                                _ => (),
+                            }
+                        }
+                        result = stderr_reader.next_line() => {
+                            match result {
+                                Ok(Some(line)) => {
+                                    let _ = logger.err(line);
+                                },
+                                Err(e) => {
+                                    //XXX should actually go in top level log but, whatever
+                                    let _ = logger.err(e);
+                                },
+                                _ => (),
+                            }
+                        }
+                        result = child.wait() => {
+                            exit_status = result;
+                            break // child process exited
+                        }
+                    };
+                }
+                (name, exit_status)
+            });
+        }
     }
 
     let children_future = {
         let state = state.clone();
+        let run = run.clone();
         async move {
             if let Some(res) = handles.join_next().await {
                 match res {
@@ -1056,15 +1088,17 @@ async fn with_client(
                             "child process {} exited early with status {:?}",
                             name, status
                         ));
-                        let mut g = state.lock().await;
-                        g.display_child_process_error(name.as_str(), status).await;
+                        {
+                            let mut g = state.lock().await;
+                            g.display_child_process_error(name.as_str(), status).await;
+                        }
                     }
                     Err(e) => {
                         let _ = logger.err(e);
                     }
                 }
             }
-            loop {
+            while run.load(Ordering::Relaxed) {
                 //keep looping some user can see display and exit or start move
                 tokio::time::sleep(Duration::from_millis(1000)).await;
             }
@@ -1072,7 +1106,9 @@ async fn with_client(
     };
 
     let signal_future = async {
+        let run = run.clone();
         tokio::signal::ctrl_c().await.unwrap();
+        run.store(false, Ordering::Relaxed);
     };
     tokio::select! {
         _ = display_future => (), _ = web_future => (),  _ = http_query_future => (),
@@ -1080,6 +1116,8 @@ async fn with_client(
         _ = osc_future => (),
         _ = children_future => ()
     };
+
+    run.store(false, Ordering::Relaxed);
 
     let _ = volumeclient.deactivate();
     let _ = c.deactivate();
@@ -1089,6 +1127,7 @@ async fn with_client(
 
 async fn start_jack(
     j: &StartupProcess,
+    run: Arc<AtomicBool>,
     exit_rx: tokio::sync::oneshot::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
     let j = j.clone();
@@ -1123,7 +1162,7 @@ async fn start_jack(
                 let _ = child.kill().await;
             },
             _ = async {
-                loop {
+                while run.load(Ordering::Relaxed) {
                     tokio::select! {
                         result = stdout_reader.next_line() => {
                             match result {
@@ -1162,6 +1201,8 @@ async fn start_jack(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let run = Arc::new(AtomicBool::new(true));
+
     unsafe {
         //set HOME if it doesn't already exist
         if std::env::var_os("HOME").is_none() {
@@ -1227,7 +1268,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
     let mut jack_handle = if let Some(j) = jackstartup.clone() {
         let _ = logger.info("starting jack");
-        Some(start_jack(&j, exit_rx).await)
+        Some(start_jack(&j, run.clone(), exit_rx).await)
     } else {
         None
     };
@@ -1246,7 +1287,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             break;
         }
         if let Ok((c, _status)) = Client::new(name, ClientOptions::NO_START_SERVER) {
-            if let Err(e) = with_client(c, &mut logger, &tostartup, &config_path, caps).await {
+            if let Err(e) =
+                with_client(c, run.clone(), &mut logger, &tostartup, &config_path, caps).await
+            {
                 let _ = logger.err(e);
             }
             break;
