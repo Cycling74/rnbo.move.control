@@ -1816,6 +1816,7 @@ dependencies = [
  "jack",
  "libc",
  "mousefood",
+ "num-traits",
  "once_cell",
  "pad",
  "palette",
