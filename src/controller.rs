@@ -1439,7 +1439,9 @@ impl StateController {
         let mut indexes: Vec<usize> = instances.keys().copied().collect();
         indexes.sort();
 
+        //retain old views because there might be open shared memory that we want to copy
         let old_view_indexes: Vec<usize> = self.userviews.keys().map(|v| *v).collect();
+        let mut oldviews = std::mem::take(&mut self.userviews); //retain so we can copy shared data
 
         //XXX what about visible params?
 
@@ -1457,7 +1459,6 @@ impl StateController {
         self.dataref_meta_lookup.clear();
         self.dataref_shm_lookup.clear();
         self.instances.clear();
-        self.userviews.clear();
 
         let mut common = self.sm.context().common();
         common.instance_param_pages.clear();
@@ -1556,6 +1557,11 @@ impl StateController {
         let view_indexes: Vec<usize> = self.userviews.keys().map(|v| *v).collect();
         if view_indexes != old_view_indexes {
             self.handle_event(Events::UserViewsChanged);
+        }
+        for view in self.userviews.values_mut() {
+            for old in oldviews.values_mut() {
+                view.copy_shm(old);
+            }
         }
     }
 

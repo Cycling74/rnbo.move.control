@@ -184,6 +184,18 @@ impl UserView {
         }
     }
 
+    pub fn copy_shm(&mut self, other: &mut Self) {
+        for layer in self.layers.iter_mut() {
+            for other in other.layers.iter_mut() {
+                if other.shm.is_some() && other.shm_name == layer.shm_name {
+                    std::mem::swap(&mut layer.shm, &mut other.shm);
+                    std::mem::swap(&mut layer.rendering, &mut other.rendering);
+                    break;
+                }
+            }
+        }
+    }
+
     //update or add
     pub fn update_layers(&mut self, buffer: &str, view_data: &ViewData) {
         if let Some(view_name) = view_data.view_name() {
@@ -289,10 +301,6 @@ impl UserViewLayer {
         if !self.hidden {
             let width: u32 = display.size().width;
             let offset: Point = Point::new(0, 0);
-            //kinda sketcy but this shm could have been opened and the
-            //flag could be clear already.. so we just always read after
-            //first open no matter what the flag is
-            let mut firstopen = false;
             if self.dirty {
                 if self.shm.is_none() {
                     if let Some(shm_name) = &self.shm_name {
@@ -301,7 +309,6 @@ impl UserViewLayer {
                             rustix::shm::OFlags::RDWR,
                             rustix::shm::Mode::empty(),
                         ) {
-                            firstopen = true;
                             self.shm = Some(shm);
                         } else {
                             return;
@@ -321,9 +328,7 @@ impl UserViewLayer {
                                         std::sync::atomic::AtomicU8::from_ptr(contents.as_mut_ptr())
                                     };
 
-                                    if header.load(std::sync::atomic::Ordering::SeqCst) == 1
-                                        || firstopen
-                                    {
+                                    if header.load(std::sync::atomic::Ordering::SeqCst) == 1 {
                                         //dirty flag
                                         //header
                                         self.rendering =
