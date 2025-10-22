@@ -144,27 +144,31 @@ to the screen.
 To do Direct Drawing, you must use the `UInt8` type for your buffer and provide
 the `view` and `"system": true` metadata entries.
 
-The buffer is interpreted as a 16 byte header followed by pixel data.
+The buffer is interpreted as a 32 byte header followed by pixel data.
 
 #### Header Format
 
 * The first byte of the header is a dirty flag, atomically look for it to be
-clear, then you write pixel data, then atomically set it to 1. When your view
-is visible, the controller will look for this 1, read the data, then atomically
-clear that byte.  The controller does not access this data unless it is displaying it.
+  clear, then you write pixel data, then atomically set it to 1. When your view
+  is visible, the controller will look for this 1, read the data, then
+  atomically clear that byte.  The controller does not access this data unless
+  it is displaying it.
 * The 2nd byte of the header indicates the pixel format of your image.
   * `0` - 1 bit per pixel black and white
 * The 3rd and 4th bytes are reserved.
-* The 5th thru 8th byte are treated as a 32-bit little endian unsigned int, they
-represent the width of the image you're drawing. If this is zero then it is expected
-that the image is the same width as the display it is being drawn to.
-* The rest of the bytes are reserved.
+* The 5th thru 12th bytes are treated as 2 32-bit little endian unsigned ints,
+  the first represents the width and second the height of the image.
+* The 13th thru 24th bytes represent 2 32-bit little endian signed ints,
+  the first an x and the second a y, offset for placing the view on the screen.
+* the rest are reserved
 
 ```
 00..03 - dirty, format, reserved, reserved
-04..07 - width (32-bit) *TODO*
-08..11 - x offset (32-bit) *TODO*
-12..15 - y offset (32-bit) *TODO*
+04..07 - width (32-bit unsigned int)
+08..11 - height (32-bit unsigned int)
+12..15 - x offset (32-bit signed int)
+16..23 - y offset (32-bit signed int)
+.. reserved
 ```
 
 

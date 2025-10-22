@@ -7,7 +7,7 @@ use {
     },
 };
 
-const HEADER_BYTES: usize = 16;
+const HEADER_BYTES: usize = 32;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 enum Format {
@@ -46,6 +46,10 @@ struct UserViewLayer {
     samplerate: usize,
 
     param_view_name: Option<String>,
+
+    offset: Point,
+    width: u32,
+    height: u32,
 }
 
 pub struct UserView {
@@ -355,6 +359,10 @@ impl UserViewLayer {
             samplerate: format.samplerate,
 
             param_view_name: view_data.param_view_name().clone(),
+
+            offset: Point::new(0, 0),
+            width: 0,
+            height: 0,
         }
     }
 
@@ -393,7 +401,7 @@ impl UserViewLayer {
         if !self.hidden {
             let height: u32 = display.size().height;
             let width: u32 = display.size().width;
-            let offset: Point = Point::new(0, 0);
+
             if self.dirty {
                 if self.shm.is_none() {
                     if let Some(shm_name) = &self.shm_name {
@@ -417,22 +425,55 @@ impl UserViewLayer {
                         match self.format {
                             Format::UserImage => {
                                 if contents.len() > HEADER_BYTES {
-                                    let header = unsafe {
+                                    let flag = unsafe {
                                         std::sync::atomic::AtomicU8::from_ptr(contents.as_mut_ptr())
                                     };
 
-                                    if header.load(std::sync::atomic::Ordering::SeqCst) == 1 {
-                                        //dirty flag
-                                        //header
-                                        self.rendering =
-                                            contents[HEADER_BYTES..].iter().map(|v| *v).collect();
-                                        //TODO read width
+                                    //dirty flag
+                                    if flag.load(std::sync::atomic::Ordering::SeqCst) == 1 {
+                                        //width and offset
+                                        {
+                                            let header = unsafe {
+                                                std::slice::from_raw_parts::<'_, u32>(
+                                                    std::mem::transmute::<_, *const u32>(
+                                                        contents.as_ptr(),
+                                                    ),
+                                                    contents.len() / size_of::<u32>(),
+                                                )
+                                            };
+                                            let w = header[1];
+                                            let h = header[2];
+                                            self.width = if w > 0 { w } else { width };
+                                            self.height = if h > 0 { h } else { height };
+
+                                            let header = unsafe {
+                                                std::slice::from_raw_parts::<'_, i32>(
+                                                    std::mem::transmute::<_, *const i32>(
+                                                        contents.as_ptr(),
+                                                    ),
+                                                    contents.len() / size_of::<i32>(),
+                                                )
+                                            };
+                                            self.offset = Point::new(header[3], header[4]);
+                                        }
+
+                                        //row is zero padded to nearest byte
+                                        let row_bytes = (self.width / 8)
+                                            + if self.width % 8 > 0 { 1 } else { 0 };
+                                        let image_bytes = row_bytes * self.height;
+                                        self.rendering = contents[HEADER_BYTES..]
+                                            .iter()
+                                            .take(image_bytes as _)
+                                            .map(|v| *v)
+                                            .collect();
                                         //clear dirty flag
-                                        header.store(0, std::sync::atomic::Ordering::SeqCst);
+                                        flag.store(0, std::sync::atomic::Ordering::SeqCst);
                                     }
                                 }
                             }
                             Format::Float32Buffer if self.channels > 0 => {
+                                self.width = width;
+                                self.height = height;
                                 //TODO chunk rendering??
                                 render_waveform::<f32>(
                                     &mut self.rendering,
@@ -444,6 +485,8 @@ impl UserViewLayer {
                                 self.dirty = false;
                             }
                             Format::Float64Buffer if self.channels > 0 => {
+                                self.width = width;
+                                self.height = height;
                                 //TODO chunk rendering??
                                 render_waveform::<f64>(
                                     &mut self.rendering,
@@ -461,9 +504,9 @@ impl UserViewLayer {
                     return;
                 }
             }
-            if self.rendering.len() > 0 {
-                let image = ImageRaw::<BinaryColor>::new(self.rendering.as_slice(), width);
-                let image = Image::new(&image, offset);
+            if self.rendering.len() > 0 && self.width > 0 {
+                let image = ImageRaw::<BinaryColor>::new(self.rendering.as_slice(), self.width);
+                let image = Image::new(&image, self.offset);
                 if self.do_xor {
                     display.with_xor(|display| {
                         if image.draw(display).is_err() {
