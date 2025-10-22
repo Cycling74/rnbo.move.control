@@ -1,4 +1,6 @@
-* **current**
+* **0.1.0-beta.12**
+    * added `User Views`
+    * fixed longstanding bug where application wouldn't exit cleanly and required hard boot
     * added a UDP OSC listener
         * port defaults to: 2345
         * lets you send `/rnboctl/` messages directly from your host instead of having to use RNBO.
