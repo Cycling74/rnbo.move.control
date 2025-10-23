@@ -125,15 +125,15 @@ Here is an example metadata with all of the fields that define a view.
 { "view": 0, "viewname": "foo", "z": 1, "viewhidden": false, "system": true }
 ```
 
-* `view` - defines the view and gives an index for selecting this via the `/rnboctl/userview` OSC message.
-* `viewname` - an optional name for the view, the first `viewname` seen for a specific `view` index will be the one that is used if there are multiple.
+* `view` - defines the view and gives an index for selecting this via the `/rnboctl/userview/display` OSC message.
+* `system` - this boolean indicates if the buffer should be shared via shared memory so that other processes can access it. `system` sharing is how views are seen by the RNBO control application.
 * `z` - this defines a 'z' index to use while rendering the view, you can have multiple buffers share the same `view` index and then the `z` order will define how the buffer contents are layered, with higher values covering lower ones.
+* `viewname` - an optional name for the view, the first `viewname` seen for a specific `view` index will be the one that is used if there are multiple. If you provide a `viewname` you should see it in the `User Views` submenu, which you can access from the top level menu on the Move. You'll only see the name though if you have more than 1 view because otherwise we just jump direct to the view instead of displaying a sub menu.
 * `viewhidden` - this is a boolean value that indicates if the associated data should be hidden initially or not. The default is false if it isn't supplied.
 * `viewxor` - this is a boolean value that indicates if the associated data should xor with the data in lower layers. This sets white to black and black to white for each bit set in this layer.
-* `system` - this boolean indicates if the buffer should be shared via shared memory so that other processes can access it. `system` sharing is how views are seen by the RNBO control application.
+* `paramview` - this string value indicates a `Parameter View` name that should be loaded and available while the view is loaded.
 * `share` - this string value indicates a name that allows for buffers to be shared between devices in the graph.
 * `observe` - this string value indicates a `share` name that this buffer should follow.
-* `paramview` - this string value indicates a `Parameter View` name that should be loaded and available while the view is loaded.
 
 ### Direct Drawing
 
