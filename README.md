@@ -1,5 +1,9 @@
 # rnbo-move-control
 
+## Bugs
+
+* `Patchers` list not updating when sending new patchers
+
 ## Attribution
 
 * fonts:
