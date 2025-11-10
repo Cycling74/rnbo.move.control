@@ -1,3 +1,4 @@
+* **current**
 * **0.1.0-beta.12**
     * added `User Views`
     * fixed longstanding bug where application wouldn't exit cleanly and required hard boot
