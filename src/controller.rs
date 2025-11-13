@@ -5,7 +5,6 @@ use {
         midi::Midi,
         param::Param,
         patcher::PatcherInst,
-        userview::{UserView, ViewData},
         view::ParamView,
     },
     embedded_graphics::{
@@ -24,6 +23,10 @@ use {
     },
     regex::Regex,
     reqwest_websocket::{Message, WebSocket},
+    rnbo_embedded_graphics::{
+        display::DisplayExt,
+        userview::{UserView, ViewData},
+    },
     rosc::{OscMessage, OscPacket, OscType},
     std::{
         cmp::PartialEq,
@@ -1186,7 +1189,7 @@ pub struct StateController {
 
     popup: Popup,
 
-    userviews: BTreeMap<usize, UserView>,
+    userviews: BTreeMap<usize, UserView<BinaryColor>>,
 
     filter_encoders: Arc<AtomicBool>,
 }

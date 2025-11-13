@@ -67,7 +67,6 @@ mod midi;
 mod oscquery;
 mod param;
 mod patcher;
-mod userview;
 mod util;
 mod view;
 mod widget;

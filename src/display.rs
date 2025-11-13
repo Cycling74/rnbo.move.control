@@ -1,4 +1,5 @@
 use embedded_graphics_core::{draw_target::DrawTarget, pixelcolor::BinaryColor, prelude::*};
+use rnbo_embedded_graphics::display::DisplayExt;
 
 const HEADER_LEN: usize = 8;
 pub const DISPLAY_BYTES: usize = 1024;
@@ -54,22 +55,6 @@ impl MoveDisplay {
         }
     }
 
-    pub fn with_summing<T, F: FnOnce(&mut Self) -> T>(&mut self, f: F) -> T {
-        let mode = self.mode;
-        self.mode = DrawMode::Sum;
-        let v = f(self);
-        self.mode = mode;
-        v
-    }
-
-    pub fn with_xor<T, F: FnOnce(&mut Self) -> T>(&mut self, f: F) -> T {
-        let mode = self.mode;
-        self.mode = DrawMode::Xor;
-        let v = f(self);
-        self.mode = mode;
-        v
-    }
-
     pub fn framebuffer(&self) -> &[u8; BUFFER_LEN] {
         &self.framebuffer
     }
@@ -87,6 +72,24 @@ impl MoveDisplay {
 impl OriginDimensions for MoveDisplay {
     fn size(&self) -> Size {
         Size::new(DISPLAY_WIDTH, DISPLAY_HEIGHT)
+    }
+}
+
+impl DisplayExt for MoveDisplay {
+    fn with_summing<T, F: FnOnce(&mut Self) -> T>(&mut self, f: F) -> T {
+        let mode = self.mode;
+        self.mode = DrawMode::Sum;
+        let v = f(self);
+        self.mode = mode;
+        v
+    }
+
+    fn with_xor<T, F: FnOnce(&mut Self) -> T>(&mut self, f: F) -> T {
+        let mode = self.mode;
+        self.mode = DrawMode::Xor;
+        let v = f(self);
+        self.mode = mode;
+        v
     }
 }
 

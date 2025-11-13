@@ -1801,6 +1801,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rnbo-embedded-graphics"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "embedded-graphics-core",
+ "num-traits",
+ "psx-shm",
+ "rustix",
+]
+
+[[package]]
 name = "rnbomovecontrol"
 version = "0.1.0-beta.13"
 dependencies = [
@@ -1827,6 +1838,7 @@ dependencies = [
  "reqwest",
  "reqwest-websocket",
  "rlimit",
+ "rnbo-embedded-graphics",
  "rosc",
  "rustix",
  "serde",
