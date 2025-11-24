@@ -159,6 +159,7 @@ The buffer is interpreted as a 32 byte header followed by pixel data.
   it is displaying it.
 * The 2nd byte of the header indicates the pixel format of your image.
   * `0` - 1 bit per pixel black and white
+  * `1` - 8-bits per channel, RGBA, 32-bits total per pixel
 * The 3rd and 4th bytes are reserved.
 * The 5th thru 12th bytes are treated as 2 32-bit little endian unsigned ints,
   the first represents the width and second the height of the image.
