@@ -138,6 +138,7 @@ Here is an example metadata with all of the fields that define a view.
 * `paramview` - this string value indicates a `Parameter View` name that should be loaded and available while the view is loaded.
 * `share` - this string value indicates a name that allows for buffers to be shared between devices in the graph.
 * `observe` - this string value indicates a `share` name that this buffer should follow.
+* `display` - this string value indicates a name of a display, use `"web"` to create a streaming video via the web interface
 
 ### Direct Drawing
 
