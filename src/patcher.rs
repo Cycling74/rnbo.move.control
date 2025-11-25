@@ -146,10 +146,17 @@ impl Dataref {
     }
 
     pub fn view_data(&self) -> Option<ViewData> {
-        ViewData::from_meta(&self.meta).map(|mut v| {
+        if let Some(mut v) = ViewData::from_meta(&self.meta) {
             v.set_shm_name(self.shm_name().clone());
-            v
-        })
+            //match move or nothing for "display"
+            if let Some(display) = v.display() {
+                if display == &"move" { Some(v) } else { None }
+            } else {
+                Some(v)
+            }
+        } else {
+            None
+        }
     }
 }
 

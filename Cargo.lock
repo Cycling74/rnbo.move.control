@@ -651,7 +651,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1803,7 +1803,7 @@ dependencies = [
 [[package]]
 name = "rnbo-embedded-graphics"
 version = "0.1.0"
-source = "git+ssh://github.com/Cycling74/rnbo-embedded-graphics.git#c9d18486dd741b2c8de8d82281cb5e7672201f1c"
+source = "git+ssh://github.com/Cycling74/rnbo-embedded-graphics.git#bf2af4fcee1adcdd0b8a35eca9cee97ed86cc3ca"
 dependencies = [
  "embedded-graphics",
  "embedded-graphics-core",
@@ -1880,7 +1880,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
