@@ -145,83 +145,10 @@ impl Dataref {
         }
     }
 
-    pub fn view_z(&self) -> Option<i8> {
-        if let Some(meta) = self.meta.as_object()
-            && meta.contains_key("z")
-            && let Some(v) = meta.get("z")
-            && let Some(v) = v.as_number()
-        {
-            if let Some(v) = v.as_i64() {
-                Some(v as i8)
-            } else if let Some(v) = v.as_f64() {
-                Some(v as i8)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    pub fn view_hidden(&self) -> bool {
-        if let Some(meta) = self.meta.as_object()
-            && meta.contains_key("viewhidden")
-            && let Some(v) = meta.get("viewhidden")
-            && let Some(v) = v.as_bool()
-        {
-            v
-        } else {
-            false
-        }
-    }
-
-    pub fn view_xor(&self) -> bool {
-        if let Some(meta) = self.meta.as_object()
-            && meta.contains_key("viewxor")
-            && let Some(v) = meta.get("viewxor")
-            && let Some(v) = v.as_bool()
-        {
-            v
-        } else {
-            false
-        }
-    }
-
-    pub fn view_name(&self) -> Option<&str> {
-        if let Some(meta) = self.meta.as_object()
-            && meta.contains_key("viewname")
-            && let Some(v) = meta.get("viewname")
-            && let Some(v) = v.as_str()
-        {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    pub fn param_view_name(&self) -> Option<&str> {
-        if let Some(meta) = self.meta.as_object()
-            && meta.contains_key("paramview")
-            && let Some(v) = meta.get("paramview")
-            && let Some(v) = v.as_str()
-        {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
     pub fn view_data(&self) -> Option<ViewData> {
-        self.view_index().map(|view_index| {
-            ViewData::new(
-                view_index,
-                self.param_view_name().map(|v| v.to_owned()),
-                self.view_z(),
-                self.view_hidden(),
-                self.view_name().map(|v| v.to_owned()),
-                self.shm_name().clone(),
-                self.view_xor(),
-            )
+        ViewData::from_meta(&self.meta).map(|mut v| {
+            v.set_shm_name(self.shm_name().clone());
+            v
         })
     }
 }
