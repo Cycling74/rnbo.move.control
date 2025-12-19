@@ -139,6 +139,7 @@ Here is an example metadata with all of the fields that define a view.
 * `share` - this string value indicates a name that allows for buffers to be shared between devices in the graph.
 * `observe` - this string value indicates a `share` name that this buffer should follow.
 * `display` - this string value indicates a name of a display, use `"web"` to create a streaming video via the web interface
+* `displaysize` - a 2 element numeric array: `[width, height]` representing the width and height of the display to render
 
 ### Direct Drawing
 
