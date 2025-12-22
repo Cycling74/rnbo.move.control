@@ -1803,7 +1803,7 @@ dependencies = [
 [[package]]
 name = "rnbo-embedded-graphics"
 version = "0.1.0"
-source = "git+ssh://github.com/Cycling74/rnbo-embedded-graphics.git#bf2af4fcee1adcdd0b8a35eca9cee97ed86cc3ca"
+source = "git+https://github.com/Cycling74/rnbo-embedded-graphics#bf2af4fcee1adcdd0b8a35eca9cee97ed86cc3ca"
 dependencies = [
  "embedded-graphics",
  "embedded-graphics-core",
