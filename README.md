@@ -122,12 +122,18 @@ TODO:
 
 ## Parameters
 
+### Delta
+
 There is a default delta when editing parameters via the encoders that you can
 alter via the `rnboctl` OSC message detailed above.
 
 If you want to set a different delta for a specific parameter you can set it
 via that parameter's meta entry, the key is `"delta"` and the value should be
 floating point.
+
+### Hidden
+
+You can hide parameters from the display via a `"hidden"` boolean value in that parameter's `meta` entry.
 
 
 ## User Views
