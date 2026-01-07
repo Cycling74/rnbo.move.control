@@ -120,6 +120,16 @@ TODO:
   * TODO: use a 2nd index to indicate the display to draw it on
 
 
+## Parameters
+
+There is a default delta when editing parameters via the encoders that you can
+alter via the `rnboctl` OSC message detailed above.
+
+If you want to set a different delta for a specific parameter you can set it
+via that parameter's meta entry, the key is `"delta"` and the value should be
+floating point.
+
+
 ## User Views
 
 Users can draw to the display using shared memory and buffers.
