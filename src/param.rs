@@ -88,7 +88,10 @@ fn get_color(v: f64) -> Srgb<u8> {
 fn get_delta(meta: &Value) -> Option<f64> {
     let meta = meta.as_object()?;
     if meta.contains_key("delta") {
-        meta.get("delta")?.as_number()?.as_f64()
+        meta.get("delta")?
+            .as_number()?
+            .as_f64()
+            .map(|v| v.clamp(0.0, 1.0))
     } else {
         None
     }
@@ -266,6 +269,15 @@ impl Param {
         }
 
         hidden != self.hidden()
+    }
+
+    pub fn set_delta(&mut self, v: Option<f64>) {
+        match self.detail {
+            ParamDetail::Float { .. } => {
+                self.norm_offset_step = v.map(|v| v.clamp(0.0, 1.0));
+            }
+            _ => (),
+        }
     }
 
     pub fn meta(&self) -> &Value {

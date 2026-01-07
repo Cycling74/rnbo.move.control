@@ -78,11 +78,15 @@ pub const SET_VIEWS_LIST_ADDR: &str = "/rnbo/inst/control/sets/views/list";
 pub const SET_VIEWS_ORDER_ADDR: &str = "/rnbo/inst/control/sets/views/order";
 
 static INST_ALIAS_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"/rnbo/inst/(\d*)/config/name_alias").expect("to build name_alias regex")
+    Regex::new(r"\A/rnbo/inst/(\d*)/config/name_alias\z").expect("to build name_alias regex")
 });
 
 static PARAM_META_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"/rnbo/inst/(\d*)/params/(.+)/meta").expect("to build param hidden regex")
+    Regex::new(r"\A/rnbo/inst/(\d*)/params/(.+)/meta\z").expect("to build param hidden regex")
+});
+
+static PARAM_DELTA_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\A/rnbo/inst/(\d*)/params/(.+)/meta/delta\z").expect("to build param hidden regex")
 });
 
 pub const SET_VIEW_DISPLAY: &str = "/rnboctl/view/display";
@@ -2190,6 +2194,26 @@ impl StateController {
                                     self.update_instance_params();
                                 }
                             }
+                        }
+                    } else if let Some(captures) = PARAM_DELTA_REGEX.captures(&msg.addr) {
+                        let index = captures
+                            .get(1)
+                            .expect("to get instance index")
+                            .as_str()
+                            .parse::<usize>()
+                            .expect("index to parse to usize");
+                        let name = captures.get(2).expect("to get param name").as_str();
+                        if let Some(param) = self
+                            .params
+                            .iter_mut()
+                            .find(|p| p.instance_index() == index && p.name() == name)
+                        {
+                            let delta = if !msg.args.is_empty() {
+                                as_float64(&msg.args[0])
+                            } else {
+                                None
+                            };
+                            param.set_delta(delta);
                         }
                     } else if let Some(index) = self.param_lookup.get(&msg.addr) {
                         if let Some(param) = self.params.get_mut(*index)
