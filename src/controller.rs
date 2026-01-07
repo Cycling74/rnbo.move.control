@@ -97,6 +97,8 @@ pub const USER_VIEW_LAYER_REDRAW: &str = "/rnboctl/userview/layer/redraw";
 pub const DISPLAY_COUNT_OSC: &str = "/rnboctl/display/count";
 pub const DISPLAY_INFO_ADDR: &str = "/rnboctl/display/info";
 
+pub const PARAM_DELTA_ADDR: &str = "/rnboctl/param/delta";
+
 const JOG_WHEEL_TOUCH: usize = 9;
 const VOLUME_WHEEL_TOUCH: usize = 8;
 
@@ -1870,6 +1872,14 @@ impl StateController {
                 }
             };
 
+            let as_float64 = |arg: &OscType| -> Option<f64> {
+                match arg {
+                    OscType::Double(v) => Some(*v),
+                    OscType::Float(v) => Some(*v as f64),
+                    _ => None,
+                }
+            };
+
             let as_bool = |arg: &OscType| -> Option<bool> {
                 match arg {
                     OscType::Double(v) => Some(*v != 0.0),
@@ -2058,6 +2068,19 @@ impl StateController {
                             args,
                         };
                         self.send_osc(msg).await;
+                    }
+                }
+                PARAM_DELTA_ADDR => {
+                    if msg.args.is_empty() {
+                        let args = vec![OscType::Double(Param::global_delta())];
+                        let msg = OscMessage {
+                            addr: PARAM_DELTA_ADDR.to_owned(),
+                            args,
+                        };
+                    } else if msg.args.len() == 1
+                        && let Some(v) = as_float64(&msg.args[0])
+                    {
+                        Param::set_global_delta(v);
                     }
                 }
                 DEVICE_PARAM_DISPLAY => {

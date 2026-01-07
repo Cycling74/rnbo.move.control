@@ -65,21 +65,33 @@
 
 use {
     crate::util::parse_contents_meta,
+    atomic_float::AtomicF64,
     palette::{Darken, Srgb},
     serde_json::Value,
     std::{
         cmp::PartialOrd,
+        sync::atomic::Ordering,
         time::{Duration, Instant},
     },
 };
 
 const NORM_PENDING_DELAY: Duration = Duration::from_millis(50);
+static GLOBAL_DELTA: AtomicF64 = AtomicF64::new(0.01);
 
 fn get_color(v: f64) -> Srgb<u8> {
     let cap = 0.96;
 
     //TODO get from metdata?
     Srgb::new(1.0, 1.0, 1.0).darken(cap - v * cap).into_format()
+}
+
+fn get_delta(meta: &Value) -> Option<f64> {
+    let meta = meta.as_object()?;
+    if meta.contains_key("delta") {
+        meta.get("delta")?.as_number()?.as_f64()
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -112,7 +124,7 @@ pub struct Param {
     norm: f64,
     norm_pending: Option<(f64, Instant)>,
 
-    norm_offset_step: f64, //how much do we step our norm value when we offset via MIDI?
+    norm_offset_step: Option<f64>,
 
     color: Srgb<u8>,
 
@@ -120,6 +132,13 @@ pub struct Param {
 }
 
 impl Param {
+    pub fn global_delta() -> f64 {
+        GLOBAL_DELTA.load(Ordering::Relaxed)
+    }
+    pub fn set_global_delta(delta: f64) {
+        GLOBAL_DELTA.store(delta.clamp(0.0, 1.0), Ordering::Relaxed);
+    }
+
     pub fn instance_index(&self) -> usize {
         self.instance_index
     }
@@ -174,11 +193,15 @@ impl Param {
     }
 
     pub fn offset(&mut self, offset: isize) -> f64 {
+        let offset_step = self
+            .norm_offset_step
+            .unwrap_or(GLOBAL_DELTA.load(Ordering::Relaxed));
+
         self.norm = (self.norm
             + if offset > 0 {
-                self.norm_offset_step
+                offset_step
             } else {
-                -self.norm_offset_step
+                -offset_step
             })
         .clamp(0.0, 1.0);
         self.norm
@@ -234,6 +257,14 @@ impl Param {
     pub fn set_meta(&mut self, meta: &Value) -> bool {
         let hidden = self.hidden();
         self.meta = meta.clone();
+
+        match self.detail {
+            ParamDetail::Float { .. } => {
+                self.norm_offset_step = get_delta(meta);
+            }
+            _ => (),
+        }
+
         hidden != self.hidden()
     }
 
@@ -264,8 +295,6 @@ impl Param {
             let contents = obj.get("CONTENTS")?;
             let addr_norm = format!("{}/normalized", addr);
 
-            let mut norm_offset_step = 0.01; //TODO customize from meta?
-
             let norm = contents
                 .get("normalized")?
                 .get("VALUE")?
@@ -273,6 +302,8 @@ impl Param {
                 .as_f64()?;
 
             let meta = parse_contents_meta(contents).unwrap_or(Value::Null);
+
+            let mut norm_offset_step = get_delta(&meta);
 
             let index = contents.get("index")?.get("VALUE")?.as_number()?.as_u64()? as usize;
             let color = get_color(norm);
@@ -312,7 +343,7 @@ impl Param {
                         //1.0 / (2 * 2 - 1) =  0.333 -> 0, 0.33 | 0.66, 1.0
                         //a 3 entry enum would be:
                         //1.0 / (2 * 3 - 1) =  0.2 -> 0, 0.2 | 0.4, 0.6 | 0.8, 1.0
-                        norm_offset_step = 1.0 / (2.0 * vals.len() as f64 - 1.0); //half a step per change
+                        norm_offset_step = Some(1.0 / (2.0 * vals.len() as f64 - 1.0)); //half a step per change
                         ParamDetail::Enum(index, vals)
                     };
                     Some(Param {
@@ -349,7 +380,7 @@ impl Param {
                     if let Some(steps) = steps
                         && steps > 1
                     {
-                        norm_offset_step = 1.0 / (2.0 * steps as f64 - 1.0); //0..1 inclusive
+                        norm_offset_step = Some(1.0 / (2.0 * steps as f64 - 1.0)); //0..1 inclusive
                     }
                     Some(Param {
                         index,
