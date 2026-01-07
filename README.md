@@ -106,6 +106,13 @@ conan create .  -s os=Linux -s arch=armv8 -s compiler=gcc -s compiler.version=11
 * `/rnboctl/userview/layer/redraw <index> <layer>`
   * send this message to tell the controller to re-read and draw a layer, useful when waveform contents change
 
+* `/rnboctl/param/delta <value>`
+  * send a floating point value to change global delta that gets used while editing parameters
+    * this value is used to increment/decrement the normalized value
+    * this does not affect parameters that have specific deltas set up via metadata
+    * this also does not affect enum or stepped parameters
+  * send an empty value to this address to query the current value
+
 TODO:
 
 * `/rnboctl/userview/zoomfull <index>`
