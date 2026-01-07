@@ -41,3 +41,4 @@ psx-shm = "0.2.0"
 rustix = "1.1.2"
 num-traits = "0.2.19"
 rnbo-embedded-graphics = { git = "https://github.com/Cycling74/rnbo-embedded-graphics" }
+atomic_float = "1.1.0"
