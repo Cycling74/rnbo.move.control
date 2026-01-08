@@ -752,8 +752,8 @@ const MENU_ITEMS: [&str; 9] = [
     "Graph Presets",
     "Patchers",
     "Tempo",
-    "About",
     "Power Status",
+    "About",
 ];
 const EXIT_MENU: [&str; 2] = ["Power Down", "Launch Move"];
 const PRESET_MENU_ITEMS: [&str; 5] = ["Load", "Save", "Overwrite", "Set Initial", "Delete"];
@@ -766,8 +766,8 @@ const GRAPHS_INDEX: usize = 3;
 const GRAPH_PRESETS_INDEX: usize = 4;
 const PATCHERS_INDEX: usize = 5;
 const TEMPO_INDEX: usize = 6;
-const ABOUT_INDEX: usize = 7;
-const POWER_STATUS_INDEX: usize = 8;
+const POWER_STATUS_INDEX: usize = 7;
+const ABOUT_INDEX: usize = 8;
 
 const PRESET_MENU_LOAD_INDEX: usize = 0;
 const PRESET_MENU_SAVE_INDEX: usize = 1;
@@ -3672,7 +3672,7 @@ impl StateController {
                         }
                     {
                         self.request_popup(
-                            if v { "Plugged in" } else { "Unplugged" },
+                            if v { "Plugged In" } else { "Unplugged" },
                             format!("{} %", common.battery_charge),
                         );
                     }
