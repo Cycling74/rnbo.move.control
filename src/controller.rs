@@ -888,7 +888,7 @@ pub mod top {
 
             _ + BatteryLow(_) [!ctx.battery_low() != *event] / ctx.emit(Cmd::BatteryLow(*event));,
             _ + BatteryCharge(_) [ctx.battery_charge() != *event] / ctx.emit(Cmd::BatteryCharge(*event));,
-            _ + PSUConnected(_) [ctx.psu_connected() != *event] / ctx.emit(Cmd::PSUConnected(*event));,
+            _ + PSUConnected(_) [ctx.psu_connected().is_none() || ctx.psu_connected().unwrap() != *event] / ctx.emit(Cmd::PSUConnected(*event));,
 
             Main + SetViewSelected(_) = ParamViews,
             Main + SetViewPageSelected(_) = ParamViews,
@@ -1245,7 +1245,7 @@ struct CommonContext {
 
     pub(crate) battery_low: bool,
     pub(crate) battery_charge: u8,
-    pub(crate) psu_connected: bool,
+    pub(crate) psu_connected: Option<bool>,
 }
 
 impl Default for CommonContext {
@@ -1269,7 +1269,7 @@ impl Default for CommonContext {
 
             battery_low: false,
             battery_charge: 100,
-            psu_connected: false,
+            psu_connected: None,
         }
     }
 }
@@ -1352,7 +1352,7 @@ impl Context {
         self.common.battery_charge
     }
 
-    fn psu_connected(&self) -> bool {
+    fn psu_connected(&self) -> Option<bool> {
         self.common.psu_connected
     }
 
@@ -1365,7 +1365,7 @@ impl Context {
     }
 
     fn set_psu_connected(&mut self, v: bool) {
-        self.common.psu_connected = v;
+        self.common.psu_connected = Some(v);
     }
 }
 
@@ -2870,7 +2870,7 @@ impl StateController {
                 let title = format_title("Power Status");
                 let charge = format!(
                     "{}: {}%",
-                    if self.context().psu_connected() {
+                    if self.context().psu_connected().unwrap_or_default() {
                         "charging"
                     } else {
                         "discharging"
@@ -3661,7 +3661,14 @@ impl StateController {
                 }
                 Cmd::PSUConnected(v) => {
                     let mut common = self.sm.context().common();
-                    common.psu_connected = v;
+                    let isupdate = common.psu_connected.is_some();
+                    common.psu_connected = Some(v);
+                    if isupdate {
+                        self.request_popup(
+                            if v { "Charging" } else { "Discharging" },
+                            format!("{} %", common.battery_charge),
+                        );
+                    }
                     self.update_common(common);
                 }
             }
