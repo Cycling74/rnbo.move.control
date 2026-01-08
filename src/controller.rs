@@ -64,6 +64,7 @@ const PARAM_Y_OFFSET: i32 = -6;
 
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
+const JACK_CPU_ADDR: &str = "/rnbo/jack/info/cpu_load";
 
 pub const INST_UNLOAD_ADDR: &str = "/rnbo/inst/control/unload";
 pub const INST_LOAD_ADDR: &str = "/rnbo/inst/control/load";
@@ -752,7 +753,7 @@ const MENU_ITEMS: [&str; 9] = [
     "Graph Presets",
     "Patchers",
     "Tempo",
-    "Power Status",
+    "Status",
     "About",
 ];
 const EXIT_MENU: [&str; 2] = ["Power Down", "Launch Move"];
@@ -766,7 +767,7 @@ const GRAPHS_INDEX: usize = 3;
 const GRAPH_PRESETS_INDEX: usize = 4;
 const PATCHERS_INDEX: usize = 5;
 const TEMPO_INDEX: usize = 6;
-const POWER_STATUS_INDEX: usize = 7;
+const STATUS_INDEX: usize = 7;
 const ABOUT_INDEX: usize = 8;
 
 const PRESET_MENU_LOAD_INDEX: usize = 0;
@@ -982,7 +983,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHERS_INDEX && ctx.patchers_count() > 0] = PatchersList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
         Menu(usize) + BtnDown(Button::JogWheel) [*state == ABOUT_INDEX] = About,
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == POWER_STATUS_INDEX] = PowerStatus,
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == STATUS_INDEX] = Status,
 
         SetsList(usize) + BtnDown(Button::Back) = Menu(GRAPHS_INDEX),
         SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_count() > *state + 1] = SetsList(*state + 1),
@@ -1105,7 +1106,7 @@ smlang::statemachine! {
         TempoEditor + Tempo(_) = TempoEditor,
 
         About + BtnDown(Button::Back) = Menu(ABOUT_INDEX),
-        PowerStatus + BtnDown(Button::Back) = Menu(POWER_STATUS_INDEX),
+        Status + BtnDown(Button::Back) = Menu(STATUS_INDEX),
 
         //direct OSC based state changes
         _ + DeviceParamsSelected(_) = PatcherParams(ParamPage { index: event.0, page: event.1, focused: None }),
@@ -1168,6 +1169,7 @@ pub struct StateController {
 
     rolling: bool,
     bpm: f32,
+    cpu: f64,
     tempo_offset_mul: f32,
 
     instances: Vec<PatcherInst>,
@@ -1418,6 +1420,7 @@ impl StateController {
 
             rolling: false,
             bpm: 100.0,
+            cpu: 100.0,
             tempo_offset_mul: 1.0,
 
             exit: false,
@@ -1981,6 +1984,13 @@ impl StateController {
                     {
                         self.bpm = bpm;
                         self.handle_event(Events::Tempo(bpm));
+                    }
+                }
+                JACK_CPU_ADDR => {
+                    if msg.args.len() == 1
+                        && let Some(v) = as_float64(&msg.args[0])
+                    {
+                        self.cpu = v;
                     }
                 }
                 SET_CURRENT_ADDR => {
@@ -2807,7 +2817,7 @@ impl StateController {
                 let indicator = |index: usize| -> &'static char {
                     let ctx = self.context();
                     match index {
-                        TEMPO_INDEX | ABOUT_INDEX | POWER_STATUS_INDEX => ITEM_INDICATOR,
+                        TEMPO_INDEX | ABOUT_INDEX | STATUS_INDEX => ITEM_INDICATOR,
                         DEVICE_PARAMS_INDEX if ctx.instances_count(InstSelType::Params) < 2 => {
                             ITEM_INDICATOR
                         }
@@ -2864,29 +2874,51 @@ impl StateController {
                 frame.render_widget(title, layout[0]);
                 frame.render_widget(paragraph, layout[1]);
             }
-            States::PowerStatus => {
+            States::Status => {
                 setup_common(line!(), self);
 
-                let title = format_title("Power Status");
-                let charge = format!(
-                    "{}: {}%",
-                    if self.context().psu_connected().unwrap_or_default() {
-                        "Plugged In"
-                    } else {
-                        "Unplugged"
-                    },
-                    self.context().battery_charge()
-                )
-                .to_string();
-                let mut content = vec![Line::from(charge)];
-                if self.context().battery_low() {
-                    content.push(Line::from("Low Battery"));
-                }
-                let paragraph = Paragraph::new(content).alignment(Alignment::Left);
+                let title = format_title("Status");
 
-                let layout = titled_layout(frame.area());
+                let cpu = format!("Audio CPU:  {:>3}%", self.cpu.round());
+                let cpu = ratatui::widgets::Gauge::default()
+                    .label(cpu)
+                    .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
+                    .ratio((self.cpu / 100.0).clamp(0.0, 1.0))
+                    .use_unicode(true);
+
+                let charge_amt = self.context().battery_charge();
+                let charging = if self.context().psu_connected().unwrap_or_default() {
+                    "↑"
+                } else {
+                    "↓"
+                };
+                let low = if self.context().battery_low() {
+                    "LOW"
+                } else {
+                    ""
+                };
+                let charge =
+                    format!("Charge: {:>3}{}{:>3}%", low, charging, charge_amt).to_string();
+                let charge = ratatui::widgets::Gauge::default()
+                    .label(charge)
+                    .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
+                    .ratio(((charge_amt as f64) / 100.0).clamp(0.0, 1.0))
+                    .use_unicode(true);
+
+                let rect = frame.area();
+
+                let layout = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints(vec![
+                        Constraint::Length(1),
+                        Constraint::Length(1),
+                        Constraint::Length(1),
+                        Constraint::Length(1),
+                    ])
+                    .split(rect);
                 frame.render_widget(title, layout[0]);
-                frame.render_widget(paragraph, layout[1]);
+                frame.render_widget(cpu, layout[1]);
+                frame.render_widget(charge, layout[2]);
             }
             States::SetsList(selected) => {
                 setup_common(line!(), self);
@@ -3667,7 +3699,7 @@ impl StateController {
                     // state to another known plugin state (not the initial power status read)
                     if isupdate
                         && match self.sm.state() {
-                            States::PowerStatus => false,
+                            States::Status => false,
                             _ => true,
                         }
                     {
