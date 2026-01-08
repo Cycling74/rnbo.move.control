@@ -548,6 +548,14 @@ impl Popup {
         }
     }
 
+    fn new_infinite(title: String, content: String) -> Self {
+        Self {
+            title,
+            content,
+            timeout: Instant::now() + Duration::from_secs(60 * 60 * 24),
+        }
+    }
+
     fn timed_out(&self) -> bool {
         self.timeout < Instant::now()
     }
@@ -601,6 +609,10 @@ enum Events {
 
     DeviceParamsSelected((usize, usize)), //index, page
     DeviceDataSelected(usize),            //index
+
+    PSUConnected(bool),
+    BatteryLow(bool),
+    BatteryCharge(u8),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -806,6 +818,8 @@ enum Cmd {
     LoadUserView(usize), //might alter the param view
 
     ReportViewParamPage(usize, usize),
+
+    WarnBatteryLow,
 }
 
 pub mod top {
@@ -867,6 +881,11 @@ pub mod top {
             _ + BtnDown(Button::PowerLong) / ctx.emit(Cmd::Power(PowerCommand::ClearLongPress)); = PowerOff,
 
             _ + BtnDown(Button::Play) / ctx.emit(Cmd::ToggleTransport);,
+
+            _ + BatteryLow(true) [!ctx.battery_low()] / { ctx.set_battery_low(*event); ctx.emit(Cmd::WarnBatteryLow); },
+            _ + BatteryLow(false) [ctx.battery_low()] / ctx.set_battery_low(*event);,
+            _ + BatteryCharge(_) [ctx.battery_charge() != *event] / ctx.set_battery_charge(*event);,
+            _ + PSUConnected(_) [ctx.psu_connected() != *event] / ctx.set_psu_connected(*event);,
 
             Main + SetViewSelected(_) = ParamViews,
             Main + SetViewPageSelected(_) = ParamViews,
@@ -1218,6 +1237,10 @@ struct CommonContext {
     pub(crate) can_exit_powermenu: bool,
 
     pub(crate) userviews_count: usize,
+
+    pub(crate) battery_low: bool,
+    pub(crate) battery_charge: u8,
+    pub(crate) psu_connected: bool,
 }
 
 impl Default for CommonContext {
@@ -1238,6 +1261,10 @@ impl Default for CommonContext {
             can_exit_powermenu: true,
 
             userviews_count: 0,
+
+            battery_low: false,
+            battery_charge: 100,
+            psu_connected: false,
         }
     }
 }
@@ -1310,6 +1337,30 @@ impl Context {
 
     fn userviews_count(&self) -> usize {
         self.common.userviews_count
+    }
+
+    fn battery_low(&self) -> bool {
+        self.common.battery_low
+    }
+
+    fn battery_charge(&self) -> u8 {
+        self.common.battery_charge
+    }
+
+    fn psu_connected(&self) -> bool {
+        self.common.psu_connected
+    }
+
+    fn set_battery_low(&mut self, v: bool) {
+        self.common.battery_low = v;
+    }
+
+    fn set_battery_charge(&mut self, v: u8) {
+        self.common.battery_charge = v;
+    }
+
+    fn set_psu_connected(&mut self, v: bool) {
+        self.common.psu_connected = v;
     }
 }
 
@@ -2393,6 +2444,12 @@ impl StateController {
                         } else if status & 0b1000 != 0 {
                             self.handle_event(Events::BtnDown(Button::PowerShort));
                         }
+
+                        self.handle_event(Events::PSUConnected((status & 0b10_0000) != 0));
+                        self.handle_event(Events::BatteryLow((status & 0b100_0000) != 0));
+                    }
+                    if let Some(level) = sysex.get(7) {
+                        self.handle_event(Events::BatteryCharge(*level));
                     }
                 }
                 _ => {
@@ -3207,6 +3264,15 @@ impl StateController {
         self.handle_event(Events::PopupRequested);
     }
 
+    fn request_infinite_popup<S1: Into<String>, S2: Into<String>>(
+        &mut self,
+        title: S1,
+        content: S2,
+    ) {
+        self.popup = Popup::new_infinite(title.into(), content.into());
+        self.handle_event(Events::PopupRequested);
+    }
+
     fn handle_event(&mut self, e: Events) {
         let top_trans = self.topsm.process_event(e).is_some();
         let top_cur = self.topsm.state().clone();
@@ -3536,6 +3602,10 @@ impl StateController {
                         args: vec![OscType::Int(index as _), OscType::Int(page as _)],
                     };
                     self.send_osc(msg).await;
+                }
+
+                Cmd::WarnBatteryLow => {
+                    self.request_infinite_popup("Low Battery", "plug in device");
                 }
             }
         }
