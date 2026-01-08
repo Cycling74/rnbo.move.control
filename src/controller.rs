@@ -2871,16 +2871,16 @@ impl StateController {
                 let charge = format!(
                     "{}: {}%",
                     if self.context().psu_connected().unwrap_or_default() {
-                        "charging"
+                        "Plugged In"
                     } else {
-                        "discharging"
+                        "Unplugged"
                     },
                     self.context().battery_charge()
                 )
                 .to_string();
                 let mut content = vec![Line::from(charge)];
                 if self.context().battery_low() {
-                    content.push(Line::from("low battery"));
+                    content.push(Line::from("Low Battery"));
                 }
                 let paragraph = Paragraph::new(content).alignment(Alignment::Left);
 
@@ -3665,7 +3665,7 @@ impl StateController {
                     common.psu_connected = Some(v);
                     if isupdate {
                         self.request_popup(
-                            if v { "Charging" } else { "Discharging" },
+                            if v { "Plugged in" } else { "Unplugged" },
                             format!("{} %", common.battery_charge),
                         );
                     }
