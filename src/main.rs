@@ -517,6 +517,7 @@ async fn with_client(
     let display_future = {
         let run = run.clone();
         let state = state.clone();
+        let c = c.as_client();
         async move {
             use mousefood::{TerminalAlignment, prelude::*};
 
@@ -538,6 +539,7 @@ async fn with_client(
 
                 let should_exit = {
                     let mut g = state.lock().await;
+                    g.set_jack_cpu(c.cpu_load() as f64);
                     g.render(&mut terminal);
                     draw_tx
                         .send(DrawCommand {

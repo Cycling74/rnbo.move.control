@@ -64,7 +64,6 @@ const PARAM_Y_OFFSET: i32 = -6;
 
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
-const JACK_CPU_ADDR: &str = "/rnbo/jack/info/cpu_load";
 
 pub const INST_UNLOAD_ADDR: &str = "/rnbo/inst/control/unload";
 pub const INST_LOAD_ADDR: &str = "/rnbo/inst/control/load";
@@ -1986,13 +1985,6 @@ impl StateController {
                         self.handle_event(Events::Tempo(bpm));
                     }
                 }
-                JACK_CPU_ADDR => {
-                    if msg.args.len() == 1
-                        && let Some(v) = as_float64(&msg.args[0])
-                    {
-                        self.cpu = v;
-                    }
-                }
                 SET_CURRENT_ADDR => {
                     if msg.args.len() == 1 {
                         let name = match &msg.args[0] {
@@ -3168,6 +3160,10 @@ impl StateController {
             _ => (), //TODO
         };
         userview
+    }
+
+    pub fn set_jack_cpu(&mut self, v: f64) {
+        self.cpu = v;
     }
 
     pub fn render(
