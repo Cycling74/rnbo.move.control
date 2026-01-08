@@ -755,8 +755,6 @@ const MENU_ITEMS: [&str; 9] = [
     "Status",
     "About",
 ];
-const EXIT_MENU: [&str; 2] = ["Power Down", "Launch Move"];
-const PRESET_MENU_ITEMS: [&str; 5] = ["Load", "Save", "Overwrite", "Set Initial", "Delete"];
 
 const DEVICE_PARAMS_INDEX: usize = 0;
 const DEVICE_DATA_INDEX: usize = 1;
@@ -769,11 +767,25 @@ const TEMPO_INDEX: usize = 6;
 const STATUS_INDEX: usize = 7;
 const ABOUT_INDEX: usize = 8;
 
+const PRESET_MENU_ITEMS: [&str; 5] = ["Load", "Save", "Overwrite", "Set Initial", "Delete"];
 const PRESET_MENU_LOAD_INDEX: usize = 0;
 const PRESET_MENU_SAVE_INDEX: usize = 1;
 const PRESET_MENU_OVERWRITE_INDEX: usize = 2;
 const PRESET_MENU_SET_INTIAL_INDEX: usize = 3;
 const PRESET_MENU_DELETE_INDEX: usize = 4;
+
+const POWER_MENU: [&str; 5] = [
+    "Launch Move",
+    "Power Down",
+    "Clear Graph",
+    "Reload Graph",
+    "MIDI Reset",
+];
+const POWER_MENU_LAUNCH_MOVE_INDEX: usize = 0;
+const POWER_MENU_POWER_DOWN_INDEX: usize = 1;
+const POWER_MENU_CLEAR_GRAPH_INDEX: usize = 2;
+const POWER_MENU_RELOAD_GRAPH_INDEX: usize = 3;
+const POWER_MENU_MIDI_RESET_INDEX: usize = 4;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Cmd {
@@ -824,16 +836,19 @@ enum Cmd {
     BatteryLow(bool),
     BatteryCharge(u8),
     PSUConnected(bool),
+
+    ReloadGraph,
+    ClearGraph,
+    MIDIReset,
 }
 
 pub mod top {
     use super::{
-        Button, Cmd, Context, EXIT_MENU, Events, JOG_WHEEL_ENCODER, JOG_WHEEL_TOUCH, PowerCommand,
+        Button, Cmd, Context, Events, JOG_WHEEL_ENCODER, JOG_WHEEL_TOUCH, POWER_MENU,
+        POWER_MENU_CLEAR_GRAPH_INDEX, POWER_MENU_LAUNCH_MOVE_INDEX, POWER_MENU_MIDI_RESET_INDEX,
+        POWER_MENU_POWER_DOWN_INDEX, POWER_MENU_RELOAD_GRAPH_INDEX, PowerCommand,
         VOLUME_WHEEL_ENCODER, VOLUME_WHEEL_TOUCH,
     };
-
-    const POWER_DOWN_INDEX: usize = 0;
-    const LAUNCH_MOVE_INDEX: usize = 1;
 
     #[derive(PartialEq, Eq, Clone, Copy, Debug)]
     pub(crate) enum LastView {
@@ -874,14 +889,18 @@ pub mod top {
             VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::Main] = Main,
             VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::ParamViews] = ParamViews,
 
-            PromptExit(usize) + BtnDown(Button::JogWheel) [*state == POWER_DOWN_INDEX] = PowerOff,
-            PromptExit(usize) + BtnDown(Button::JogWheel) [*state == LAUNCH_MOVE_INDEX] = LaunchMove,
-            PromptExit(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < EXIT_MENU.len()] = PromptExit(*state + 1),
-            PromptExit(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PromptExit(*state - 1),
-            PromptExit(usize) + BtnDown(Button::Back) [ctx.can_exit_powermenu()] = Main,
-            PromptExit(usize) + BtnDown(Button::Menu) [ctx.can_exit_powermenu()] = Main,
+            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_POWER_DOWN_INDEX] = PowerOff,
+            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_LAUNCH_MOVE_INDEX] = LaunchMove,
+            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_CLEAR_GRAPH_INDEX] / ctx.emit(Cmd::ClearGraph);,
+            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_RELOAD_GRAPH_INDEX] / ctx.emit(Cmd::ReloadGraph);,
+            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_MIDI_RESET_INDEX] / ctx.emit(Cmd::MIDIReset);,
 
-            _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
+            PowerMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < POWER_MENU.len()] = PowerMenu(*state + 1),
+            PowerMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PowerMenu(*state - 1),
+            PowerMenu(usize) + BtnDown(Button::Back) [ctx.can_exit_powermenu()] = Main,
+            PowerMenu(usize) + BtnDown(Button::Menu) [ctx.can_exit_powermenu()] = Main,
+
+            _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PowerMenu(0),
             _ + BtnDown(Button::PowerLong) / ctx.emit(Cmd::Power(PowerCommand::ClearLongPress)); = PowerOff,
 
             _ + BtnDown(Button::Play) / ctx.emit(Cmd::ToggleTransport);,
@@ -912,7 +931,7 @@ pub mod top {
             _ + UserViewRequested(_) = Main,
 
             _ + ChildProcessError = DisplayChildProcessError,
-            DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PromptExit(POWER_DOWN_INDEX),
+            DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PowerMenu(POWER_MENU_POWER_DOWN_INDEX),
         }
     }
 }
@@ -3235,7 +3254,7 @@ impl StateController {
                         frame.area(),
                     );
                 }
-                States::PromptExit(selected) => {
+                States::PowerMenu(selected) => {
                     let can_exit = self.child_process_error.is_none();
                     self.do_once(line!(), |s| {
                         if can_exit {
@@ -3247,8 +3266,8 @@ impl StateController {
 
                     render_menu(
                         frame,
-                        Some("Exit"),
-                        &EXIT_MENU,
+                        Some("Power"),
+                        &POWER_MENU,
                         default_indicator,
                         all_enabled,
                         selected,
@@ -3705,6 +3724,33 @@ impl StateController {
                         );
                     }
                     self.update_common(common);
+                }
+
+                Cmd::ClearGraph => {
+                    let msg = OscMessage {
+                        addr: INST_UNLOAD_ADDR.to_string(),
+                        args: vec![OscType::Int(-1)],
+                    };
+                    self.send_osc(msg).await;
+                    //back out then display popup, we can't display popup in power menu
+                    self.handle_event(Events::BtnDown(Button::Back));
+                    self.request_popup("Clear Graph", "cleared");
+                }
+                Cmd::ReloadGraph => {
+                    if let Some(name) = &self.set_current_name.clone() {
+                        let msg = OscMessage {
+                            addr: SET_LOAD_ADDR.to_string(),
+                            args: vec![OscType::String(name.to_string())],
+                        };
+                        self.send_osc(msg).await;
+                        self.handle_event(Events::BtnDown(Button::Back));
+                        self.request_popup("Reload Graph", name);
+                    }
+                }
+                Cmd::MIDIReset => {
+                    let _ = self.midi_out_queue.send(Midi::reset());
+                    self.handle_event(Events::BtnDown(Button::Back));
+                    self.request_popup("MIDI Reset", "sent");
                 }
             }
         }
