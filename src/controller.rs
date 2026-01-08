@@ -3663,7 +3663,14 @@ impl StateController {
                     let mut common = self.sm.context().common();
                     let isupdate = common.psu_connected.is_some();
                     common.psu_connected = Some(v);
-                    if isupdate {
+                    // pop up if we're not in the power status screen and we move from a known plug
+                    // state to another known plugin state (not the initial power status read)
+                    if isupdate
+                        && match self.sm.state() {
+                            States::PowerStatus => false,
+                            _ => true,
+                        }
+                    {
                         self.request_popup(
                             if v { "Plugged in" } else { "Unplugged" },
                             format!("{} %", common.battery_charge),
