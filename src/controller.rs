@@ -744,7 +744,7 @@ impl DataLoad {
     }
 }
 
-const MENU_ITEMS: [&str; 8] = [
+const MENU_ITEMS: [&str; 9] = [
     "Device Params",
     "Device Data",
     "User Views",
@@ -753,6 +753,7 @@ const MENU_ITEMS: [&str; 8] = [
     "Patchers",
     "Tempo",
     "About",
+    "Power Status",
 ];
 const EXIT_MENU: [&str; 2] = ["Power Down", "Launch Move"];
 const PRESET_MENU_ITEMS: [&str; 5] = ["Load", "Save", "Overwrite", "Set Initial", "Delete"];
@@ -766,6 +767,7 @@ const GRAPH_PRESETS_INDEX: usize = 4;
 const PATCHERS_INDEX: usize = 5;
 const TEMPO_INDEX: usize = 6;
 const ABOUT_INDEX: usize = 7;
+const POWER_STATUS_INDEX: usize = 8;
 
 const PRESET_MENU_LOAD_INDEX: usize = 0;
 const PRESET_MENU_SAVE_INDEX: usize = 1;
@@ -819,7 +821,9 @@ enum Cmd {
 
     ReportViewParamPage(usize, usize),
 
-    WarnBatteryLow,
+    BatteryLow(bool),
+    BatteryCharge(u8),
+    PSUConnected(bool),
 }
 
 pub mod top {
@@ -882,10 +886,9 @@ pub mod top {
 
             _ + BtnDown(Button::Play) / ctx.emit(Cmd::ToggleTransport);,
 
-            _ + BatteryLow(true) [!ctx.battery_low()] / { ctx.set_battery_low(*event); ctx.emit(Cmd::WarnBatteryLow); },
-            _ + BatteryLow(false) [ctx.battery_low()] / ctx.set_battery_low(*event);,
-            _ + BatteryCharge(_) [ctx.battery_charge() != *event] / ctx.set_battery_charge(*event);,
-            _ + PSUConnected(_) [ctx.psu_connected() != *event] / ctx.set_psu_connected(*event);,
+            _ + BatteryLow(_) [!ctx.battery_low() != *event] / ctx.emit(Cmd::BatteryLow(*event));,
+            _ + BatteryCharge(_) [ctx.battery_charge() != *event] / ctx.emit(Cmd::BatteryCharge(*event));,
+            _ + PSUConnected(_) [ctx.psu_connected() != *event] / ctx.emit(Cmd::PSUConnected(*event));,
 
             Main + SetViewSelected(_) = ParamViews,
             Main + SetViewPageSelected(_) = ParamViews,
@@ -979,6 +982,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHERS_INDEX && ctx.patchers_count() > 0] = PatchersList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
         Menu(usize) + BtnDown(Button::JogWheel) [*state == ABOUT_INDEX] = About,
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == POWER_STATUS_INDEX] = PowerStatus,
 
         SetsList(usize) + BtnDown(Button::Back) = Menu(GRAPHS_INDEX),
         SetsList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_count() > *state + 1] = SetsList(*state + 1),
@@ -1101,6 +1105,7 @@ smlang::statemachine! {
         TempoEditor + Tempo(_) = TempoEditor,
 
         About + BtnDown(Button::Back) = Menu(ABOUT_INDEX),
+        PowerStatus + BtnDown(Button::Back) = Menu(POWER_STATUS_INDEX),
 
         //direct OSC based state changes
         _ + DeviceParamsSelected(_) = PatcherParams(ParamPage { index: event.0, page: event.1, focused: None }),
@@ -1477,6 +1482,7 @@ impl StateController {
         };
 
         s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
+        s.request_power_status();
 
         s
     }
@@ -2606,6 +2612,18 @@ impl StateController {
             .send(Midi::cc(btn, val, MOVE_CTL_MIDI_CHAN));
     }
 
+    fn request_power_status(&mut self) {
+        for m in [
+            Midi::new(&[0xF0, 0x00, 0x21]),
+            Midi::new(&[0x1D, 0x01, 0x01]),
+            Midi::new(&[0x3a, 0xF7]),
+        ]
+        .into_iter()
+        {
+            let _ = self.midi_out_queue.send(m);
+        }
+    }
+
     fn send_power_cmd(&mut self, cmd: PowerCommand) {
         for m in power_sysex(cmd).into_iter() {
             let _ = self.midi_out_queue.send(m);
@@ -2789,7 +2807,7 @@ impl StateController {
                 let indicator = |index: usize| -> &'static char {
                     let ctx = self.context();
                     match index {
-                        TEMPO_INDEX | ABOUT_INDEX => ITEM_INDICATOR,
+                        TEMPO_INDEX | ABOUT_INDEX | POWER_STATUS_INDEX => ITEM_INDICATOR,
                         DEVICE_PARAMS_INDEX if ctx.instances_count(InstSelType::Params) < 2 => {
                             ITEM_INDICATOR
                         }
@@ -2841,6 +2859,30 @@ impl StateController {
                     Line::from(version), /*, Line::from("beta.cycling74.com") */
                 ];
                 let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+
+                let layout = titled_layout(frame.area());
+                frame.render_widget(title, layout[0]);
+                frame.render_widget(paragraph, layout[1]);
+            }
+            States::PowerStatus => {
+                setup_common(line!(), self);
+
+                let title = format_title("Power Status");
+                let charge = format!(
+                    "{}: {}%",
+                    if self.context().psu_connected() {
+                        "charging"
+                    } else {
+                        "discharging"
+                    },
+                    self.context().battery_charge()
+                )
+                .to_string();
+                let mut content = vec![Line::from(charge)];
+                if self.context().battery_low() {
+                    content.push(Line::from("low battery"));
+                }
+                let paragraph = Paragraph::new(content).alignment(Alignment::Left);
 
                 let layout = titled_layout(frame.area());
                 frame.render_widget(title, layout[0]);
@@ -3604,8 +3646,23 @@ impl StateController {
                     self.send_osc(msg).await;
                 }
 
-                Cmd::WarnBatteryLow => {
-                    self.request_infinite_popup("Low Battery", "plug in device");
+                Cmd::BatteryLow(v) => {
+                    let mut common = self.sm.context().common();
+                    common.battery_low = v;
+                    self.update_common(common);
+                    if v {
+                        self.request_infinite_popup("Low Battery", "plug in device");
+                    }
+                }
+                Cmd::BatteryCharge(v) => {
+                    let mut common = self.sm.context().common();
+                    common.battery_charge = v;
+                    self.update_common(common);
+                }
+                Cmd::PSUConnected(v) => {
+                    let mut common = self.sm.context().common();
+                    common.psu_connected = v;
+                    self.update_common(common);
                 }
             }
         }
