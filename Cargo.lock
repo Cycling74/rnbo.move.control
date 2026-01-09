@@ -1822,7 +1822,7 @@ dependencies = [
 
 [[package]]
 name = "rnbomovecontrol"
-version = "0.1.0-beta.14"
+version = "0.1.0-beta.15"
 dependencies = [
  "atomic_float",
  "chrono",
