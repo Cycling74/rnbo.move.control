@@ -382,8 +382,8 @@ async fn with_client(
                     for (o0, o1, i0, i1) in
                         itertools::izip!(out1.iter_mut(), out2.iter_mut(), in1.iter(), in2.iter())
                     {
-                        max0 = i0.deref().abs().max(max0);
-                        max1 = i1.deref().abs().max(max1);
+                        max0 = (*i0).abs().max(max0);
+                        max1 = (*i1).abs().max(max1);
 
                         *o0 = *i0;
                         *o1 = *i1;
