@@ -8,6 +8,7 @@ use {
         midi::Midi,
         view::ParamView,
     },
+    atomic_float::AtomicF32,
     clap::Parser,
     embedded_graphics::prelude::*,
     futures_util::{StreamExt, TryStreamExt},
@@ -332,7 +333,10 @@ async fn with_client(
 
     //volume control
     let volume = Arc::new(AtomicU8::new(0));
+    let output_max: Arc<[AtomicF32; 2]> = Arc::new([AtomicF32::new(0f32), AtomicF32::new(0f32)]);
+
     let volumeclient = {
+        let output_max = output_max.clone();
         let volume = volume.clone();
         let (volumeclient, _status) =
             jack::Client::new("move-volume", jack::ClientOptions::empty()).unwrap();
@@ -369,18 +373,33 @@ async fn with_client(
             let out2 = out2.as_mut_slice(ps);
             let in1 = in1.as_slice(ps);
             let in2 = in2.as_slice(ps);
+            let mut max0: f32 = 0f32;
+            let mut max1: f32 = 0f32;
 
             let volume = volume.load(Ordering::SeqCst);
             if volume == volume_last {
                 if volume == 0xFF {
-                    out1.clone_from_slice(in1);
-                    out2.clone_from_slice(in2);
+                    for (o0, o1, i0, i1) in
+                        itertools::izip!(out1.iter_mut(), out2.iter_mut(), in1.iter(), in2.iter())
+                    {
+                        max0 = i0.deref().abs().max(max0);
+                        max1 = i1.deref().abs().max(max1);
+
+                        *o0 = *i0;
+                        *o1 = *i1;
+                    }
                 } else {
                     for (o0, o1, i0, i1) in
                         itertools::izip!(out1.iter_mut(), out2.iter_mut(), in1.iter(), in2.iter())
                     {
-                        *o0 = *i0 * volume_last_f;
-                        *o1 = *i1 * volume_last_f;
+                        let v0 = *i0 * volume_last_f;
+                        let v1 = *i1 * volume_last_f;
+
+                        max0 = v0.abs().max(max0);
+                        max1 = v1.abs().max(max1);
+
+                        *o0 = v0;
+                        *o1 = v1;
                     }
                 }
             } else {
@@ -394,14 +413,23 @@ async fn with_client(
                     itertools::izip!(out1.iter_mut(), out2.iter_mut(), in1.iter(), in2.iter())
                 {
                     volume_last_f = (cur / 255.0).powf(4.0).clamp(0.0, 1.0);
-                    *o0 = *i0 * volume_last_f;
-                    *o1 = *i1 * volume_last_f;
+
+                    let v0 = *i0 * volume_last_f;
+                    let v1 = *i1 * volume_last_f;
+
+                    max0 = v0.abs().max(max0);
+                    max1 = v1.abs().max(max1);
+
+                    *o0 = v0;
+                    *o1 = v1;
 
                     cur += step;
                 }
 
                 volume_last = volume;
             }
+            output_max[0].store(max0, Ordering::Relaxed);
+            output_max[1].store(max1, Ordering::Relaxed);
             jack::Control::Continue
         };
         let process = jack::ClosureProcessHandler::new(process_callback);
@@ -512,6 +540,7 @@ async fn with_client(
             config_path,
             has_all_capabilities,
             filter_encoders,
+            output_max,
         )));
 
     let display_future = {

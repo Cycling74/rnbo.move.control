@@ -7,6 +7,7 @@ use {
         patcher::PatcherInst,
         view::ParamView,
     },
+    atomic_float::AtomicF32,
     embedded_graphics::{
         image::{Image, ImageRaw},
         pixelcolor::BinaryColor,
@@ -840,6 +841,8 @@ enum Cmd {
     ReloadGraph,
     ClearGraph,
     MIDIReset,
+
+    ClearVolume,
 }
 
 pub mod top {
@@ -880,14 +883,14 @@ pub mod top {
             ParamViews + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::ParamViews),
             ParamViews + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::ParamViews),
 
-            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::Main] = Main,
-            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::ParamViews] = Main,
-            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::ParamViews] = ParamViews,
-            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::Main] = ParamViews,
+            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::Main] / ctx.emit(Cmd::ClearVolume); = Main,
+            VolumeEditor(LastView) + BtnDown(Button::Back) [*state == LastView::ParamViews] / ctx.emit(Cmd::ClearVolume); = ParamViews,
+            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::ParamViews] / ctx.emit(Cmd::ClearVolume); = Main,
+            VolumeEditor(LastView) + BtnDown(Button::Menu) [*state == LastView::Main] / ctx.emit(Cmd::ClearVolume); = ParamViews,
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::Main] / ctx.emit(Cmd::ClearVolume); = Main,
+            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::ParamViews] / ctx.emit(Cmd::ClearVolume); = ParamViews,
             VolumeEditor(LastView) + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(*state),
             VolumeEditor(LastView) + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(*state),
-            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::Main] = Main,
-            VolumeEditor(LastView) + EncTouch(_) [*event != VOLUME_WHEEL_TOUCH && *state == LastView::ParamViews] = ParamViews,
 
             PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_POWER_DOWN_INDEX] = PowerOff,
             PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_LAUNCH_MOVE_INDEX] = LaunchMove,
@@ -911,14 +914,14 @@ pub mod top {
 
             Main + SetViewSelected(_) = ParamViews,
             Main + SetViewPageSelected(_) = ParamViews,
-            VolumeEditor(LastView) + SetViewSelected(_) = ParamViews,
-            VolumeEditor(LastView) + SetViewPageSelected(_) = ParamViews,
+            VolumeEditor(LastView) + SetViewSelected(_) / ctx.emit(Cmd::ClearVolume); = ParamViews,
+            VolumeEditor(LastView) + SetViewPageSelected(_) / ctx.emit(Cmd::ClearVolume); = ParamViews,
 
             ParamViews + DeviceParamsSelected(_) = Main,
-            VolumeEditor(LastView) + DeviceParamsSelected(_) = Main,
+            VolumeEditor(LastView) + DeviceParamsSelected(_) / ctx.emit(Cmd::ClearVolume); = Main,
             Popup(LastView) + DeviceParamsSelected(_) = Main,
             ParamViews + DeviceDataSelected(_) = Main,
-            VolumeEditor(LastView) + DeviceDataSelected(_) = Main,
+            VolumeEditor(LastView) + DeviceDataSelected(_) / ctx.emit(Cmd::ClearVolume); = Main,
             Popup(LastView) + DeviceDataSelected(_) = Main,
 
             Main + PopupRequested = Popup(LastView::Main),
@@ -1242,6 +1245,9 @@ pub struct StateController {
     userviews: BTreeMap<usize, UserView<BinaryColor>>,
 
     filter_encoders: Arc<AtomicBool>,
+
+    output_max: Arc<[AtomicF32; 2]>,
+    output_max_smoothed: [f32; 2],
 }
 
 #[derive(Clone, Debug)]
@@ -1397,6 +1403,7 @@ impl StateController {
         config_path: PathBuf,
         has_all_capabilities: bool,
         filter_encoders: Arc<AtomicBool>,
+        output_max: Arc<[AtomicF32; 2]>,
     ) -> Self {
         let (tx, rx) = sync_mpsc::channel();
 
@@ -1500,6 +1507,9 @@ impl StateController {
             userviews: Default::default(),
 
             filter_encoders,
+
+            output_max,
+            output_max_smoothed: [0f32; 2],
         };
 
         s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
@@ -3282,14 +3292,51 @@ impl StateController {
                         ]);
                     });
 
+                    let display: Vec<f64> = self
+                        .output_max
+                        .iter()
+                        .zip(self.output_max_smoothed.iter_mut())
+                        .map(|(m, s)| {
+                            let m = m.load(AtomicOrdering::Relaxed);
+                            *s = if m > *s { m } else { (*s * 3f32 + m) / 4f32 };
+
+                            ((60f32 + (20f32 * 0.001f32.max(*s).log10())) / 60f32).clamp(0f32, 1f32)
+                                as f64
+                        })
+                        .collect();
+
+                    let rect = frame.area();
+
+                    let layout = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints(vec![
+                            Constraint::Length(1),
+                            Constraint::Length(1),
+                            Constraint::Length(1),
+                            Constraint::Length(1),
+                        ])
+                        .split(rect);
+
                     let title = format_title("Volume");
-                    let volume = format!("{:.2}", self.volume());
-                    let content = vec![Line::default(), Line::from(volume).centered()];
+                    let volume = format!("{:.1}%", self.volume() * 100.0);
+                    let content = vec![Line::from(volume).centered()];
                     let paragraph = Paragraph::new(content).alignment(Alignment::Center);
 
-                    let layout = titled_layout(frame.area());
+                    let left = ratatui::widgets::Gauge::default()
+                        .label("")
+                        .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
+                        .ratio(display[0])
+                        .use_unicode(true);
+                    let right = ratatui::widgets::Gauge::default()
+                        .label("")
+                        .gauge_style(Style::new().fg(Color::White).bg(Color::Black))
+                        .ratio(display[1])
+                        .use_unicode(true);
+
                     frame.render_widget(title, layout[0]);
                     frame.render_widget(paragraph, layout[1]);
+                    frame.render_widget(left, layout[2]);
+                    frame.render_widget(right, layout[3]);
                 }
                 States::DisplayChildProcessError => {
                     self.do_once(line!(), |s| {
@@ -3751,6 +3798,10 @@ impl StateController {
                     let _ = self.midi_out_queue.send(Midi::reset());
                     self.handle_event(Events::BtnDown(Button::Back));
                     self.request_popup("MIDI Reset", "sent");
+                }
+                Cmd::ClearVolume => {
+                    self.output_max_smoothed[0] = 0f32;
+                    self.output_max_smoothed[1] = 0f32;
                 }
             }
         }
