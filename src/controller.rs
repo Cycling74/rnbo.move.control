@@ -579,8 +579,6 @@ enum Events {
     EncRight(usize),
     EncTouch(usize),
 
-    Transport(bool),
-
     SetViewSelected((usize, usize)), //index, page
     SetViewPageSelected(usize),
 
@@ -1201,6 +1199,7 @@ pub struct StateController {
     config: Config,
     config_path: PathBuf,
 
+    use_play_btn: bool,
     rolling: bool,
     bpm: f32,
     cpu: f64,
@@ -1461,6 +1460,8 @@ impl StateController {
             config,
             config_path,
 
+            use_play_btn: false,
+
             rolling: false,
             bpm: 100.0,
             cpu: 100.0,
@@ -1534,7 +1535,9 @@ impl StateController {
             output_max_smoothed: [0f32; 2],
         };
 
-        s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
+        if s.use_play_btn {
+            s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
+        }
         s.request_power_status();
 
         s
@@ -2012,16 +2015,17 @@ impl StateController {
                         && self.rolling != rolling
                     {
                         self.rolling = rolling;
-                        let _ = self.midi_out_queue.send(Midi::cc(
-                            PLAY_MIDI,
-                            if rolling {
-                                MoveColor::Green
-                            } else {
-                                MoveColor::LightGray
-                            } as _,
-                            MOVE_CTL_MIDI_CHAN,
-                        ));
-                        self.handle_event(Events::Transport(rolling));
+                        if self.use_play_btn {
+                            let _ = self.midi_out_queue.send(Midi::cc(
+                                PLAY_MIDI,
+                                if rolling {
+                                    MoveColor::Green
+                                } else {
+                                    MoveColor::LightGray
+                                } as _,
+                                MOVE_CTL_MIDI_CHAN,
+                            ));
+                        }
                     }
                 }
                 TRANSPORT_BPM_ADDR => {
@@ -2596,10 +2600,9 @@ impl StateController {
                             self.handle_event(Events::BtnDown(Button::Back));
                         }
                         //play button
-                        PLAY_MIDI if bytes[2] != 0 => {
+                        PLAY_MIDI if bytes[2] != 0 && self.use_play_btn => {
                             self.handle_event(Events::BtnDown(Button::Play));
                         }
-
                         //param encoders
                         index @ 71..=78 => {
                             let index = (index - 71) as usize;
