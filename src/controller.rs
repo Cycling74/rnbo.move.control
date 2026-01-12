@@ -65,6 +65,7 @@ const PARAM_Y_OFFSET: i32 = -6;
 
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
+const TRANSPORT_POS_ADDR: &str = "/rnbo/jack/transport/position";
 
 pub const INST_UNLOAD_ADDR: &str = "/rnbo/inst/control/unload";
 pub const INST_LOAD_ADDR: &str = "/rnbo/inst/control/load";
@@ -579,7 +580,6 @@ enum Events {
     EncTouch(usize),
 
     Transport(bool),
-    Tempo(f32),
 
     SetViewSelected((usize, usize)), //index, page
     SetViewPageSelected(usize),
@@ -752,7 +752,7 @@ const MENU_ITEMS: [&str; 9] = [
     "Graphs",
     "Graph Presets",
     "Patchers",
-    "Tempo",
+    "Transport",
     "Status",
     "About",
 ];
@@ -764,7 +764,7 @@ const USER_VIEWS_INDEX: usize = 2;
 const GRAPHS_INDEX: usize = 3;
 const GRAPH_PRESETS_INDEX: usize = 4;
 const PATCHERS_INDEX: usize = 5;
-const TEMPO_INDEX: usize = 6;
+const TRANSPORT_INDEX: usize = 6;
 const STATUS_INDEX: usize = 7;
 const ABOUT_INDEX: usize = 8;
 
@@ -788,6 +788,11 @@ const POWER_MENU_CLEAR_GRAPH_INDEX: usize = 2;
 const POWER_MENU_RELOAD_GRAPH_INDEX: usize = 3;
 const POWER_MENU_MIDI_RESET_INDEX: usize = 4;
 
+const TRANSPORT_EDITOR_TEMPO_INDEX: usize = 0;
+const TRANSPORT_EDITOR_LOCATION_INDEX: usize = 1;
+const TRANSPORT_EDITOR_STATE_INDEX: usize = 2;
+const TRANSPORT_EDITOR_ENTRIES: usize = 3;
+
 #[derive(Clone, Debug, PartialEq)]
 enum Cmd {
     Power(PowerCommand),
@@ -810,7 +815,8 @@ enum Cmd {
     OffsetTempo(isize),
     MulTempoOffset(bool),
 
-    ToggleTransport,
+    TransportToggle,
+    TransportSeek,
 
     LightButton {
         btn: u8,
@@ -906,7 +912,7 @@ pub mod top {
             _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PowerMenu(0),
             _ + BtnDown(Button::PowerLong) / ctx.emit(Cmd::Power(PowerCommand::ClearLongPress)); = PowerOff,
 
-            _ + BtnDown(Button::Play) / ctx.emit(Cmd::ToggleTransport);,
+            _ + BtnDown(Button::Play) / ctx.emit(Cmd::TransportToggle);,
 
             _ + BatteryLow(_) [!ctx.battery_low() != *event] / ctx.emit(Cmd::BatteryLow(*event));,
             _ + BatteryCharge(_) [ctx.battery_charge() != *event] / ctx.emit(Cmd::BatteryCharge(*event));,
@@ -1002,7 +1008,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() == 1] / ctx.emit(Cmd::LoadUserView(0)); = UserView(0),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PATCHERS_INDEX && ctx.patchers_count() > 0] = PatchersList(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == TEMPO_INDEX] = TempoEditor,
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_INDEX] = TransportEditor(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == ABOUT_INDEX] = About,
         Menu(usize) + BtnDown(Button::JogWheel) [*state == STATUS_INDEX] = Status,
 
@@ -1119,12 +1125,19 @@ smlang::statemachine! {
 
         _ + UserViewRequested(_) [ctx.userviews_count() > *event] / ctx.emit(Cmd::LoadUserView(*event)); = UserView(*event),
 
-        TempoEditor + BtnDown(Button::Back) = Menu(TEMPO_INDEX),
+        TransportEditor(usize) + BtnDown(Button::Back) = Menu(TRANSPORT_INDEX),
+        TransportEditor(usize) + EncRight(JOG_WHEEL_ENCODER) [TRANSPORT_EDITOR_ENTRIES > *state + 1] = TransportEditor(*state + 1),
+        TransportEditor(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = TransportEditor(*state - 1),
+        TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_TEMPO_INDEX] = TempoEditor,
+        TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_LOCATION_INDEX] / ctx.emit(Cmd::TransportSeek);,
+        TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_STATE_INDEX] / ctx.emit(Cmd::TransportToggle);,
+
+
+        TempoEditor + BtnDown(Button::Back) = TransportEditor(TRANSPORT_EDITOR_TEMPO_INDEX),
         TempoEditor + EncRight(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(1)); = TempoEditor,
         TempoEditor + EncLeft(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetTempo(-1)); = TempoEditor,
         TempoEditor + BtnDown(Button::JogWheel) / ctx.emit(Cmd::MulTempoOffset(true)); = TempoEditor,
         TempoEditor + BtnUp(Button::JogWheel) / ctx.emit(Cmd::MulTempoOffset(false));  = TempoEditor,
-        TempoEditor + Tempo(_) = TempoEditor,
 
         About + BtnDown(Button::Back) = Menu(ABOUT_INDEX),
         Status + BtnDown(Button::Back) = Menu(STATUS_INDEX),
@@ -1191,6 +1204,11 @@ pub struct StateController {
     rolling: bool,
     bpm: f32,
     cpu: f64,
+
+    transport_rolling: bool,
+    transport_position: (usize, usize, f64),
+    transport_timesig: [f32; 2],
+
     tempo_offset_mul: f32,
 
     instances: Vec<PatcherInst>,
@@ -1446,6 +1464,10 @@ impl StateController {
             rolling: false,
             bpm: 100.0,
             cpu: 100.0,
+            transport_rolling: false,
+            transport_position: (1, 1, 1f64),
+            transport_timesig: [4f32, 4f32],
+
             tempo_offset_mul: 1.0,
 
             exit: false,
@@ -2011,7 +2033,6 @@ impl StateController {
                         }
                     {
                         self.bpm = bpm;
-                        self.handle_event(Events::Tempo(bpm));
                     }
                 }
                 SET_CURRENT_ADDR => {
@@ -2838,7 +2859,7 @@ impl StateController {
                 let indicator = |index: usize| -> &'static char {
                     let ctx = self.context();
                     match index {
-                        TEMPO_INDEX | ABOUT_INDEX | STATUS_INDEX => ITEM_INDICATOR,
+                        TRANSPORT_INDEX | ABOUT_INDEX | STATUS_INDEX => ITEM_INDICATOR,
                         DEVICE_PARAMS_INDEX if ctx.instances_count(InstSelType::Params) < 2 => {
                             ITEM_INDICATOR
                         }
@@ -2864,6 +2885,47 @@ impl StateController {
                 };
 
                 render_menu(frame, None, &MENU_ITEMS, indicator, enabled, selected, None);
+            }
+            States::TransportEditor(selected) => {
+                setup_common(line!(), self);
+
+                let title = format!(
+                    "Transport ({}/{})",
+                    self.transport_timesig[0], self.transport_timesig[1]
+                );
+
+                let tempo = format!("BPM: {:.1}", self.bpm);
+                let loc = format!(
+                    "Loc: {}:{:.2}",
+                    self.transport_position.0,
+                    self.transport_position.1 as f64 + self.transport_position.2
+                );
+                let state = format!(
+                    "State: {}",
+                    if self.transport_rolling {
+                        "Running"
+                    } else {
+                        "Paused"
+                    }
+                );
+                let items = vec![tempo, loc, state];
+
+                let indicator = |index: usize| -> &'static char {
+                    match index {
+                        0 => SUB_MENU_INDICATOR, //tempo editor
+                        _ => ITEM_INDICATOR,
+                    }
+                };
+
+                render_menu(
+                    frame,
+                    Some(title.as_str()),
+                    &items,
+                    indicator,
+                    all_enabled,
+                    selected,
+                    None,
+                );
             }
             States::TempoEditor => {
                 setup_common(line!(), self);
@@ -3191,8 +3253,21 @@ impl StateController {
         userview
     }
 
-    pub fn set_jack_cpu(&mut self, v: f64) {
-        self.cpu = v;
+    pub fn update_jack(&mut self, c: &jack::Client) {
+        self.cpu = c.cpu_load() as f64;
+
+        let t = c.transport();
+        if let Ok(t) = t.query() {
+            self.transport_rolling = t.state == jack::TransportState::Rolling;
+            if let Some(bbt) = t.pos.bbt() {
+                self.transport_position = (
+                    bbt.bar,
+                    bbt.beat,
+                    bbt.tick as f64 / bbt.ticks_per_beat.max(1f64),
+                );
+                self.transport_timesig = [bbt.sig_num, bbt.sig_denom];
+            }
+        }
     }
 
     pub fn render(
@@ -3566,10 +3641,17 @@ impl StateController {
                 Cmd::MulTempoOffset(mul) => {
                     self.tempo_offset_mul = if mul { 5.0 } else { 1.0 };
                 }
-                Cmd::ToggleTransport => {
+                Cmd::TransportToggle => {
                     let msg = OscMessage {
                         addr: TRANSPORT_ROLLING_ADDR.to_string(),
                         args: vec![OscType::Bool(!self.rolling)],
+                    };
+                    self.send_osc(msg).await;
+                }
+                Cmd::TransportSeek => {
+                    let msg = OscMessage {
+                        addr: TRANSPORT_POS_ADDR.to_string(),
+                        args: vec![OscType::Float(0f32)],
                     };
                     self.send_osc(msg).await;
                 }

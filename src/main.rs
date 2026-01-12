@@ -568,7 +568,7 @@ async fn with_client(
 
                 let should_exit = {
                     let mut g = state.lock().await;
-                    g.set_jack_cpu(c.cpu_load() as f64);
+                    g.update_jack(c);
                     g.render(&mut terminal);
                     draw_tx
                         .send(DrawCommand {
