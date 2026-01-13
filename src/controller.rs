@@ -63,6 +63,7 @@ const MOVE_CTL_MIDI_CHAN: u8 = 15;
 
 const PARAM_Y_OFFSET: i32 = -6;
 
+const TRANSPORT_SYNC_ADDR: &str = "/rnbo/jack/transport/sync";
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 const TRANSPORT_POS_ADDR: &str = "/rnbo/jack/transport/position";
@@ -789,7 +790,8 @@ const POWER_MENU_MIDI_RESET_INDEX: usize = 4;
 const TRANSPORT_EDITOR_TEMPO_INDEX: usize = 0;
 const TRANSPORT_EDITOR_LOCATION_INDEX: usize = 1;
 const TRANSPORT_EDITOR_STATE_INDEX: usize = 2;
-const TRANSPORT_EDITOR_ENTRIES: usize = 3;
+const TRANSPORT_EDITOR_SYNC_INDEX: usize = 3;
+const TRANSPORT_EDITOR_ENTRIES: usize = 4;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Cmd {
@@ -814,6 +816,7 @@ enum Cmd {
     MulTempoOffset(bool),
 
     TransportToggle,
+    TransportSyncToggle,
     TransportSeek,
 
     LightButton {
@@ -1129,6 +1132,7 @@ smlang::statemachine! {
         TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_TEMPO_INDEX] = TempoEditor,
         TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_LOCATION_INDEX] / ctx.emit(Cmd::TransportSeek);,
         TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_STATE_INDEX] / ctx.emit(Cmd::TransportToggle);,
+        TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_SYNC_INDEX] / ctx.emit(Cmd::TransportSyncToggle);,
 
 
         TempoEditor + BtnDown(Button::Back) = TransportEditor(TRANSPORT_EDITOR_TEMPO_INDEX),
@@ -1204,6 +1208,7 @@ pub struct StateController {
     bpm: f32,
     cpu: f64,
 
+    transport_sync: bool,
     transport_rolling: bool,
     transport_position: (usize, usize, f64),
     transport_timesig: [f32; 2],
@@ -1465,6 +1470,8 @@ impl StateController {
             rolling: false,
             bpm: 100.0,
             cpu: 100.0,
+
+            transport_sync: true,
             transport_rolling: false,
             transport_position: (1, 1, 1f64),
             transport_timesig: [4f32, 4f32],
@@ -1545,7 +1552,12 @@ impl StateController {
 
     pub async fn set_ws(&mut self, mut ws: SplitSink<WebSocket, Message>) {
         //query values
-        for addr in [TRANSPORT_ROLLING_ADDR, TRANSPORT_BPM_ADDR, SET_CURRENT_ADDR] {
+        for addr in [
+            TRANSPORT_SYNC_ADDR,
+            TRANSPORT_ROLLING_ADDR,
+            TRANSPORT_BPM_ADDR,
+            SET_CURRENT_ADDR,
+        ] {
             let msg = OscMessage {
                 addr: addr.to_string(),
                 args: Vec::new(),
@@ -2009,6 +2021,13 @@ impl StateController {
             //println!("got osc {:?}", msg);
             //let mut update = None;
             match msg.addr.as_str() {
+                TRANSPORT_SYNC_ADDR => {
+                    if msg.args.len() == 1
+                        && let OscType::Bool(v) = msg.args[0]
+                    {
+                        self.transport_sync = v
+                    }
+                }
                 TRANSPORT_ROLLING_ADDR => {
                     if msg.args.len() == 1
                         && let OscType::Bool(rolling) = msg.args[0]
@@ -2911,7 +2930,11 @@ impl StateController {
                         "Paused"
                     }
                 );
-                let items = vec![tempo, loc, state];
+                let sync = format!(
+                    "Link Sync: {}",
+                    if self.transport_sync { "On" } else { "Off" }
+                );
+                let items = vec![tempo, loc, state, sync];
 
                 let indicator = |index: usize| -> &'static char {
                     match index {
@@ -3648,6 +3671,13 @@ impl StateController {
                     let msg = OscMessage {
                         addr: TRANSPORT_ROLLING_ADDR.to_string(),
                         args: vec![OscType::Bool(!self.rolling)],
+                    };
+                    self.send_osc(msg).await;
+                }
+                Cmd::TransportSyncToggle => {
+                    let msg = OscMessage {
+                        addr: TRANSPORT_SYNC_ADDR.to_string(),
+                        args: vec![OscType::Bool(!self.transport_sync)],
                     };
                     self.send_osc(msg).await;
                 }
