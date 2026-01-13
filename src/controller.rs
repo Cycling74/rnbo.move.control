@@ -311,6 +311,7 @@ fn center(area: Rect, horizontal: Constraint, vertical: Constraint) -> Rect {
 
 const SUB_MENU_INDICATOR: &char = &'>';
 const ITEM_INDICATOR: &char = &'-';
+const UNEDITABLE_ITEM_INDICATOR: &char = &'x';
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PresetListOp {
@@ -2942,6 +2943,7 @@ impl StateController {
                 let indicator = |index: usize| -> &'static char {
                     match index {
                         TRANSPORT_EDITOR_TEMPO_INDEX => SUB_MENU_INDICATOR, //tempo editor
+                        TRANSPORT_EDITOR_TIMESIG_INDEX => UNEDITABLE_ITEM_INDICATOR,
                         _ => ITEM_INDICATOR,
                     }
                 };
