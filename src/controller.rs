@@ -788,10 +788,12 @@ const POWER_MENU_RELOAD_GRAPH_INDEX: usize = 3;
 const POWER_MENU_MIDI_RESET_INDEX: usize = 4;
 
 const TRANSPORT_EDITOR_TEMPO_INDEX: usize = 0;
-const TRANSPORT_EDITOR_LOCATION_INDEX: usize = 1;
-const TRANSPORT_EDITOR_STATE_INDEX: usize = 2;
-const TRANSPORT_EDITOR_SYNC_INDEX: usize = 3;
-const TRANSPORT_EDITOR_ENTRIES: usize = 4;
+const TRANSPORT_EDITOR_STATE_INDEX: usize = 1;
+const TRANSPORT_EDITOR_LOCATION_INDEX: usize = 2;
+const TRANSPORT_EDITOR_TIMESIG_INDEX: usize = 3;
+const TRANSPORT_EDITOR_SYNC_INDEX: usize = 4;
+
+const TRANSPORT_EDITOR_ENTRIES: usize = 5;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Cmd {
@@ -1130,8 +1132,9 @@ smlang::statemachine! {
         TransportEditor(usize) + EncRight(JOG_WHEEL_ENCODER) [TRANSPORT_EDITOR_ENTRIES > *state + 1] = TransportEditor(*state + 1),
         TransportEditor(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = TransportEditor(*state - 1),
         TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_TEMPO_INDEX] = TempoEditor,
-        TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_LOCATION_INDEX] / ctx.emit(Cmd::TransportSeek);,
         TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_STATE_INDEX] / ctx.emit(Cmd::TransportToggle);,
+        TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_LOCATION_INDEX] / ctx.emit(Cmd::TransportSeek);,
+        TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_TIMESIG_INDEX],
         TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_SYNC_INDEX] / ctx.emit(Cmd::TransportSyncToggle);,
 
 
@@ -2911,11 +2914,6 @@ impl StateController {
             States::TransportEditor(selected) => {
                 setup_common(line!(), self);
 
-                let title = format!(
-                    "Transport ({}/{})",
-                    self.transport_timesig[0], self.transport_timesig[1]
-                );
-
                 let tempo = format!("BPM: {:.1}", self.bpm);
                 let loc = format!(
                     "Loc: {}:{:.2}",
@@ -2930,22 +2928,27 @@ impl StateController {
                         "Paused"
                     }
                 );
+                let timesig = format!(
+                    "TimeSig: {}/{}",
+                    self.transport_timesig[0], self.transport_timesig[1]
+                );
+
                 let sync = format!(
                     "Link Sync: {}",
                     if self.transport_sync { "On" } else { "Off" }
                 );
-                let items = vec![tempo, loc, state, sync];
+                let items = vec![tempo, state, loc, timesig, sync];
 
                 let indicator = |index: usize| -> &'static char {
                     match index {
-                        0 => SUB_MENU_INDICATOR, //tempo editor
+                        TRANSPORT_EDITOR_TEMPO_INDEX => SUB_MENU_INDICATOR, //tempo editor
                         _ => ITEM_INDICATOR,
                     }
                 };
 
                 render_menu(
                     frame,
-                    Some(title.as_str()),
+                    Some("Transport"),
                     &items,
                     indicator,
                     all_enabled,
