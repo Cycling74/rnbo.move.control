@@ -2945,10 +2945,7 @@ impl StateController {
                     self.transport_timesig[0], self.transport_timesig[1]
                 );
 
-                let sync = format!(
-                    "Link Sync: {}",
-                    if self.transport_sync { "On" } else { "Off" }
-                );
+                let sync = format!("Sync: {}", if self.transport_sync { "On" } else { "Off" });
                 let items = vec![tempo, state, loc, timesig, sync];
 
                 let indicator = |index: usize| -> &'static char {
