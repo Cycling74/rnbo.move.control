@@ -3116,12 +3116,8 @@ impl StateController {
                 );
             }
             States::PatcherParams(state) => {
-                self.do_once(line!(), |s| {
-                    s.render_buttons([
-                        (MENU_MIDI, MoveColor::LightGray),
-                        (BACK_MIDI, MoveColor::LightGray),
-                    ]);
-                });
+                setup_common(line!(), self);
+
                 let index = state.index;
                 let page = state.page;
                 let focused = state.focused;
@@ -3918,6 +3914,11 @@ impl StateController {
                     let _ = self.midi_out_queue.send(Midi::reset());
                     self.handle_event(Events::BtnDown(Button::Back));
                     self.request_popup("MIDI Reset", "sent");
+                    self.tracked_buttons = HashMap::from([
+                        (MENU_MIDI, MoveColor::Black),
+                        (BACK_MIDI, MoveColor::Black),
+                    ]);
+                    self.line_token = 0; //redraw what we need
                 }
                 Cmd::ClearVolume => {
                     self.output_max_smoothed[0] = 0f32;
