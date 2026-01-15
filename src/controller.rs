@@ -105,6 +105,7 @@ pub const DISPLAY_COUNT_OSC: &str = "/rnboctl/display/count";
 pub const DISPLAY_INFO_ADDR: &str = "/rnboctl/display/info";
 
 pub const PARAM_DELTA_ADDR: &str = "/rnboctl/param/delta";
+pub const REDRAW_ADDR: &str = "/rnboctl/redraw";
 
 const JOG_WHEEL_TOUCH: usize = 9;
 const VOLUME_WHEEL_TOUCH: usize = 8;
@@ -2223,6 +2224,9 @@ impl StateController {
                         Param::set_global_delta(v);
                     }
                 }
+                REDRAW_ADDR => {
+                    self.redraw();
+                }
                 DEVICE_PARAM_DISPLAY => {
                     if !msg.args.is_empty()
                         && let Some(index) = as_index(&msg.args[0])
@@ -2710,6 +2714,13 @@ impl StateController {
 
     fn volume(&self) -> f32 {
         self.config.volume as f32 / 255.0
+    }
+
+    fn redraw(&mut self) {
+        self.tracked_buttons =
+            HashMap::from([(MENU_MIDI, MoveColor::Black), (BACK_MIDI, MoveColor::Black)]);
+        self.line_token = 0;
+        self.param_values_last = [Srgb::new(0, 0, 0); 8];
     }
 
     fn do_once<F: Fn(&mut Self)>(&mut self, line: u32, func: F) {
@@ -3914,11 +3925,7 @@ impl StateController {
                     let _ = self.midi_out_queue.send(Midi::reset());
                     self.handle_event(Events::BtnDown(Button::Back));
                     self.request_popup("MIDI Reset", "sent");
-                    self.tracked_buttons = HashMap::from([
-                        (MENU_MIDI, MoveColor::Black),
-                        (BACK_MIDI, MoveColor::Black),
-                    ]);
-                    self.line_token = 0; //redraw what we need
+                    self.redraw();
                 }
                 Cmd::ClearVolume => {
                     self.output_max_smoothed[0] = 0f32;

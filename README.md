@@ -113,6 +113,9 @@ conan create .  -s os=Linux -s arch=armv8 -s compiler=gcc -s compiler.version=11
     * this also does not affect enum or stepped parameters
   * send an empty value to this address to query the current value
 
+* `/rnboctl/redraw`
+  * send this to redraw the takeover UI, useful after sending MIDI reset
+
 TODO:
 
 * `/rnboctl/userview/zoomfull <index>`
