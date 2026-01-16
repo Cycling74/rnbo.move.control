@@ -905,9 +905,9 @@ pub mod top {
 
             PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_POWER_DOWN_INDEX] = PowerOff,
             PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_LAUNCH_MOVE_INDEX] = LaunchMove,
-            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_CLEAR_GRAPH_INDEX] / ctx.emit(Cmd::ClearGraph);,
-            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_RELOAD_GRAPH_INDEX] / ctx.emit(Cmd::ReloadGraph);,
-            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_MIDI_RESET_INDEX] / ctx.emit(Cmd::MIDIReset);,
+            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_CLEAR_GRAPH_INDEX] / ctx.emit(Cmd::ClearGraph); = Main,
+            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_RELOAD_GRAPH_INDEX] / ctx.emit(Cmd::ReloadGraph); = Main,
+            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_MIDI_RESET_INDEX] / ctx.emit(Cmd::MIDIReset); = Main,
 
             PowerMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < POWER_MENU.len()] = PowerMenu(*state + 1),
             PowerMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PowerMenu(*state - 1),
@@ -946,6 +946,12 @@ pub mod top {
 
             _ + ChildProcessError = DisplayChildProcessError,
             DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PowerMenu(POWER_MENU_POWER_DOWN_INDEX),
+        }
+    }
+
+    impl StateMachine {
+        pub fn reset(&mut self) {
+            self.state = States::Main;
         }
     }
 }
@@ -987,6 +993,12 @@ pub mod view {
 
             _ + SetViewListChanged [ctx.param_view_count() != 1] = ParamViewMenu(0),
             _ + SetViewListChanged [ctx.param_view_count() == 1] = ViewParams(ParamPage { index: 0, page: 0, focused: None }),
+        }
+    }
+
+    impl StateMachine {
+        pub fn reset(&mut self) {
+            self.state = States::ParamViewMenu(0);
         }
     }
 }
@@ -1152,6 +1164,12 @@ smlang::statemachine! {
         //direct OSC based state changes
         _ + DeviceParamsSelected(_) = PatcherParams(ParamPage { index: event.0, page: event.1, focused: None }),
         _ + DeviceDataSelected(_) = PatcherDatarefs(DataSel::new(*event, ctx.dataref_count(*event))),
+    }
+}
+
+impl StateMachine {
+    pub fn reset(&mut self) {
+        self.state = States::Menu(0);
     }
 }
 
@@ -3903,8 +3921,7 @@ impl StateController {
                         args: vec![OscType::Int(-1)],
                     };
                     self.send_osc(msg).await;
-                    //back out then display popup, we can't display popup in power menu
-                    self.handle_event(Events::BtnDown(Button::Back));
+                    self.reset_statemachines();
                     self.request_popup("Clear Graph", "cleared");
                 }
                 Cmd::ReloadGraph => {
@@ -3914,13 +3931,12 @@ impl StateController {
                             args: vec![OscType::String(name.to_string())],
                         };
                         self.send_osc(msg).await;
-                        self.handle_event(Events::BtnDown(Button::Back));
+                        self.reset_statemachines();
                         self.request_popup("Reload Graph", name);
                     }
                 }
                 Cmd::MIDIReset => {
                     let _ = self.midi_out_queue.send(Midi::reset());
-                    self.handle_event(Events::BtnDown(Button::Back));
                     self.request_popup("MIDI Reset", "sent");
                     self.redraw();
                 }
@@ -3943,6 +3959,12 @@ impl StateController {
 
     fn context(&self) -> &Context {
         self.sm.context()
+    }
+
+    fn reset_statemachines(&mut self) {
+        self.sm.reset();
+        self.topsm.reset();
+        self.viewsm.reset();
     }
 }
 
