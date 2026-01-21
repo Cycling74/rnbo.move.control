@@ -200,7 +200,7 @@ impl Param {
             .norm_offset_step
             .unwrap_or(GLOBAL_DELTA.load(Ordering::Relaxed));
 
-        self.norm = (self.norm
+        self.norm = (self.norm()
             + if offset > 0 {
                 offset_step
             } else {
