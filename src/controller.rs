@@ -230,6 +230,8 @@ fn render_param_page(
     if pages > 1 {
         use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
         let sb = Scrollbar::new(ScrollbarOrientation::HorizontalBottom)
+            .thumb_symbol("\u{2550}")
+            .track_symbol(None)
             .begin_symbol(Some("<")) //TODO better unicode characters?
             .end_symbol(Some(">")); //spleen doesn't have more arrows
         let mut scrollbar_state = ScrollbarState::new(pages)
