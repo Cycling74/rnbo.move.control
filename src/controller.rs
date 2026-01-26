@@ -2097,12 +2097,6 @@ impl StateController {
                         self.set_set_current_name(name).await;
                     }
                 }
-                SET_LOAD_ADDR => {
-                    //when a set starts to load, quickly send MIDI reset and redraw
-                    //is this going to be fast enough?
-                    let _ = self.midi_out_queue.send(Midi::reset());
-                    self.redraw();
-                }
                 SET_PRESETS_LOADED_ADDR => {
                     if msg.args.len() == 1 {
                         self.set_preset_loaded_name = match &msg.args[0] {
@@ -3732,8 +3726,6 @@ impl StateController {
                 Cmd::LightButton { btn, val } => self.light_button(btn, val),
 
                 Cmd::LoadSet(index) => {
-                    //should we disconnect MIDI ports from running instances so they can't send
-                    //more MIDI?
                     if index == 0 {
                         let msg = OscMessage {
                             addr: INST_UNLOAD_ADDR.to_string(),
@@ -3816,7 +3808,6 @@ impl StateController {
                     }
                 }
                 Cmd::LoadPatcher(index) => {
-                    let _ = self.midi_out_queue.send(Midi::reset());
                     //unload all
                     let msg = OscMessage {
                         addr: INST_UNLOAD_ADDR.to_string(),
@@ -3830,7 +3821,6 @@ impl StateController {
                         };
                         self.send_osc(msg).await;
                     }
-                    self.redraw();
                 }
                 Cmd::LoadUserView(index) => {
                     //local index of user view, select first page of associated param view if there
