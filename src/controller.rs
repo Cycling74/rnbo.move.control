@@ -67,6 +67,7 @@ const TRANSPORT_SYNC_ADDR: &str = "/rnbo/jack/transport/sync";
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 const TRANSPORT_POS_ADDR: &str = "/rnbo/jack/transport/position";
+const GRAPH_RESET_ADDR: &str = "/rnbo/jack/control/midi_reset";
 
 pub const INST_UNLOAD_ADDR: &str = "/rnbo/inst/control/unload";
 pub const INST_LOAD_ADDR: &str = "/rnbo/inst/control/load";
@@ -2088,6 +2089,9 @@ impl StateController {
                         self.bpm = bpm;
                     }
                 }
+                GRAPH_RESET_ADDR => {
+                    self.redraw();
+                }
                 SET_CURRENT_ADDR => {
                     if msg.args.len() == 1 {
                         let name = match &msg.args[0] {
@@ -3943,9 +3947,12 @@ impl StateController {
                     }
                 }
                 Cmd::MIDIReset => {
-                    let _ = self.midi_out_queue.send(Midi::reset());
+                    let msg = OscMessage {
+                        addr: GRAPH_RESET_ADDR.to_string(),
+                        args: vec![],
+                    };
+                    self.send_osc(msg).await;
                     self.request_popup("MIDI Reset", "sent");
-                    self.redraw();
                 }
                 Cmd::ClearVolume => {
                     self.output_max_smoothed[0] = 0f32;
