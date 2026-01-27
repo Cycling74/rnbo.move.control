@@ -82,6 +82,7 @@ struct Driver {
     midi_thru: Port<MidiOut>,
     midi_control_out: Port<MidiOut>,
     midi_in: Port<MidiIn>,
+    reset_in: Port<MidiIn>,
     draw_queue: sync_mpsc::Receiver<DrawCommand>,
     midi_in_queue: async_mpsc::Sender<Midi>,
     midi_out_queue: sync_mpsc::Receiver<Midi>,
@@ -153,6 +154,13 @@ impl jack::ProcessHandler for Driver {
             midi_out.write(&m).unwrap();
         }
 
+        let reset_in = self.reset_in.iter(ps);
+        for i in reset_in {
+            if i.bytes.len() == 1 && i.bytes[0] == 0xFF {
+                let _ = self.midi_in_queue.try_send(Midi::new(i.bytes));
+            }
+        }
+
         Control::Continue
     }
 }
@@ -164,7 +172,8 @@ struct ConnectionControl {
     midi_in_port: Port<Unowned>,
     system_midi_out_port: Port<Unowned>,
 
-    disconnect_queue: async_mpsc::Sender<(PortId, PortId)>,
+    disconnect_queue: async_mpsc::Sender<(String, String)>,
+    connect_queue: async_mpsc::Sender<(String, String)>,
 }
 
 impl jack::NotificationHandler for ConnectionControl {
@@ -182,8 +191,20 @@ impl jack::NotificationHandler for ConnectionControl {
                 || (a == self.display_port && b != self.system_display_port)
                 || (a == self.system_midi_out_port && b != self.midi_in_port)
                 || (a != self.system_midi_out_port && b == self.midi_in_port))
+            && let (Some(a), Some(b)) = (a.name().ok(), b.name().ok())
         {
-            let _ = self.disconnect_queue.try_send((port_id_a, port_id_b));
+            let _ = self.disconnect_queue.try_send((a, b));
+        }
+    }
+    fn port_registration(&mut self, client: &Client, port_id: PortId, is_registered: bool) {
+        if is_registered
+            && let Some(port) = client.port_by_id(port_id)
+            && let Ok(name) = port.name()
+            && name == "rnbo-control:graphreset"
+        {
+            let _ = self
+                .connect_queue
+                .try_send((name, "move-control:reset_in".to_string()));
         }
     }
 }
@@ -233,6 +254,7 @@ async fn with_client(
     let (midi_out_tx, midi_out_rx) = sync_mpsc::sync_channel(1024);
     let (midi_in_tx, mut midi_in_rx) = async_mpsc::channel(1024);
     let (disconnect_tx, mut disconnect_rx) = async_mpsc::channel(128);
+    let (connect_tx, mut connect_rx) = async_mpsc::channel(128);
 
     let display_port = c
         .register_port("display", MidiOut)
@@ -246,6 +268,9 @@ async fn with_client(
     let midi_in = c
         .register_port("midi_in", MidiIn)
         .expect("error creating midi_in");
+    let reset_in = c
+        .register_port("reset_in", MidiIn)
+        .expect("error creating reset_in");
 
     let system_display_port = c
         .port_by_name("system:display")
@@ -265,6 +290,7 @@ async fn with_client(
     port_set_group(&c, &display_port, &hidden);
     port_set_group(&c, &midi_control_out, &hidden);
     port_set_group(&c, &midi_in, &hidden);
+    port_set_group(&c, &reset_in, &hidden);
     port_set_group(&c, &system_display_port, &hidden);
 
     port_set_group(&c, &system_midi_capture_port, &hidden);
@@ -329,6 +355,7 @@ async fn with_client(
         midi_in_port: midi_in.clone_unowned(),
         system_midi_out_port: system_midi_capture_port,
         disconnect_queue: disconnect_tx,
+        connect_queue: connect_tx,
     };
 
     //volume control
@@ -460,6 +487,7 @@ async fn with_client(
         midi_thru,
         midi_control_out,
         midi_in,
+        reset_in,
         draw_queue: draw_rx,
         midi_in_queue: midi_in_tx,
         midi_out_queue: midi_out_rx,
@@ -479,9 +507,11 @@ async fn with_client(
         //disconnect ports that might have been automatically connected
         let display_name = format!("{}:display", name);
         let midi_in_name = format!("{}:midi_in", name);
+        let reset_in_name = format!("{}:reset_in", name);
         for (name, is_source) in [
             (display_name.clone(), true),
             (midi_in_name.clone(), false),
+            (reset_in_name.clone(), false),
             ("system:midi_capture".to_string(), true),
             ("system:display".to_string(), false),
         ] {
@@ -505,8 +535,10 @@ async fn with_client(
             "system:midi_playback",
         )
         .unwrap();
-        c.connect_ports_by_name("system:midi_capture", format!("{}:midi_in", name).as_str())
+        c.connect_ports_by_name("system:midi_capture", midi_in_name.as_str())
             .unwrap();
+        //may fail
+        let _ = c.connect_ports_by_name("rnbo-control:graphreset", reset_in_name.as_str());
     }
 
     let version_path =
@@ -1016,8 +1048,23 @@ async fn with_client(
     let disconnect_future = async {
         while let Some((a, b)) = disconnect_rx.recv().await {
             let client = c.as_client();
-            if let (Some(a), Some(b)) = (client.port_by_id(a), client.port_by_id(b)) {
+            if let (Some(a), Some(b)) = (
+                client.port_by_name(a.as_str()),
+                client.port_by_name(b.as_str()),
+            ) {
                 let _ = client.disconnect_ports(&a, &b);
+            }
+        }
+    };
+
+    let connect_future = async {
+        while let Some((a, b)) = connect_rx.recv().await {
+            let client = c.as_client();
+            if let (Some(a), Some(b)) = (
+                client.port_by_name(a.as_str()),
+                client.port_by_name(b.as_str()),
+            ) {
+                let _ = client.connect_ports(&a, &b);
             }
         }
     };
@@ -1142,7 +1189,8 @@ async fn with_client(
     };
     tokio::select! {
         _ = display_future => (), _ = web_future => (),  _ = http_query_future => (),
-        _ = signal_future => (), _ = process_midi => (), _ = disconnect_future => (),
+        _ = signal_future => (), _ = process_midi => (),
+        _ = disconnect_future => (), _ = connect_future => (),
         _ = osc_future => (),
         _ = children_future => ()
     };
