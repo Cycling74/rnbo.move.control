@@ -885,6 +885,7 @@ pub mod top {
             Init + BtnDown(Button::JogWheel) = Main,
             Init + BtnDown(Button::Back) = Main,
             Init + EncTouch(JOG_WHEEL_TOUCH) = Main,
+            Init + EncTouch(_) [*event < 8] = Main,
 
             Init + EncTouch(VOLUME_WHEEL_TOUCH) = VolumeEditor(LastView::Main),
             Init + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::Main),
