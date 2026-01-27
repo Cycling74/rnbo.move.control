@@ -2090,9 +2090,6 @@ impl StateController {
                         self.bpm = bpm;
                     }
                 }
-                GRAPH_RESET_ADDR => {
-                    self.redraw();
-                }
                 SET_CURRENT_ADDR => {
                     if msg.args.len() == 1 {
                         let name = match &msg.args[0] {
@@ -2590,6 +2587,8 @@ impl StateController {
                 //println!("got 1 byte midi {:?}", bytes);
                 if bytes[0] == 0xF7 {
                     self.handle_sysex().await;
+                } else if bytes[0] == 0xFF {
+                    self.redraw();
                 } else if bytes[0] & 0x80 != 0 {
                     self.sysex.clear();
                 } else if !self.sysex.is_empty() {
