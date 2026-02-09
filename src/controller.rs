@@ -69,6 +69,12 @@ const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 const TRANSPORT_POS_ADDR: &str = "/rnbo/jack/transport/position";
 const GRAPH_RESET_ADDR: &str = "/rnbo/jack/control/midi_reset";
 
+const SPLASH_DATA: &'static [u8] = include_bytes!("../content/splash-sprites.bmp");
+static SPLASH_BMP: Lazy<tinybmp::Bmp<BinaryColor>> = Lazy::new(|| {
+    tinybmp::Bmp::<BinaryColor>::from_slice(SPLASH_DATA)
+        .expect("to create bitpmap from included bitmap data")
+});
+
 pub const INST_UNLOAD_ADDR: &str = "/rnbo/inst/control/unload";
 pub const INST_LOAD_ADDR: &str = "/rnbo/inst/control/load";
 pub const SET_LOAD_ADDR: &str = "/rnbo/inst/control/sets/load";
@@ -623,6 +629,8 @@ enum Events {
     PSUConnected(bool),
     BatteryLow(bool),
     BatteryCharge(u8),
+
+    SplashComplete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -886,6 +894,7 @@ pub mod top {
             Init + BtnDown(Button::Back) = Main,
             Init + EncTouch(JOG_WHEEL_TOUCH) = Main,
             Init + EncTouch(_) [*event < 8] = Main,
+            Init + SplashComplete = Main,
 
             Init + EncTouch(VOLUME_WHEEL_TOUCH) = VolumeEditor(LastView::Main),
             Init + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::Main),
@@ -3352,6 +3361,8 @@ impl StateController {
         let _ = terminal.clear();
 
         let mut userview: Option<usize> = None;
+        let mut splash: bool = false;
+        let mut splash_x: usize = 0;
         terminal
             .draw(|frame| match state {
                 States::Init => {
@@ -3362,28 +3373,23 @@ impl StateController {
                         ]);
                     });
 
-                    use pad::PadStr;
-                    use std::collections::VecDeque;
-                    let w = frame.area().width as usize;
-                    let cnt = (frame.count() / ANIMATION_FRAME_DIV) % w;
-
-                    let mut text: Text = Default::default();
-
-                    let heading = "RNBO on Move!".pad_to_width(w);
-                    let (s, e) = heading.split_at(cnt);
-                    let s = e.to_string() + s;
-                    let mut line: VecDeque<char> = s.chars().collect();
-                    let e = if self.has_all_capabilities { 4 } else { 2 };
-                    for _ in 0..e {
-                        text.push_line(Line::from(line.iter().collect::<String>()));
-                        line.rotate_left(1);
+                    if self.has_all_capabilities {
+                        //XXX hard-coded font size
+                        splash_x = frame.count() * frame.area().width as usize * 8;
+                        if splash_x >= SPLASH_BMP.size().width as usize {
+                            self.handle_event(Events::SplashComplete);
+                        } else {
+                            splash = true;
+                        }
+                    } else {
+                        let content = vec![
+                            Line::from("RNBO"),
+                            Line::from("Move Takeover"),
+                            Line::from("REDUCED"),
+                            Line::from("CAPABILITIES"),
+                        ];
+                        frame.render_widget(Paragraph::new(content).centered(), frame.area());
                     }
-                    if !self.has_all_capabilities {
-                        text.push_line(Line::from("REDUCED"));
-                        text.push_line(Line::from("CAPABILITIES"));
-                    }
-
-                    frame.render_widget(Paragraph::new(text.centered()).centered(), frame.area());
                 }
                 States::LaunchMove => {
                     self.do_once(line!(), |s| {
@@ -3520,7 +3526,13 @@ impl StateController {
             })
             .expect("to render frame");
 
-        if let Some(index) = userview {
+        if splash {
+            if let Some(bmp) = Lazy::get(&SPLASH_BMP) {
+                Image::new(bmp, Point::new(-(splash_x as i32), 0))
+                    .draw(terminal.backend_mut().display_mut())
+                    .expect("to render splash");
+            }
+        } else if let Some(index) = userview {
             if let Some(userview) = self.userviews.get_mut(&index) {
                 userview.render(terminal.backend_mut().display_mut());
             }
