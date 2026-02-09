@@ -3528,9 +3528,20 @@ impl StateController {
 
         if splash {
             if let Some(bmp) = Lazy::get(&SPLASH_BMP) {
-                Image::new(bmp, Point::new(-(splash_x as i32), 0))
-                    .draw(terminal.backend_mut().display_mut())
-                    .expect("to render splash");
+                use embedded_graphics::image::GetPixel;
+                let display = terminal.backend_mut().display_mut();
+                for row in 0..display.size().height as i32 {
+                    for col in 0..display.size().width as i32 {
+                        if let Some(color) = bmp.pixel(Point {
+                            x: col + splash_x as i32,
+                            y: row as _,
+                        }) {
+                            Pixel(Point::new(col as _, row as _), color)
+                                .draw(display)
+                                .expect("to render splash");
+                        }
+                    }
+                }
             }
         } else if let Some(index) = userview {
             if let Some(userview) = self.userviews.get_mut(&index) {
