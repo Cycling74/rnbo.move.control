@@ -28,7 +28,7 @@ cp -r /home/node/build/target /build/target
 
 class RNBOMoveControl(ConanFile):
 	name = "rnbomovecontrol"
-	exports_sources = "src/*", "Cargo.*", ".cargo/*", "config/**"
+	exports_sources = "src/*", "Cargo.*", ".cargo/*", "config/**", "content/*"
 
 	#common
 	user = "c74"
