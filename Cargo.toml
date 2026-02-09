@@ -42,3 +42,4 @@ rustix = "1.1.2"
 num-traits = "0.2.19"
 rnbo-embedded-graphics = { git = "https://github.com/Cycling74/rnbo-embedded-graphics" }
 atomic_float = "1.1.0"
+tinybmp = "0.7.0"

@@ -1856,6 +1856,7 @@ dependencies = [
  "smlang",
  "smol",
  "syslog",
+ "tinybmp",
  "tokio",
  "tui-widget-list",
  "unicase",
@@ -2235,6 +2236,15 @@ checksum = "3526739392ec93fd8b359c8e98514cb3e8e021beb4e5f597b00a0221f8ed8a49"
 dependencies = [
  "num-conv",
  "time-core",
+]
+
+[[package]]
+name = "tinybmp"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acb540c3e6f049f914d9c3eaf86ca415e264cf42d2b25bb5c24241af1a1e3aea"
+dependencies = [
+ "embedded-graphics",
 ]
 
 [[package]]
