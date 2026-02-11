@@ -128,6 +128,7 @@ pub struct Param {
     norm_pending: Option<(f64, Instant)>,
 
     norm_offset_step: Option<f64>,
+    norm_offset_step_editable: bool,
 
     color: Srgb<u8>,
 
@@ -261,22 +262,26 @@ impl Param {
         let hidden = self.hidden();
         self.meta = meta.clone();
 
-        match self.detail {
-            ParamDetail::Float { .. } => {
-                self.norm_offset_step = get_delta(meta);
+        if self.norm_offset_step_editable {
+            match self.detail {
+                ParamDetail::Float { .. } => {
+                    self.norm_offset_step = get_delta(meta);
+                }
+                _ => (),
             }
-            _ => (),
         }
 
         hidden != self.hidden()
     }
 
     pub fn set_delta(&mut self, v: Option<f64>) {
-        match self.detail {
-            ParamDetail::Float { .. } => {
-                self.norm_offset_step = v.map(|v| v.clamp(0.0, 1.0));
+        if self.norm_offset_step_editable {
+            match self.detail {
+                ParamDetail::Float { .. } => {
+                    self.norm_offset_step = v.map(|v| v.clamp(0.0, 1.0));
+                }
+                _ => (),
             }
-            _ => (),
         }
     }
 
@@ -316,6 +321,7 @@ impl Param {
             let meta = parse_contents_meta(contents).unwrap_or(Value::Null);
 
             let mut norm_offset_step = get_delta(&meta);
+            let mut norm_offset_step_editable = true;
 
             let index = contents.get("index")?.get("VALUE")?.as_number()?.as_u64()? as usize;
             let color = get_color(norm);
@@ -347,6 +353,8 @@ impl Param {
                     let val = obj.get("VALUE")?.as_str()?;
 
                     let detail = if vals.len() == 2 && vals[0] == "0" && vals[1] == "1" {
+                        norm_offset_step = Some(1.0);
+                        norm_offset_step_editable = false;
                         ParamDetail::Bool(val == "1")
                     } else {
                         let index = vals.iter().position(|v| v == val).unwrap_or(0);
@@ -356,6 +364,7 @@ impl Param {
                         //a 3 entry enum would be:
                         //1.0 / (2 * 3 - 1) =  0.2 -> 0, 0.2 | 0.4, 0.6 | 0.8, 1.0
                         norm_offset_step = Some(1.0 / (2.0 * vals.len() as f64 - 1.0)); //half a step per change
+                        norm_offset_step_editable = false;
                         ParamDetail::Enum(index, vals)
                     };
                     Some(Param {
@@ -370,6 +379,7 @@ impl Param {
                         norm,
                         norm_pending: None,
                         norm_offset_step,
+                        norm_offset_step_editable,
                         color,
                         meta,
                     })
@@ -393,6 +403,7 @@ impl Param {
                         && steps > 1
                     {
                         norm_offset_step = Some(1.0 / (2.0 * steps as f64 - 1.0)); //0..1 inclusive
+                        norm_offset_step_editable = false;
                     }
                     Some(Param {
                         index,
@@ -406,6 +417,7 @@ impl Param {
                         norm,
                         norm_pending: None,
                         norm_offset_step,
+                        norm_offset_step_editable,
                         color,
                         meta,
                     })
