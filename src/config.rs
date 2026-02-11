@@ -21,6 +21,7 @@ pub struct StartupConfig {
 pub struct Config {
     pub volume: u8, //0..255
     pub oscport: Option<u16>,
+    pub param_step_detents: Option<u8>,
 }
 
 impl Config {
@@ -40,6 +41,10 @@ impl Config {
     pub fn oscport(&self) -> u16 {
         self.oscport.unwrap_or(DEFAULT_OSC_PORT)
     }
+
+    pub fn param_step_detents(&self) -> u8 {
+        self.param_step_detents.unwrap_or(1 as _).max(1)
+    }
 }
 
 impl Default for Config {
@@ -47,6 +52,7 @@ impl Default for Config {
         Self {
             volume: 127,
             oscport: Some(DEFAULT_OSC_PORT),
+            param_step_detents: Some(1),
         }
     }
 }
