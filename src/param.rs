@@ -76,7 +76,9 @@ use {
 };
 
 const NORM_PENDING_DELAY: Duration = Duration::from_millis(50);
+
 static GLOBAL_DELTA: AtomicF64 = AtomicF64::new(0.01);
+static STEPPED_DETENT_MUL: AtomicF64 = AtomicF64::new(1.0);
 
 fn get_color(v: f64) -> Srgb<u8> {
     let cap = 0.96;
@@ -141,6 +143,10 @@ impl Param {
     }
     pub fn set_global_delta(delta: f64) {
         GLOBAL_DELTA.store(delta.clamp(0.0, 1.0), Ordering::Relaxed);
+    }
+
+    pub fn set_detent_mul(mul: u8) {
+        STEPPED_DETENT_MUL.store(mul.max(1) as _, Ordering::Relaxed);
     }
 
     pub fn instance_index(&self) -> usize {
@@ -353,17 +359,25 @@ impl Param {
                     let val = obj.get("VALUE")?.as_str()?;
 
                     let detail = if vals.len() == 2 && vals[0] == "0" && vals[1] == "1" {
-                        norm_offset_step = Some(1.0);
+                        norm_offset_step = Some(1.0 / STEPPED_DETENT_MUL.load(Ordering::Relaxed));
                         norm_offset_step_editable = false;
                         ParamDetail::Bool(val == "1")
                     } else {
                         let index = vals.iter().position(|v| v == val).unwrap_or(0);
                         //normalized value is 0..1 inclusive so
-                        //a 2 entry enum would be:
-                        //1.0 / (2 * 2 - 1) =  0.333 -> 0, 0.33 | 0.66, 1.0
-                        //a 3 entry enum would be:
-                        //1.0 / (2 * 3 - 1) =  0.2 -> 0, 0.2 | 0.4, 0.6 | 0.8, 1.0
-                        norm_offset_step = Some(1.0 / (2.0 * vals.len() as f64 - 1.0)); //half a step per change
+                        //a 2 entry enum would be, if STEPPED_DETENT_MUL = 2
+                        //1.0 / (STEPPED_DETENT_MUL * 2 - 1) =  0.333 -> 0, 0.33 | 0.66, 1.0
+                        //if STEPPED_DETENT_MUL = 1
+                        //1.0 / (STEPPED_DETENT_MUL * 2 - 1) =  1.0 -> 0 | 1.0
+                        //
+                        //a 3 entry enum would be, if STEPPED_DETENT_MUL = 2
+                        //1.0 / (STEPPED_DETENT_MUL * 3 - 1) =  0.2 -> 0, 0.2 | 0.4, 0.6 | 0.8, 1.0
+                        //if STEPPED_DETENT_MUL = 1
+                        //1.0 / (STEPPED_DETENT_MUL * 3 - 1) =  0.5 -> 0 | 0.5 | 1.0
+                        norm_offset_step = Some(
+                            1.0 / (STEPPED_DETENT_MUL.load(Ordering::Relaxed) * vals.len() as f64
+                                - 1.0),
+                        );
                         norm_offset_step_editable = false;
                         ParamDetail::Enum(index, vals)
                     };
@@ -402,7 +416,9 @@ impl Param {
                     if let Some(steps) = steps
                         && steps > 1
                     {
-                        norm_offset_step = Some(1.0 / (2.0 * steps as f64 - 1.0)); //0..1 inclusive
+                        norm_offset_step = Some(
+                            1.0 / (STEPPED_DETENT_MUL.load(Ordering::Relaxed) * steps as f64 - 1.0),
+                        ); //0..1 inclusive
                         norm_offset_step_editable = false;
                     }
                     Some(Param {
