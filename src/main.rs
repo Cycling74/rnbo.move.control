@@ -564,6 +564,8 @@ async fn with_client(
     let config = Config::read_or_default(&config_path);
     let oscport = config.oscport();
 
+    crate::param::Param::set_detent_mul(config.param_step_detents());
+
     let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(StateController::new(
             midi_out_tx,
