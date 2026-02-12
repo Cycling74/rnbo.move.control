@@ -1032,7 +1032,7 @@ smlang::statemachine! {
 
         //select
         Menu(usize) + BtnDown(Button::JogWheel) [*state == GRAPHS_INDEX && ctx.sets_count() > 0] = SetsList(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == GRAPH_PRESETS_INDEX && ctx.set_presets_count() > 0] = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == GRAPH_PRESETS_INDEX] = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
         //skip patcher instances menu if there is only 1 instance
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) > 1] = PatcherInstances(InstSel::enter(InstSelType::Params, ctx.instances_count(InstSelType::Params))),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) == 1] = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
@@ -2934,13 +2934,8 @@ impl StateController {
                 let indicator = |index: usize| -> &'static char {
                     let ctx = self.context();
                     match index {
-                        TRANSPORT_INDEX | ABOUT_INDEX | STATUS_INDEX => ITEM_INDICATOR,
-                        DEVICE_PARAMS_INDEX if ctx.instances_count(InstSelType::Params) < 2 => {
-                            ITEM_INDICATOR
-                        }
-                        DEVICE_DATA_INDEX if ctx.instances_count(InstSelType::Datarefs) < 2 => {
-                            ITEM_INDICATOR
-                        }
+                        TRANSPORT_INDEX | ABOUT_INDEX | STATUS_INDEX | DEVICE_PARAMS_INDEX
+                        | DEVICE_DATA_INDEX => SUB_MENU_INDICATOR,
                         USER_VIEWS_INDEX if ctx.userviews_count() < 2 => ITEM_INDICATOR,
                         _ => SUB_MENU_INDICATOR,
                     }
@@ -2953,7 +2948,6 @@ impl StateController {
                         DEVICE_DATA_INDEX => ctx.instances_count(InstSelType::Datarefs) > 0,
                         USER_VIEWS_INDEX => ctx.userviews_count() > 0,
                         GRAPHS_INDEX => ctx.sets_count() > 0,
-                        GRAPH_PRESETS_INDEX => ctx.set_presets_count() > 0,
                         PATCHERS_INDEX => ctx.patchers_count() > 0,
                         _ => true,
                     }
