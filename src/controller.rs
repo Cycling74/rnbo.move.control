@@ -2874,8 +2874,9 @@ impl StateController {
                     .clone()
                     .unwrap_or("unknown".to_string());
                 let content = vec![
+                    Line::from("move.local:3000"),
                     Line::from("package version:"),
-                    Line::from(version), /*, Line::from("beta.cycling74.com") */
+                    Line::from(version),
                 ];
                 let paragraph = Paragraph::new(content).alignment(Alignment::Center);
 
