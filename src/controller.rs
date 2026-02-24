@@ -914,8 +914,6 @@ enum Cmd {
 
     LoadPatcher(usize),
 
-    LoadUserView(usize),
-
     BatteryLow(bool),
     BatteryCharge(u8),
     PSUConnected(bool),
@@ -1027,7 +1025,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() > 1] = UserViewList(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() == 1] / ctx.emit(Cmd::LoadUserView(0)); = UserView(0),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() == 1] = UserView(0),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PARAM_VIEWS_INDEX && ctx.param_view_count() > 1] = ParamViewList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PARAM_VIEWS_INDEX && ctx.param_view_count() == 1] = ParamView(ParamPage { index: 0, page: 0, focused: None }),
@@ -1135,7 +1133,7 @@ smlang::statemachine! {
         UserViewList(usize) + BtnDown(Button::Back) = Menu(USER_VIEWS_INDEX),
         UserViewList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.userviews_count() > *state + 1] = UserViewList(*state + 1),
         UserViewList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = UserViewList(*state - 1),
-        UserViewList(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::LoadUserView(*state)); = UserView(*state),
+        UserViewList(usize) + BtnDown(Button::JogWheel) = UserView(*state),
         UserViewList(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
 
         UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() > 1] = UserViewList(*state),
@@ -1145,8 +1143,8 @@ smlang::statemachine! {
         UserView(usize) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: *state, paramindex: *event, offset: -1});,
         UserView(usize) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: *state, paramindex: *event, offset: 1});,
 
-        UserView(usize) + EncLeft(_) [*event == JOG_WHEEL_ENCODER && *state > 0] / ctx.emit(Cmd::LoadUserView(*state - 1)); = UserView(*state - 1),
-        UserView(usize) + EncRight(_) [*event == JOG_WHEEL_ENCODER && ctx.userviews_count() > *state + 1] / ctx.emit(Cmd::LoadUserView(*state + 1)); = UserView(*state + 1),
+        UserView(usize) + EncLeft(_) [*event == JOG_WHEEL_ENCODER && *state > 0] = UserView(*state - 1),
+        UserView(usize) + EncRight(_) [*event == JOG_WHEEL_ENCODER && ctx.userviews_count() > *state + 1] = UserView(*state + 1),
 
 
         ParamViewList(usize) + BtnDown(Button::Back) = Menu(PARAM_VIEWS_INDEX),
@@ -1186,7 +1184,7 @@ smlang::statemachine! {
         Status + BtnDown(Button::Back) = Menu(STATUS_INDEX),
 
         //direct OSC based state changes
-        _ + UserViewRequested(_) [ctx.userviews_count() > *event] / ctx.emit(Cmd::LoadUserView(*event)); = UserView(*event),
+        _ + UserViewRequested(_) [ctx.userviews_count() > *event] = UserView(*event),
         _ + DeviceParamsSelected(_) = PatcherParams(ParamPage { index: event.0, page: event.1, focused: None }),
         _ + DeviceDataSelected(_) = PatcherDatarefs(DataSel::new(*event, ctx.dataref_count(*event))),
         _ + SetViewSelected(_) = ParamView(ParamPage { index: event.0, page: event.1, focused: None }),
@@ -3989,26 +3987,6 @@ impl StateController {
                         };
                         self.send_osc(msg).await;
                     }
-                }
-                Cmd::LoadUserView(index) => {
-                    /*
-                                        //local index of user view, select first page of associated param view if there
-                                        //is one
-                                        if let Some((_, view)) = self.userviews.iter().skip(index).next() {
-                                            if let Some(paramviewname) = view.param_view_name() {
-                                                if let Some((index, _paramview)) = self
-                                                    .param_views
-                                                    .iter()
-                                                    .enumerate()
-                                                    .find(|(_index, view)| view.name() == paramviewname)
-                                                {
-                                                    let _ = self
-                                                        .viewsm
-                                                        .process_event(Events::SetViewSelected((index, 0)));
-                                                }
-                                            }
-                                        }
-                    */
                 }
                 Cmd::UpdateDataFileList => {
                     self.datafile_list.clear();
