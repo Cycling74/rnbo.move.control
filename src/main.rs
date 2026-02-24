@@ -603,7 +603,7 @@ async fn with_client(
                 let should_exit = {
                     let mut g = state.lock().await;
                     g.update_jack(c);
-                    g.render(&mut terminal);
+                    g.render(&mut terminal).await;
                     draw_tx
                         .send(DrawCommand {
                             data: *terminal.backend_mut().display_mut().framebuffer(),
