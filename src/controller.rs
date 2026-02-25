@@ -123,7 +123,9 @@ pub const MENU_ADDR_DEVICE_DATA_LOAD: &str = "/rnboctl/menu/device/data/load";
 pub const MENU_ADDR_DEVICE_LOAD: &str = "/rnboctl/menu/device/load";
 
 pub const MENU_ADDR_USERVIEW: &str = "/rnboctl/menu/userview";
-pub const MENU_ADDR_PARM_VIEW: &str = "/rnboctl/menu/view";
+pub const MENU_ADDR_USERVIEW_DISPLAY: &str = "/rnboctl/menu/userview/display";
+pub const MENU_ADDR_PARM_VIEW: &str = "/rnboctl/menu/paramview";
+pub const MENU_ADDR_PARM_VIEW_DISPLAY: &str = "/rnboctl/menu/paramview/display";
 
 pub const MENU_ADDR_TRANSPORT: &str = "/rnboctl/menu/transport";
 pub const MENU_ADDR_TRANSPORT_TEMPO: &str = "/rnboctl/menu/transport/tempo";
@@ -2423,8 +2425,24 @@ impl StateController {
                 }
 
                 MENU_ADDR_USERVIEW => self.handle_event(Events::PageRequested(Page::UserViewMenu)),
+                MENU_ADDR_USERVIEW_DISPLAY => {
+                    if !msg.args.is_empty()
+                        && let Some(view) = as_index(&msg.args[0])
+                    {
+                        self.handle_event(Events::PageRequested(Page::UserView { view }))
+                    }
+                }
                 MENU_ADDR_PARM_VIEW => {
                     self.handle_event(Events::PageRequested(Page::ParamViewMenu))
+                }
+                MENU_ADDR_PARM_VIEW_DISPLAY => {
+                    if !msg.args.is_empty()
+                        && let Some(view) = as_index(&msg.args[0])
+                    {
+                        let page =
+                            as_index(&msg.args.get(1).unwrap_or(&OscType::Int(0))).unwrap_or(0);
+                        self.handle_event(Events::PageRequested(Page::ParamView { view, page }))
+                    }
                 }
 
                 MENU_ADDR_TRANSPORT => {
@@ -3338,9 +3356,9 @@ impl StateController {
             States::UserView(selected) => {
                 setup_common(line!(), self);
 
-                if let Some(view) = self.userviews.keys().nth(selected) {
+                if let Some(_view) = self.userviews.keys().nth(selected) {
                     userview = Some(selected);
-                    report = Some(Page::UserView { view: *view });
+                    report = Some(Page::UserView { view: selected });
                 }
 
                 if let Some(userview) = self.userviews.values().nth(selected)
@@ -3406,7 +3424,7 @@ impl StateController {
                 let page = state.page;
                 let focused = state.focused;
 
-                if let Some(view) = self.param_views.get(index)
+                if let Some(_view) = self.param_views.get(index)
                     && let Some((name, params)) = self
                         .param_view_names
                         .iter()
@@ -3415,10 +3433,7 @@ impl StateController {
                 {
                     let offset = page * PARAM_PAGE_SIZE;
 
-                    report = Some(Page::ParamView {
-                        view: view.index(),
-                        page,
-                    });
+                    report = Some(Page::ParamView { view: index, page });
 
                     for (pindex, o) in params
                         .iter()
@@ -3771,7 +3786,7 @@ impl StateController {
                     args: vec![],
                 },
                 Page::ParamView { view, page } => OscMessage {
-                    addr: PARAM_VIEW_DISPLAY.to_string(),
+                    addr: MENU_ADDR_PARM_VIEW_DISPLAY.to_string(),
                     args: vec![OscType::Int(view as _), OscType::Int(page as _)],
                 },
                 Page::UserViewMenu => OscMessage {
@@ -3779,7 +3794,7 @@ impl StateController {
                     args: vec![],
                 },
                 Page::UserView { view } => OscMessage {
-                    addr: USER_VIEW_DISPLAY.to_string(),
+                    addr: MENU_ADDR_USERVIEW_DISPLAY.to_string(),
                     args: vec![OscType::Int(view as _)],
                 },
                 Page::TransportEditor => OscMessage {
