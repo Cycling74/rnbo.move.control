@@ -52,9 +52,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const DATFILE_DIR: &str = "/data/UserData/Documents/rnbo/datafiles";
 
-const MENU_MIDI: u8 = 0x32;
 const BACK_MIDI: u8 = 0x33;
-const PLAY_MIDI: u8 = 0x55;
 
 const ANIMATION_FRAME_FREEZE: usize = 4;
 const ANIMATION_FRAME_DIV: usize = 10;
@@ -621,8 +619,6 @@ enum Button {
     Back,
     PowerLong,
     PowerShort,
-    Menu,
-    Play,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -1020,8 +1016,6 @@ pub mod top {
             _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PowerMenu(0),
             _ + BtnDown(Button::PowerLong) / ctx.emit(Cmd::Power(PowerCommand::ClearLongPress)); = PowerOff,
 
-            _ + BtnDown(Button::Play) / ctx.emit(Cmd::TransportToggle);,
-
             _ + BatteryLow(_) [!ctx.battery_low() != *event] / ctx.emit(Cmd::BatteryLow(*event));,
             _ + BatteryCharge(_) [ctx.battery_charge() != *event] / ctx.emit(Cmd::BatteryCharge(*event));,
             _ + PSUConnected(_) [ctx.psu_connected().is_none() || ctx.psu_connected().unwrap() != *event] / ctx.emit(Cmd::PSUConnected(*event));,
@@ -1313,7 +1307,6 @@ pub struct StateController {
     config: Config,
     config_path: PathBuf,
 
-    use_play_btn: bool,
     rolling: bool,
     bpm: f32,
     cpu: f64,
@@ -1573,8 +1566,6 @@ impl StateController {
             config,
             config_path,
 
-            use_play_btn: false,
-
             rolling: false,
             bpm: 100.0,
             cpu: 100.0,
@@ -1652,9 +1643,6 @@ impl StateController {
             page_report_last: None,
         };
 
-        if s.use_play_btn {
-            s.light_button(PLAY_MIDI, MoveColor::LightGray as _);
-        }
         s.request_power_status();
 
         s
@@ -2150,17 +2138,6 @@ impl StateController {
                         && self.rolling != rolling
                     {
                         self.rolling = rolling;
-                        if self.use_play_btn {
-                            let _ = self.midi_out_queue.send(Midi::cc(
-                                PLAY_MIDI,
-                                if rolling {
-                                    MoveColor::Green
-                                } else {
-                                    MoveColor::LightGray
-                                } as _,
-                                MOVE_CTL_MIDI_CHAN,
-                            ));
-                        }
                     }
                 }
                 TRANSPORT_BPM_ADDR => {
@@ -2796,17 +2773,9 @@ impl StateController {
                             }
                             _ => (),
                         },
-                        //hamburger
-                        MENU_MIDI if bytes[2] != 0 => {
-                            self.handle_event(Events::BtnDown(Button::Menu));
-                        }
                         //menu back button
                         BACK_MIDI if bytes[2] != 0 => {
                             self.handle_event(Events::BtnDown(Button::Back));
-                        }
-                        //play button
-                        PLAY_MIDI if bytes[2] != 0 && self.use_play_btn => {
-                            self.handle_event(Events::BtnDown(Button::Play));
                         }
                         //param encoders
                         index @ 71..=78 => {
@@ -2894,8 +2863,7 @@ impl StateController {
     }
 
     fn redraw(&mut self) {
-        self.tracked_buttons =
-            HashMap::from([(MENU_MIDI, MoveColor::Black), (BACK_MIDI, MoveColor::Black)]);
+        self.tracked_buttons = HashMap::from([(BACK_MIDI, MoveColor::Black)]);
         self.line_token = 0;
         self.param_values_last = [Srgb::new(0, 0, 0); 8];
     }
@@ -2952,10 +2920,7 @@ impl StateController {
 
         let setup_common = |line: u32, s: &mut Self| {
             s.do_once(line, |s| {
-                s.render_buttons([
-                    //(MENU_MIDI, MoveColor::LightGray),
-                    (BACK_MIDI, MoveColor::LightGray),
-                ]);
+                s.render_buttons([(BACK_MIDI, MoveColor::LightGray)]);
             });
         };
 
