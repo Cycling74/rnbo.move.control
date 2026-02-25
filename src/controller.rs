@@ -106,32 +106,34 @@ pub const USER_VIEW_LAYER_HIDE: &str = "/rnboctl/userview/layer/hide";
 pub const USER_VIEW_LAYER_XOR: &str = "/rnboctl/userview/layer/xor";
 pub const USER_VIEW_LAYER_REDRAW: &str = "/rnboctl/userview/layer/redraw";
 
-pub const MENU_ADDR_POWER: &str = "/rnboctl/menu/power";
-pub const MENU_ADDR_VOLUME: &str = "/rnboctl/menu/volume";
-pub const MENU_ADDR_MAIN: &str = "/rnboctl/menu/main";
-pub const MENU_ADDR_GRAPH_LOAD: &str = "/rnboctl/menu/graph/load";
+pub const SHOW_ADDR_POWER: &str = "/rnboctl/show/power";
+pub const SHOW_ADDR_VOLUME: &str = "/rnboctl/show/volume";
+pub const SHOW_ADDR_MAIN: &str = "/rnboctl/show/main";
+pub const SHOW_ADDR_GRAPH_LOAD: &str = "/rnboctl/show/graph/load";
 
-pub const MENU_ADDR_GRAPH_PRESET: &str = "/rnboctl/menu/graph/preset";
-pub const MENU_ADDR_GRAPH_PRESET_LOAD: &str = "/rnboctl/menu/graph/preset/load";
-pub const MENU_ADDR_GRAPH_PRESET_OVERWRITE: &str = "/rnboctl/menu/graph/preset/overwrite";
-pub const MENU_ADDR_GRAPH_PRESET_INITIAL: &str = "/rnboctl/menu/graph/preset/initial";
-pub const MENU_ADDR_GRAPH_PRESET_DELETE: &str = "/rnboctl/menu/graph/preset/delete";
+pub const SHOW_ADDR_GRAPH_PRESET: &str = "/rnboctl/show/graph/preset";
+pub const SHOW_ADDR_GRAPH_PRESET_LOAD: &str = "/rnboctl/show/graph/preset/load";
+pub const SHOW_ADDR_GRAPH_PRESET_OVERWRITE: &str = "/rnboctl/show/graph/preset/overwrite";
+pub const SHOW_ADDR_GRAPH_PRESET_INITIAL: &str = "/rnboctl/show/graph/preset/initial";
+pub const SHOW_ADDR_GRAPH_PRESET_DELETE: &str = "/rnboctl/show/graph/preset/delete";
 
-pub const MENU_ADDR_DEVICE_PARAMS: &str = "/rnboctl/menu/device/params";
-pub const MENU_ADDR_DEVICE_DATA: &str = "/rnboctl/menu/device/data";
-pub const MENU_ADDR_DEVICE_DATA_LOAD: &str = "/rnboctl/menu/device/data/load";
-pub const MENU_ADDR_DEVICE_LOAD: &str = "/rnboctl/menu/device/load";
+pub const SHOW_ADDR_DEVICE_PARAMS: &str = "/rnboctl/show/device/param";
+pub const SHOW_ADDR_DEVICE_PARAMS_DISPLAY: &str = "/rnboctl/show/device/param/display";
+pub const SHOW_ADDR_DEVICE_DATA: &str = "/rnboctl/show/device/data";
+pub const SHOW_ADDR_DEVICE_DATA_DISPLAY: &str = "/rnboctl/show/device/data/display";
+pub const SHOW_ADDR_DEVICE_DATA_LOAD: &str = "/rnboctl/show/device/data/load";
+pub const SHOW_ADDR_DEVICE_LOAD: &str = "/rnboctl/show/device/load";
 
-pub const MENU_ADDR_USERVIEW: &str = "/rnboctl/menu/userview";
-pub const MENU_ADDR_USERVIEW_DISPLAY: &str = "/rnboctl/menu/userview/display";
-pub const MENU_ADDR_PARM_VIEW: &str = "/rnboctl/menu/paramview";
-pub const MENU_ADDR_PARM_VIEW_DISPLAY: &str = "/rnboctl/menu/paramview/display";
+pub const SHOW_ADDR_USERVIEW: &str = "/rnboctl/show/userview";
+pub const SHOW_ADDR_USERVIEW_DISPLAY: &str = "/rnboctl/show/userview/display";
+pub const SHOW_ADDR_PARM_VIEW: &str = "/rnboctl/show/paramview";
+pub const SHOW_ADDR_PARM_VIEW_DISPLAY: &str = "/rnboctl/show/paramview/display";
 
-pub const MENU_ADDR_TRANSPORT: &str = "/rnboctl/menu/transport";
-pub const MENU_ADDR_TRANSPORT_TEMPO: &str = "/rnboctl/menu/transport/tempo";
+pub const SHOW_ADDR_TRANSPORT: &str = "/rnboctl/show/transport";
+pub const SHOW_ADDR_TRANSPORT_TEMPO: &str = "/rnboctl/show/transport/tempo";
 
-pub const MENU_ADDR_ABOUT: &str = "/rnboctl/menu/about";
-pub const MENU_ADDR_STATUS: &str = "/rnboctl/menu/status";
+pub const SHOW_ADDR_ABOUT: &str = "/rnboctl/show/about";
+pub const SHOW_ADDR_STATUS: &str = "/rnboctl/show/status";
 
 pub const DISPLAY_COUNT_OSC: &str = "/rnboctl/display/count";
 pub const DISPLAY_INFO_ADDR: &str = "/rnboctl/display/info";
@@ -2382,34 +2384,46 @@ impl StateController {
                         };
                     }
                 }
-                MENU_ADDR_POWER => self.handle_event(Events::PageRequested(Page::PowerMenu)),
-                MENU_ADDR_VOLUME => self.handle_event(Events::PageRequested(Page::VolumeEditor)),
-                MENU_ADDR_MAIN => self.handle_event(Events::PageRequested(Page::Main)),
-                MENU_ADDR_GRAPH_LOAD => self.handle_event(Events::PageRequested(Page::LoadGraph)),
+                SHOW_ADDR_POWER => self.handle_event(Events::PageRequested(Page::PowerMenu)),
+                SHOW_ADDR_VOLUME => self.handle_event(Events::PageRequested(Page::VolumeEditor)),
+                SHOW_ADDR_MAIN => self.handle_event(Events::PageRequested(Page::Main)),
+                SHOW_ADDR_GRAPH_LOAD => self.handle_event(Events::PageRequested(Page::LoadGraph)),
 
-                MENU_ADDR_GRAPH_PRESET => {
+                SHOW_ADDR_GRAPH_PRESET => {
                     self.handle_event(Events::PageRequested(Page::GraphPresetMenu))
                 }
-                MENU_ADDR_GRAPH_PRESET_LOAD => {
+                SHOW_ADDR_GRAPH_PRESET_LOAD => {
                     self.handle_event(Events::PageRequested(Page::GraphPresetLoadMenu))
                 }
-                MENU_ADDR_GRAPH_PRESET_OVERWRITE => {
+                SHOW_ADDR_GRAPH_PRESET_OVERWRITE => {
                     self.handle_event(Events::PageRequested(Page::GraphPresetOverwriteMenu))
                 }
-                MENU_ADDR_GRAPH_PRESET_INITIAL => {
+                SHOW_ADDR_GRAPH_PRESET_INITIAL => {
                     self.handle_event(Events::PageRequested(Page::GraphPresetInitialMenu))
                 }
-                MENU_ADDR_GRAPH_PRESET_DELETE => {
+                SHOW_ADDR_GRAPH_PRESET_DELETE => {
                     self.handle_event(Events::PageRequested(Page::GraphPresetDeleteMenu))
                 }
 
-                MENU_ADDR_DEVICE_PARAMS => {
+                SHOW_ADDR_DEVICE_PARAMS => {
                     self.handle_event(Events::PageRequested(Page::DeviceParamMenu))
                 }
-                MENU_ADDR_DEVICE_DATA => {
+                SHOW_ADDR_DEVICE_PARAMS_DISPLAY => {
+                    if !msg.args.is_empty()
+                        && let Some(index) = as_index(&msg.args[0])
+                    {
+                        let page =
+                            as_index(&msg.args.get(1).unwrap_or(&OscType::Int(0))).unwrap_or(0);
+                        self.handle_event(Events::PageRequested(Page::DeviceParam {
+                            device: index,
+                            page,
+                        }))
+                    }
+                }
+                SHOW_ADDR_DEVICE_DATA => {
                     self.handle_event(Events::PageRequested(Page::DeviceDataMenu))
                 }
-                MENU_ADDR_DEVICE_DATA_LOAD => {
+                SHOW_ADDR_DEVICE_DATA_LOAD => {
                     if msg.args.len() >= 2
                         && let Some(device) = as_index(&msg.args[0])
                         && let Some(index) = as_index(&msg.args[1])
@@ -2420,22 +2434,22 @@ impl StateController {
                         }))
                     }
                 }
-                MENU_ADDR_DEVICE_LOAD => {
+                SHOW_ADDR_DEVICE_LOAD => {
                     self.handle_event(Events::PageRequested(Page::DeviceLoadMenu))
                 }
 
-                MENU_ADDR_USERVIEW => self.handle_event(Events::PageRequested(Page::UserViewMenu)),
-                MENU_ADDR_USERVIEW_DISPLAY => {
+                SHOW_ADDR_USERVIEW => self.handle_event(Events::PageRequested(Page::UserViewMenu)),
+                SHOW_ADDR_USERVIEW_DISPLAY => {
                     if !msg.args.is_empty()
                         && let Some(view) = as_index(&msg.args[0])
                     {
                         self.handle_event(Events::PageRequested(Page::UserView { view }))
                     }
                 }
-                MENU_ADDR_PARM_VIEW => {
+                SHOW_ADDR_PARM_VIEW => {
                     self.handle_event(Events::PageRequested(Page::ParamViewMenu))
                 }
-                MENU_ADDR_PARM_VIEW_DISPLAY => {
+                SHOW_ADDR_PARM_VIEW_DISPLAY => {
                     if !msg.args.is_empty()
                         && let Some(view) = as_index(&msg.args[0])
                     {
@@ -2445,15 +2459,15 @@ impl StateController {
                     }
                 }
 
-                MENU_ADDR_TRANSPORT => {
+                SHOW_ADDR_TRANSPORT => {
                     self.handle_event(Events::PageRequested(Page::TransportEditor))
                 }
-                MENU_ADDR_TRANSPORT_TEMPO => {
+                SHOW_ADDR_TRANSPORT_TEMPO => {
                     self.handle_event(Events::PageRequested(Page::TempoEditor))
                 }
 
-                MENU_ADDR_ABOUT => self.handle_event(Events::PageRequested(Page::About)),
-                MENU_ADDR_STATUS => self.handle_event(Events::PageRequested(Page::Status)),
+                SHOW_ADDR_ABOUT => self.handle_event(Events::PageRequested(Page::About)),
+                SHOW_ADDR_STATUS => self.handle_event(Events::PageRequested(Page::Status)),
 
                 _ => {
                     if let Some(captures) = INST_ALIAS_REGEX.captures(&msg.addr) {
@@ -3215,7 +3229,7 @@ impl StateController {
                             && let Some(param) = self.params.get(*first)
                         {
                             report = Some(Page::DeviceParam {
-                                device: param.instance_index(),
+                                device: index,
                                 page,
                             });
                         }
@@ -3264,7 +3278,7 @@ impl StateController {
                     if let Some(name) = self.patchers_datarefs_instance_names.get(entry.instance())
                     {
                         report = Some(Page::DeviceData {
-                            device: inst.index(),
+                            device: entry.instance(),
                         });
                         let title = format!("{} Data", name);
 
@@ -3721,96 +3735,96 @@ impl StateController {
 
             let msg = match report {
                 Page::PowerMenu => OscMessage {
-                    addr: MENU_ADDR_POWER.to_string(),
+                    addr: SHOW_ADDR_POWER.to_string(),
                     args: vec![],
                 },
                 Page::VolumeEditor => OscMessage {
-                    addr: MENU_ADDR_VOLUME.to_string(),
+                    addr: SHOW_ADDR_VOLUME.to_string(),
                     args: vec![],
                 },
                 Page::Main => OscMessage {
-                    addr: MENU_ADDR_MAIN.to_string(),
+                    addr: SHOW_ADDR_MAIN.to_string(),
                     args: vec![],
                 },
                 Page::LoadGraph => OscMessage {
-                    addr: MENU_ADDR_GRAPH_LOAD.to_string(),
+                    addr: SHOW_ADDR_GRAPH_LOAD.to_string(),
                     args: vec![],
                 },
                 Page::GraphPresetMenu => OscMessage {
-                    addr: MENU_ADDR_GRAPH_PRESET.to_string(),
+                    addr: SHOW_ADDR_GRAPH_PRESET.to_string(),
                     args: vec![],
                 },
                 Page::GraphPresetLoadMenu => OscMessage {
-                    addr: MENU_ADDR_GRAPH_PRESET_LOAD.to_string(),
+                    addr: SHOW_ADDR_GRAPH_PRESET_LOAD.to_string(),
                     args: vec![],
                 },
                 Page::GraphPresetOverwriteMenu => OscMessage {
-                    addr: MENU_ADDR_GRAPH_PRESET_OVERWRITE.to_string(),
+                    addr: SHOW_ADDR_GRAPH_PRESET_OVERWRITE.to_string(),
                     args: vec![],
                 },
                 Page::GraphPresetInitialMenu => OscMessage {
-                    addr: MENU_ADDR_GRAPH_PRESET_INITIAL.to_string(),
+                    addr: SHOW_ADDR_GRAPH_PRESET_INITIAL.to_string(),
                     args: vec![],
                 },
                 Page::GraphPresetDeleteMenu => OscMessage {
-                    addr: MENU_ADDR_GRAPH_PRESET_DELETE.to_string(),
+                    addr: SHOW_ADDR_GRAPH_PRESET_DELETE.to_string(),
                     args: vec![],
                 },
 
                 Page::DeviceParamMenu => OscMessage {
-                    addr: MENU_ADDR_DEVICE_PARAMS.to_string(),
+                    addr: SHOW_ADDR_DEVICE_PARAMS.to_string(),
                     args: vec![],
                 },
                 Page::DeviceDataMenu => OscMessage {
-                    addr: MENU_ADDR_DEVICE_DATA.to_string(),
+                    addr: SHOW_ADDR_DEVICE_DATA.to_string(),
                     args: vec![],
                 },
                 Page::DeviceDataLoad { device, index } => OscMessage {
-                    addr: MENU_ADDR_DEVICE_DATA_LOAD.to_string(),
+                    addr: SHOW_ADDR_DEVICE_DATA_LOAD.to_string(),
                     args: vec![OscType::Int(device as _), OscType::Int(index as _)],
                 },
                 Page::DeviceLoadMenu => OscMessage {
-                    addr: MENU_ADDR_DEVICE_LOAD.to_string(),
+                    addr: SHOW_ADDR_DEVICE_LOAD.to_string(),
                     args: vec![],
                 },
                 Page::DeviceParam { device, page } => OscMessage {
-                    addr: DEVICE_PARAM_DISPLAY.to_string(),
+                    addr: SHOW_ADDR_DEVICE_PARAMS_DISPLAY.to_string(),
                     args: vec![OscType::Int(device as _), OscType::Int(page as _)],
                 },
                 Page::DeviceData { device } => OscMessage {
-                    addr: DEVICE_DATA_DISPLAY.to_string(),
+                    addr: SHOW_ADDR_DEVICE_DATA_DISPLAY.to_string(),
                     args: vec![OscType::Int(device as _)],
                 },
                 Page::ParamViewMenu => OscMessage {
-                    addr: MENU_ADDR_PARM_VIEW.to_string(),
+                    addr: SHOW_ADDR_PARM_VIEW.to_string(),
                     args: vec![],
                 },
                 Page::ParamView { view, page } => OscMessage {
-                    addr: MENU_ADDR_PARM_VIEW_DISPLAY.to_string(),
+                    addr: SHOW_ADDR_PARM_VIEW_DISPLAY.to_string(),
                     args: vec![OscType::Int(view as _), OscType::Int(page as _)],
                 },
                 Page::UserViewMenu => OscMessage {
-                    addr: MENU_ADDR_USERVIEW.to_string(),
+                    addr: SHOW_ADDR_USERVIEW.to_string(),
                     args: vec![],
                 },
                 Page::UserView { view } => OscMessage {
-                    addr: MENU_ADDR_USERVIEW_DISPLAY.to_string(),
+                    addr: SHOW_ADDR_USERVIEW_DISPLAY.to_string(),
                     args: vec![OscType::Int(view as _)],
                 },
                 Page::TransportEditor => OscMessage {
-                    addr: MENU_ADDR_TRANSPORT.to_string(),
+                    addr: SHOW_ADDR_TRANSPORT.to_string(),
                     args: vec![],
                 },
                 Page::TempoEditor => OscMessage {
-                    addr: MENU_ADDR_TRANSPORT_TEMPO.to_string(),
+                    addr: SHOW_ADDR_TRANSPORT_TEMPO.to_string(),
                     args: vec![],
                 },
                 Page::About => OscMessage {
-                    addr: MENU_ADDR_ABOUT.to_string(),
+                    addr: SHOW_ADDR_ABOUT.to_string(),
                     args: vec![],
                 },
                 Page::Status => OscMessage {
-                    addr: MENU_ADDR_STATUS.to_string(),
+                    addr: SHOW_ADDR_STATUS.to_string(),
                     args: vec![],
                 },
             };
