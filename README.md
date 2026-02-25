@@ -116,6 +116,36 @@ conan create .  -s os=Linux -s arch=armv8 -s compiler=gcc -s compiler.version=11
 * `/rnboctl/redraw`
   * send this to redraw the takeover UI, useful after sending MIDI reset
 
+* `show` addresses are sent from the UI when you navigate the various screens but you can also send the messages to jump to a specific screen
+    * `/rnboctl/show/power` - display power menu
+    * `/rnboctl/show/volume` - display volume control
+    * `/rnboctl/show/main` - display main menu
+    * `/rnboctl/show/graph/load` - display `Graphs` (load) menu
+
+    * `/rnboctl/show/graph/preset` - display `Graph Presets` menu
+    * `/rnboctl/show/graph/preset/load` - display graph preset `Load` menu
+    * `/rnboctl/show/graph/preset/overwrite` - display graph preset `Overwrite` menu
+    * `/rnboctl/show/graph/preset/initial` - display graph preset set `Set Initial` menu
+    * `/rnboctl/show/graph/preset/delete` - display graph preset `Delete` menu
+
+    * `/rnboctl/show/device/param` - display `Device Params` menu
+    * `/rnboctl/show/device/param/display <device index> [<page>]` - display params for device at index and optional page
+    * `/rnboctl/show/device/data` - display `Device Data` menu
+    * `/rnboctl/show/device/data/display <device index>` - display `Device Data` menu for device at index
+    * `/rnboctl/show/device/data/load <device index> <dataref index>` - display device load menu for given device and dataref
+    * `/rnboctl/show/device/load` - display `Load Patchers` menu
+
+    * `/rnboctl/show/userview` - display `User Views` menu
+    * `/rnboctl/show/userview/display <index>`  - display user view at index
+    * `/rnboctl/show/paramview` - display `Param Views` menu
+    * `/rnboctl/show/paramview/display <view index> [<page>]` - display `Param View` with given index and optional page
+
+    * `/rnboctl/show/transport` - display `Transport` menu
+    * `/rnboctl/show/transport/tempo` - display `Tempo` editor
+
+    * `/rnboctl/show/about` - display `About` screen
+    * `/rnboctl/show/status` - display `Status` screen
+
 TODO:
 
 * `/rnboctl/userview/zoomfull <index>`
