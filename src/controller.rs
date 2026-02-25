@@ -316,7 +316,9 @@ fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> 
 
     let list = ListView::new(builder, items.len()).scroll_padding(1);
     let mut state = ListState::default();
-    state.select(Some(selected));
+    if selected < items.len() {
+        state.select(Some(selected));
+    }
 
     let mut listrect = frame.area();
     if let Some(title) = title {
@@ -326,6 +328,16 @@ fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> 
         listrect = layout[1];
     }
     frame.render_stateful_widget(list, listrect, &mut state);
+}
+
+fn render_empty(frame: &mut ratatui::Frame) {
+    let title = format_title("Empty");
+    let content = vec![Line::default(), Line::from("Empty").centered()];
+    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+
+    let layout = titled_layout(frame.area());
+    frame.render_widget(title, layout[0]);
+    frame.render_widget(paragraph, layout[1]);
 }
 
 fn center_vertical(area: Rect, height: u16) -> Rect {
@@ -356,7 +368,7 @@ const UNEDITABLE_ITEM_INDICATOR: &char = &'x';
 //XXX use this to remove emit from state and simply track last report in render
 //and if it has changed, render OSC
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum PageReport {
+pub enum Page {
     PowerMenu,
     VolumeEditor,
     Main,
@@ -380,6 +392,38 @@ pub enum PageReport {
     TempoEditor,
     About,
     Status,
+}
+
+//getter helpers for use in statemachine
+impl Page {
+    pub fn device(&self) -> usize {
+        match self {
+            Self::DeviceParam { device, .. } => *device,
+            Self::DeviceData { device } => *device,
+            Self::DeviceDataLoad { device, .. } => *device,
+            _ => 0,
+        }
+    }
+    pub fn page(&self) -> usize {
+        match self {
+            Self::DeviceParam { page, .. } => *page,
+            Self::ParamView { page, .. } => *page,
+            _ => 0,
+        }
+    }
+    pub fn index(&self) -> usize {
+        match self {
+            Self::DeviceDataLoad { index, .. } => *index,
+            _ => 0,
+        }
+    }
+    pub fn view(&self) -> usize {
+        match self {
+            Self::UserView { view, .. } => *view,
+            Self::ParamView { view, .. } => *view,
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -672,19 +716,14 @@ enum Events {
     PopupRequested,
     PopupTimeout,
 
-    UserViewRequested(usize), // which view index, translated into a local index
-
-    SetViewSelected((usize, usize)), //index, page
-    SetViewPageSelected(usize),
-
-    DeviceParamsSelected((usize, usize)), //index, page
-    DeviceDataSelected(usize),            //index
-
     PSUConnected(bool),
     BatteryLow(bool),
     BatteryCharge(u8),
 
     SplashComplete,
+
+    SetViewPageSelected(usize),
+    PageRequested(Page),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -722,6 +761,14 @@ impl DataSel {
         Self {
             instance,
             selected: 0,
+            count: dataref_count,
+        }
+    }
+
+    pub fn new_selected(instance: usize, selected: usize, dataref_count: usize) -> Self {
+        Self {
+            instance,
+            selected,
             count: dataref_count,
         }
     }
@@ -929,7 +976,7 @@ pub mod top {
     use super::{
         Button, Cmd, Context, Events, JOG_WHEEL_ENCODER, JOG_WHEEL_TOUCH, POWER_MENU,
         POWER_MENU_CLEAR_GRAPH_INDEX, POWER_MENU_LAUNCH_MOVE_INDEX, POWER_MENU_MIDI_RESET_INDEX,
-        POWER_MENU_POWER_DOWN_INDEX, POWER_MENU_RELOAD_GRAPH_INDEX, PowerCommand,
+        POWER_MENU_POWER_DOWN_INDEX, POWER_MENU_RELOAD_GRAPH_INDEX, Page, PowerCommand,
         VOLUME_WHEEL_ENCODER, VOLUME_WHEEL_TOUCH,
     };
 
@@ -979,22 +1026,19 @@ pub mod top {
             _ + BatteryCharge(_) [ctx.battery_charge() != *event] / ctx.emit(Cmd::BatteryCharge(*event));,
             _ + PSUConnected(_) [ctx.psu_connected().is_none() || ctx.psu_connected().unwrap() != *event] / ctx.emit(Cmd::PSUConnected(*event));,
 
-            VolumeEditor(LastView) + SetViewSelected(_) / ctx.emit(Cmd::ClearVolume); = Main,
-            VolumeEditor(LastView) + SetViewPageSelected(_) / ctx.emit(Cmd::ClearVolume); = Main,
-
-            VolumeEditor(LastView) + DeviceParamsSelected(_) / ctx.emit(Cmd::ClearVolume); = Main,
-            Popup(LastView) + DeviceParamsSelected(_) = Main,
-            VolumeEditor(LastView) + DeviceDataSelected(_) / ctx.emit(Cmd::ClearVolume); = Main,
-            Popup(LastView) + DeviceDataSelected(_) = Main,
-
             Main + PopupRequested = Popup(LastView::Main),
             Popup(LastView) + PopupTimeout [*state == LastView::Main] = Main,
             Popup(LastView) + EncTouch(JOG_WHEEL_TOUCH) [*state == LastView::Main] = Main,
 
-            _ + UserViewRequested(_) = Main,
-
             _ + ChildProcessError = DisplayChildProcessError,
             DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PowerMenu(POWER_MENU_POWER_DOWN_INDEX),
+
+            //TODO we don't want to back out of DisplayChildProcessError
+            VolumeEditor(LastView) + SetViewPageSelected(_) / ctx.emit(Cmd::ClearVolume); = Main,
+            _ + PageRequested(Page::Main) / ctx.emit(Cmd::ClearVolume); = Main,
+            _ + PageRequested(Page::VolumeEditor) = VolumeEditor(LastView::Main),
+            _ + PageRequested(Page::PowerMenu) / ctx.emit(Cmd::ClearVolume); = PowerMenu(0),
+            _ + PageRequested(_) / ctx.emit(Cmd::ClearVolume); = Main,
         }
     }
 
@@ -1082,9 +1126,9 @@ smlang::statemachine! {
 
         //skip patcher instances menu if there is only 1 instance
         PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Params) > 1] = PatcherInstances(InstSel::new(InstSelType::Params, state.index, ctx.instances_count(InstSelType::Params))),
-        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Params) == 1] = Menu(DEVICE_PARAMS_INDEX),
+        PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Params) <= 1] = Menu(DEVICE_PARAMS_INDEX),
         PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::new(InstSelType::Datarefs, state.instance(), ctx.instances_count(InstSelType::Datarefs))),
-        PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) == 1] = Menu(DEVICE_DATA_INDEX),
+        PatcherDatarefs(DataSel) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Datarefs) <= 1] = Menu(DEVICE_DATA_INDEX),
 
         PatcherParams(ParamPage) + EncRight(JOG_WHEEL_ENCODER) [ctx.instance_param_pages(state.index) > state.page + 1]
             = PatcherParams(ParamPage { index: state.index, page: state.page + 1, focused: state.focused }),
@@ -1137,7 +1181,7 @@ smlang::statemachine! {
         UserViewList(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
 
         UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() > 1] = UserViewList(*state),
-        UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() < 2] = Menu(USER_VIEWS_INDEX),
+        UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() <= 1] = Menu(USER_VIEWS_INDEX),
         UserView(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
 
         UserView(usize) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: *state, paramindex: *event, offset: -1});,
@@ -1184,10 +1228,30 @@ smlang::statemachine! {
         Status + BtnDown(Button::Back) = Menu(STATUS_INDEX),
 
         //direct OSC based state changes
-        _ + UserViewRequested(_) [ctx.userviews_count() > *event] = UserView(*event),
-        _ + DeviceParamsSelected(_) = PatcherParams(ParamPage { index: event.0, page: event.1, focused: None }),
-        _ + DeviceDataSelected(_) = PatcherDatarefs(DataSel::new(*event, ctx.dataref_count(*event))),
-        _ + SetViewSelected(_) = ParamView(ParamPage { index: event.0, page: event.1, focused: None }),
+        _ + PageRequested(Page::Main) = Menu(0),
+        _ + PageRequested(Page::LoadGraph) = LoadGraph(0),
+
+        _ + PageRequested(Page::GraphPresetMenu) = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
+        _ + PageRequested(Page::GraphPresetLoadMenu) = GraphPresetsList(PresetListState::new(PresetListOp::Load)),
+        _ + PageRequested(Page::GraphPresetOverwriteMenu) = GraphPresetsList(PresetListState::new(PresetListOp::Overwrite)),
+        _ + PageRequested(Page::GraphPresetDeleteMenu) = GraphPresetsList(PresetListState::new(PresetListOp::Delete)),
+        _ + PageRequested(Page::GraphPresetInitialMenu) = GraphPresetsList(PresetListState::new(PresetListOp::SetInitial)),
+
+        _ + PageRequested(Page::DeviceParamMenu) = PatcherInstances(InstSel::enter(InstSelType::Params, ctx.instances_count(InstSelType::Params))),
+        _ + PageRequested(Page::DeviceDataMenu) = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
+        _ + PageRequested(Page::DeviceLoadMenu) = PatchersList(0),
+        _ + PageRequested(Page::DeviceParam { .. }) = PatcherParams(ParamPage { index: event.device(), page: event.page(), focused: None }),
+        _ + PageRequested(Page::DeviceData { .. }) = PatcherDatarefs(DataSel::new(event.device(), ctx.dataref_count(event.device()))),
+        _ + PageRequested(Page::DeviceDataLoad { .. }) = PatcherDatarefLoad(DataLoad::new(DataSel::new_selected(event.device(), event.index(), ctx.dataref_count(event.device())), ctx.datafile_count())),
+        _ + PageRequested(Page::ParamViewMenu) = ParamViewList(0),
+        _ + PageRequested(Page::ParamView { .. }) = ParamView(ParamPage { index: event.view(), page: event.page(), focused: None }),
+        _ + PageRequested(Page::UserViewMenu) = UserViewList(0),
+        _ + PageRequested(Page::UserView { .. }) = UserView(event.view()),
+
+        _ + PageRequested(Page::TransportEditor) = TransportEditor(0),
+        _ + PageRequested(Page::TempoEditor) = TempoEditor,
+        _ + PageRequested(Page::About) = About,
+        _ + PageRequested(Page::Status) = Status,
     }
 }
 
@@ -1317,7 +1381,7 @@ pub struct StateController {
     output_max: Arc<[AtomicF32; 2]>,
     output_max_smoothed: [f32; 2],
 
-    page_report_last: Option<PageReport>,
+    page_report_last: Option<Page>,
 }
 
 #[derive(Clone, Debug)]
@@ -1729,8 +1793,14 @@ impl StateController {
             self.patchers_datarefs_instance_names.len(),
         );
         common.userviews_count = self.userviews.len();
+        self.userview_names = self
+            .userviews
+            .iter()
+            .map(|(index, v)| v.name_or_default(*index))
+            .collect();
 
         self.clear_param_views(); //to be updated later
+        //
         self.update_common(common);
 
         self.handle_event(Events::InstancesChanged(indexes.len()));
@@ -2170,7 +2240,10 @@ impl StateController {
                             let pages = ctx.view_param_pages(index);
                             if pages > 0 {
                                 page = page.min(pages - 1);
-                                self.handle_event(Events::SetViewSelected((index, page)));
+                                self.handle_event(Events::PageRequested(Page::ParamView {
+                                    view: index,
+                                    page,
+                                }));
                             }
                         }
                     }
@@ -2188,7 +2261,9 @@ impl StateController {
                     {
                         for (index, key) in self.userviews.keys().enumerate() {
                             if *key == viewindex {
-                                self.handle_event(Events::UserViewRequested(index));
+                                self.handle_event(Events::PageRequested(Page::UserView {
+                                    view: index,
+                                }));
                                 break;
                             }
                         }
@@ -2299,10 +2374,11 @@ impl StateController {
                             eprintln!("no instance with visible params and index {}", index);
                             return;
                         };
-                        if pages > 0 {
-                            page = page.min(pages - 1);
-                            self.handle_event(Events::DeviceParamsSelected((local, page)));
-                        }
+
+                        self.handle_event(Events::PageRequested(Page::DeviceParam {
+                            device: local,
+                            page,
+                        }));
                     }
                 }
                 DEVICE_DATA_DISPLAY => {
@@ -2319,12 +2395,71 @@ impl StateController {
                             }
                         }
                         if let Some(local) = local {
-                            self.handle_event(Events::DeviceDataSelected(local));
+                            self.handle_event(Events::PageRequested(Page::DeviceData {
+                                device: local,
+                            }));
                         } else {
                             eprintln!("no instance with visible datarefs and index {}", index);
                         };
                     }
                 }
+                MENU_ADDR_POWER => self.handle_event(Events::PageRequested(Page::PowerMenu)),
+                MENU_ADDR_VOLUME => self.handle_event(Events::PageRequested(Page::VolumeEditor)),
+                MENU_ADDR_MAIN => self.handle_event(Events::PageRequested(Page::Main)),
+                MENU_ADDR_GRAPH_LOAD => self.handle_event(Events::PageRequested(Page::LoadGraph)),
+
+                MENU_ADDR_GRAPH_PRESET => {
+                    self.handle_event(Events::PageRequested(Page::GraphPresetMenu))
+                }
+                MENU_ADDR_GRAPH_PRESET_LOAD => {
+                    self.handle_event(Events::PageRequested(Page::GraphPresetLoadMenu))
+                }
+                MENU_ADDR_GRAPH_PRESET_OVERWRITE => {
+                    self.handle_event(Events::PageRequested(Page::GraphPresetOverwriteMenu))
+                }
+                MENU_ADDR_GRAPH_PRESET_INITIAL => {
+                    self.handle_event(Events::PageRequested(Page::GraphPresetInitialMenu))
+                }
+                MENU_ADDR_GRAPH_PRESET_DELETE => {
+                    self.handle_event(Events::PageRequested(Page::GraphPresetDeleteMenu))
+                }
+
+                MENU_ADDR_DEVICE_PARAMS => {
+                    self.handle_event(Events::PageRequested(Page::DeviceParamMenu))
+                }
+                MENU_ADDR_DEVICE_DATA => {
+                    self.handle_event(Events::PageRequested(Page::DeviceDataMenu))
+                }
+                MENU_ADDR_DEVICE_DATA_LOAD => {
+                    if msg.args.len() >= 2
+                        && let Some(device) = as_index(&msg.args[0])
+                        && let Some(index) = as_index(&msg.args[1])
+                    {
+                        self.handle_event(Events::PageRequested(Page::DeviceDataLoad {
+                            device,
+                            index,
+                        }))
+                    }
+                }
+                MENU_ADDR_DEVICE_LOAD => {
+                    self.handle_event(Events::PageRequested(Page::DeviceLoadMenu))
+                }
+
+                MENU_ADDR_USERVIEW => self.handle_event(Events::PageRequested(Page::UserViewMenu)),
+                MENU_ADDR_PARM_VIEW => {
+                    self.handle_event(Events::PageRequested(Page::ParamViewMenu))
+                }
+
+                MENU_ADDR_TRANSPORT => {
+                    self.handle_event(Events::PageRequested(Page::TransportEditor))
+                }
+                MENU_ADDR_TRANSPORT_TEMPO => {
+                    self.handle_event(Events::PageRequested(Page::TempoEditor))
+                }
+
+                MENU_ADDR_ABOUT => self.handle_event(Events::PageRequested(Page::About)),
+                MENU_ADDR_STATUS => self.handle_event(Events::PageRequested(Page::Status)),
+
                 _ => {
                     if let Some(captures) = INST_ALIAS_REGEX.captures(&msg.addr) {
                         let index = captures
@@ -2811,9 +2946,9 @@ impl StateController {
         }
     }
 
-    fn render_main(&mut self, frame: &mut ratatui::Frame) -> (Option<usize>, Option<PageReport>) {
+    fn render_main(&mut self, frame: &mut ratatui::Frame) -> (Option<usize>, Option<Page>) {
         let state = self.sm.state().clone();
-        let mut report: Option<PageReport> = None;
+        let mut report: Option<Page> = None;
 
         let setup_common = |line: u32, s: &mut Self| {
             s.do_once(line, |s| {
@@ -2828,7 +2963,7 @@ impl StateController {
 
         match state {
             States::Menu(selected) => {
-                report = Some(PageReport::Main);
+                report = Some(Page::Main);
                 self.do_once(line!(), |s| {
                     s.render_buttons([]);
                 });
@@ -2859,7 +2994,7 @@ impl StateController {
                 render_menu(frame, None, &MENU_ITEMS, indicator, enabled, selected, None);
             }
             States::TransportEditor(selected) => {
-                report = Some(PageReport::TransportEditor);
+                report = Some(Page::TransportEditor);
                 setup_common(line!(), self);
 
                 let tempo = format!("BPM: {:.1}", self.bpm);
@@ -2903,7 +3038,7 @@ impl StateController {
                 );
             }
             States::TempoEditor => {
-                report = Some(PageReport::TempoEditor);
+                report = Some(Page::TempoEditor);
                 setup_common(line!(), self);
 
                 let title = format_title("Tempo");
@@ -2916,7 +3051,7 @@ impl StateController {
                 frame.render_widget(paragraph, layout[1]);
             }
             States::About => {
-                report = Some(PageReport::About);
+                report = Some(Page::About);
                 setup_common(line!(), self);
 
                 let title = format_title("About");
@@ -2936,7 +3071,7 @@ impl StateController {
                 frame.render_widget(paragraph, layout[1]);
             }
             States::Status => {
-                report = Some(PageReport::Status);
+                report = Some(Page::Status);
                 setup_common(line!(), self);
 
                 let title = format_title("Status");
@@ -2983,7 +3118,7 @@ impl StateController {
                 frame.render_widget(charge, layout[2]);
             }
             States::LoadGraph(selected) => {
-                report = Some(PageReport::LoadGraph);
+                report = Some(Page::LoadGraph);
                 setup_common(line!(), self);
                 render_menu(
                     frame,
@@ -2996,7 +3131,7 @@ impl StateController {
                 );
             }
             States::GraphPresetMenu(selected) => {
-                report = Some(PageReport::GraphPresetMenu);
+                report = Some(Page::GraphPresetMenu);
                 setup_common(line!(), self);
 
                 let enabled = |index: usize| -> bool {
@@ -3032,19 +3167,19 @@ impl StateController {
             States::GraphPresetsList(state) => {
                 let title = match state.op() {
                     PresetListOp::Load => {
-                        report = Some(PageReport::GraphPresetLoadMenu);
+                        report = Some(Page::GraphPresetLoadMenu);
                         "Load Preset"
                     }
                     PresetListOp::Overwrite => {
-                        report = Some(PageReport::GraphPresetOverwriteMenu);
+                        report = Some(Page::GraphPresetOverwriteMenu);
                         "Overwrite Preset"
                     }
                     PresetListOp::SetInitial => {
-                        report = Some(PageReport::GraphPresetInitialMenu);
+                        report = Some(Page::GraphPresetInitialMenu);
                         "Set Initial"
                     }
                     PresetListOp::Delete => {
-                        report = Some(PageReport::GraphPresetDeleteMenu);
+                        report = Some(Page::GraphPresetDeleteMenu);
                         "Delete Preset"
                     }
                 };
@@ -3063,11 +3198,11 @@ impl StateController {
                 setup_common(line!(), self);
                 let (title, items) = match entry.typ() {
                     InstSelType::Params => {
-                        report = Some(PageReport::DeviceParamMenu);
+                        report = Some(Page::DeviceParamMenu);
                         (&"Device Params", &self.patchers_params_instance_names)
                     }
                     InstSelType::Datarefs => {
-                        report = Some(PageReport::DeviceDataMenu);
+                        report = Some(Page::DeviceDataMenu);
                         (&"Device Data", &self.patchers_datarefs_instance_names)
                     }
                 };
@@ -3088,103 +3223,111 @@ impl StateController {
                 let page = state.page;
                 let focused = state.focused;
 
-                let pages = self.context().instance_param_pages(index);
-
-                //TODO how to compute this only when states change?
-                let mut focus: Option<ParamFocus> = None;
-                if let Some(instance) = self.instance_params.get(index) {
-                    if let Some(first) = instance.get(0)
-                        && let Some(param) = self.params.get(*first)
-                    {
-                        report = Some(PageReport::DeviceParam {
-                            device: param.instance_index(),
-                            page,
-                        });
-                    }
-                    let offset = page * PARAM_PAGE_SIZE;
-
-                    for (pindex, o) in instance
-                        .iter()
-                        .skip(offset)
-                        .take(PARAM_PAGE_SIZE)
-                        .zip(self.param_values.iter_mut())
-                    {
-                        if let Some(param) = self.params.get(*pindex) {
-                            *o = param.color();
+                if let Some(name) = self.patchers_params_instance_names.get(index) {
+                    let pages = self.context().instance_param_pages(index);
+                    //TODO how to compute this only when states change?
+                    let mut focus: Option<ParamFocus> = None;
+                    if let Some(instance) = self.instance_params.get(index) {
+                        if let Some(first) = instance.get(0)
+                            && let Some(param) = self.params.get(*first)
+                        {
+                            report = Some(Page::DeviceParam {
+                                device: param.instance_index(),
+                                page,
+                            });
                         }
-                    }
+                        let offset = page * PARAM_PAGE_SIZE;
 
-                    if let Some(focused) = focused {
-                        let pindex = offset + focused;
-                        if let Some(pindex) = instance.get(pindex) {
+                        for (pindex, o) in instance
+                            .iter()
+                            .skip(offset)
+                            .take(PARAM_PAGE_SIZE)
+                            .zip(self.param_values.iter_mut())
+                        {
                             if let Some(param) = self.params.get(*pindex) {
-                                let label = param.display_name().to_string();
-                                let value = param.render_value();
-                                let norm = param.norm_prefer_pending();
-                                focus = Some(ParamFocus { label, value, norm });
-                            } else {
-                                //eprintln!("cannot get param at {}", *pindex);
+                                *o = param.color();
                             }
-                        } else {
-                            //eprintln!("cannot get pinstance {}", pindex);
+                        }
+
+                        if let Some(focused) = focused {
+                            let pindex = offset + focused;
+                            if let Some(pindex) = instance.get(pindex) {
+                                if let Some(param) = self.params.get(*pindex) {
+                                    let label = param.display_name().to_string();
+                                    let value = param.render_value();
+                                    let norm = param.norm_prefer_pending();
+                                    focus = Some(ParamFocus { label, value, norm });
+                                } else {
+                                    //eprintln!("cannot get param at {}", *pindex);
+                                }
+                            } else {
+                                //eprintln!("cannot get pinstance {}", pindex);
+                            }
                         }
                     }
+                    let title = format!("{} Params", name);
+                    render_param_page(frame, &title, focus, page, pages);
+                } else {
+                    render_empty(frame);
                 }
-
-                let name = self.patchers_params_instance_names.get(index).unwrap();
-                let title = format!("{} Params", name);
-
-                render_param_page(frame, &title, focus, page, pages);
             }
             States::PatcherDatarefs(entry) => {
                 setup_common(line!(), self);
                 if let Some(inst) = self
-                    .instances
-                    .get(self.patchers_datarefs_instance_indexes[entry.instance()].0)
+                    .patchers_datarefs_instance_indexes
+                    .get(entry.instance())
+                    && let Some(inst) = self.instances.get(inst.0)
                 {
-                    report = Some(PageReport::DeviceData {
-                        device: inst.index(),
-                    });
-                    let name = self
-                        .patchers_datarefs_instance_names
-                        .get(entry.instance())
-                        .unwrap();
-                    let title = format!("{} Data", name);
+                    if let Some(name) = self.patchers_datarefs_instance_names.get(entry.instance())
+                    {
+                        report = Some(Page::DeviceData {
+                            device: inst.index(),
+                        });
+                        let title = format!("{} Data", name);
 
-                    render_menu(
-                        frame,
-                        Some(title.as_str()),
-                        inst.visible_datarefs().as_slice(),
-                        default_indicator,
-                        all_enabled,
-                        entry.selected(),
-                        None,
-                    );
+                        render_menu(
+                            frame,
+                            Some(title.as_str()),
+                            inst.visible_datarefs().as_slice(),
+                            default_indicator,
+                            all_enabled,
+                            entry.selected(),
+                            None,
+                        );
+                    } else {
+                        render_empty(frame);
+                    }
+                } else {
+                    render_empty(frame);
                 }
             }
             States::PatcherDatarefLoad(entry) => {
                 setup_common(line!(), self);
                 if let Some(inst) = self
-                    .instances
-                    .get(self.patchers_datarefs_instance_indexes[entry.dataref().instance()].0)
+                    .patchers_datarefs_instance_indexes
+                    .get(entry.dataref().instance())
+                    && let Some(inst) = self.instances.get(inst.0)
                 {
                     let indicated =
                         inst.visible_datarefs()
                             .get(entry.dataref().selected())
                             .map(|key| {
-                                let dr = inst.dataref_mappings().get(key).unwrap();
-                                if let Some(filename) = dr.mapping() {
-                                    self.datafile_list
-                                        .iter()
-                                        .position(|item| item == filename)
-                                        .map(|index| index + 1) //+ 1 because of (unload) being first item
-                                        .unwrap_or(0)
+                                if let Some(dr) = inst.dataref_mappings().get(key) {
+                                    if let Some(filename) = dr.mapping() {
+                                        self.datafile_list
+                                            .iter()
+                                            .position(|item| item == filename)
+                                            .map(|index| index + 1) //+ 1 because of (unload) being first item
+                                            .unwrap_or(0)
+                                    } else {
+                                        0
+                                    }
                                 } else {
                                     0
                                 }
                             });
 
-                    report = Some(PageReport::DeviceDataLoad {
+                    report = Some(Page::DeviceDataLoad {
                         device: inst.index(),
                         index: entry.dataref().selected(),
                     });
@@ -3197,11 +3340,13 @@ impl StateController {
                         entry.selected(),
                         indicated,
                     );
+                } else {
+                    render_empty(frame);
                 }
             }
             States::PatchersList(selected) => {
                 setup_common(line!(), self);
-                report = Some(PageReport::DeviceLoadMenu);
+                report = Some(Page::DeviceLoadMenu);
                 render_menu(
                     frame,
                     Some("Load Patcher"),
@@ -3214,7 +3359,7 @@ impl StateController {
             }
             States::UserViewList(selected) => {
                 setup_common(line!(), self);
-                report = Some(PageReport::UserViewMenu);
+                report = Some(Page::UserViewMenu);
                 render_menu(
                     frame,
                     Some("User Views"),
@@ -3227,10 +3372,10 @@ impl StateController {
             }
             States::UserView(selected) => {
                 setup_common(line!(), self);
-                userview = Some(selected);
 
                 if let Some(view) = self.userviews.keys().nth(selected) {
-                    report = Some(PageReport::UserView { view: *view });
+                    userview = Some(selected);
+                    report = Some(Page::UserView { view: *view });
                 }
 
                 if let Some(userview) = self.userviews.values().nth(selected)
@@ -3262,6 +3407,8 @@ impl StateController {
                             }
                         }
                     }
+                } else {
+                    render_empty(frame);
                 }
             }
             States::ParamViewList(selected) => {
@@ -3276,7 +3423,7 @@ impl StateController {
                     frame.render_widget(title, layout[0]);
                     frame.render_widget(paragraph, layout[1]);
                 } else {
-                    report = Some(PageReport::ParamViewMenu);
+                    report = Some(Page::ParamViewMenu);
                     render_menu(
                         frame,
                         Some(title),
@@ -3303,7 +3450,7 @@ impl StateController {
                 {
                     let offset = page * PARAM_PAGE_SIZE;
 
-                    report = Some(PageReport::ParamView {
+                    report = Some(Page::ParamView {
                         view: view.index(),
                         page,
                     });
@@ -3401,7 +3548,7 @@ impl StateController {
         let _ = terminal.clear();
 
         let mut userview: Option<usize> = None;
-        let mut report: Option<PageReport> = None;
+        let mut report: Option<Page> = None;
         let mut splash: bool = false;
         let mut splash_x: usize = 0;
         terminal
@@ -3448,7 +3595,7 @@ impl StateController {
                     );
                 }
                 States::PowerMenu(selected) => {
-                    report = Some(PageReport::PowerMenu);
+                    report = Some(Page::PowerMenu);
                     let can_exit = self.child_process_error.is_none();
                     self.do_once(line!(), |s| {
                         if can_exit {
@@ -3469,7 +3616,7 @@ impl StateController {
                     );
                 }
                 States::VolumeEditor(_) => {
-                    report = Some(PageReport::VolumeEditor);
+                    report = Some(Page::VolumeEditor);
                     self.do_once(line!(), |s| {
                         s.render_buttons([(BACK_MIDI, MoveColor::LightGray)]);
                     });
@@ -3593,96 +3740,96 @@ impl StateController {
             self.page_report_last = Some(report);
 
             let msg = match report {
-                PageReport::PowerMenu => OscMessage {
+                Page::PowerMenu => OscMessage {
                     addr: MENU_ADDR_POWER.to_string(),
                     args: vec![],
                 },
-                PageReport::VolumeEditor => OscMessage {
+                Page::VolumeEditor => OscMessage {
                     addr: MENU_ADDR_VOLUME.to_string(),
                     args: vec![],
                 },
-                PageReport::Main => OscMessage {
+                Page::Main => OscMessage {
                     addr: MENU_ADDR_MAIN.to_string(),
                     args: vec![],
                 },
-                PageReport::LoadGraph => OscMessage {
+                Page::LoadGraph => OscMessage {
                     addr: MENU_ADDR_GRAPH_LOAD.to_string(),
                     args: vec![],
                 },
-                PageReport::GraphPresetMenu => OscMessage {
+                Page::GraphPresetMenu => OscMessage {
                     addr: MENU_ADDR_GRAPH_PRESET.to_string(),
                     args: vec![],
                 },
-                PageReport::GraphPresetLoadMenu => OscMessage {
+                Page::GraphPresetLoadMenu => OscMessage {
                     addr: MENU_ADDR_GRAPH_PRESET_LOAD.to_string(),
                     args: vec![],
                 },
-                PageReport::GraphPresetOverwriteMenu => OscMessage {
+                Page::GraphPresetOverwriteMenu => OscMessage {
                     addr: MENU_ADDR_GRAPH_PRESET_OVERWRITE.to_string(),
                     args: vec![],
                 },
-                PageReport::GraphPresetInitialMenu => OscMessage {
+                Page::GraphPresetInitialMenu => OscMessage {
                     addr: MENU_ADDR_GRAPH_PRESET_INITIAL.to_string(),
                     args: vec![],
                 },
-                PageReport::GraphPresetDeleteMenu => OscMessage {
+                Page::GraphPresetDeleteMenu => OscMessage {
                     addr: MENU_ADDR_GRAPH_PRESET_DELETE.to_string(),
                     args: vec![],
                 },
 
-                PageReport::DeviceParamMenu => OscMessage {
+                Page::DeviceParamMenu => OscMessage {
                     addr: MENU_ADDR_DEVICE_PARAMS.to_string(),
                     args: vec![],
                 },
-                PageReport::DeviceDataMenu => OscMessage {
+                Page::DeviceDataMenu => OscMessage {
                     addr: MENU_ADDR_DEVICE_DATA.to_string(),
                     args: vec![],
                 },
-                PageReport::DeviceDataLoad { device, index } => OscMessage {
+                Page::DeviceDataLoad { device, index } => OscMessage {
                     addr: MENU_ADDR_DEVICE_DATA_LOAD.to_string(),
                     args: vec![OscType::Int(device as _), OscType::Int(index as _)],
                 },
-                PageReport::DeviceLoadMenu => OscMessage {
+                Page::DeviceLoadMenu => OscMessage {
                     addr: MENU_ADDR_DEVICE_LOAD.to_string(),
                     args: vec![],
                 },
-                PageReport::DeviceParam { device, page } => OscMessage {
+                Page::DeviceParam { device, page } => OscMessage {
                     addr: DEVICE_PARAM_DISPLAY.to_string(),
                     args: vec![OscType::Int(device as _), OscType::Int(page as _)],
                 },
-                PageReport::DeviceData { device } => OscMessage {
+                Page::DeviceData { device } => OscMessage {
                     addr: DEVICE_DATA_DISPLAY.to_string(),
                     args: vec![OscType::Int(device as _)],
                 },
-                PageReport::ParamViewMenu => OscMessage {
+                Page::ParamViewMenu => OscMessage {
                     addr: MENU_ADDR_PARM_VIEW.to_string(),
                     args: vec![],
                 },
-                PageReport::ParamView { view, page } => OscMessage {
+                Page::ParamView { view, page } => OscMessage {
                     addr: PARAM_VIEW_DISPLAY.to_string(),
                     args: vec![OscType::Int(view as _), OscType::Int(page as _)],
                 },
-                PageReport::UserViewMenu => OscMessage {
+                Page::UserViewMenu => OscMessage {
                     addr: MENU_ADDR_USERVIEW.to_string(),
                     args: vec![],
                 },
-                PageReport::UserView { view } => OscMessage {
+                Page::UserView { view } => OscMessage {
                     addr: USER_VIEW_DISPLAY.to_string(),
                     args: vec![OscType::Int(view as _)],
                 },
-                PageReport::TransportEditor => OscMessage {
+                Page::TransportEditor => OscMessage {
                     addr: MENU_ADDR_TRANSPORT.to_string(),
                     args: vec![],
                 },
-                PageReport::TempoEditor => OscMessage {
+                Page::TempoEditor => OscMessage {
                     addr: MENU_ADDR_TRANSPORT_TEMPO.to_string(),
                     args: vec![],
                 },
-                PageReport::About => OscMessage {
+                Page::About => OscMessage {
                     addr: MENU_ADDR_ABOUT.to_string(),
                     args: vec![],
                 },
-                PageReport::Status => OscMessage {
+                Page::Status => OscMessage {
                     addr: MENU_ADDR_STATUS.to_string(),
                     args: vec![],
                 },
@@ -3738,11 +3885,7 @@ impl StateController {
         let mut doprocess = !top_trans;
         match e {
             Events::EncTouch(e) if e < 8 => doprocess = true,
-            Events::DeviceParamsSelected(_)
-            | Events::DeviceDataSelected(_)
-            | Events::SetViewSelected(_)
-            | Events::SetViewPageSelected(_)
-            | Events::UserViewRequested(_) => doprocess = true,
+            Events::SetViewPageSelected(_) | Events::PageRequested(_) => doprocess = true,
             Events::SetNamesChanged
             | Events::SetPresetNamesChanged
             | Events::SetCurrentChanged
