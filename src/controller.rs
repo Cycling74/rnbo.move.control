@@ -67,11 +67,13 @@ const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 const TRANSPORT_POS_ADDR: &str = "/rnbo/jack/transport/position";
 const GRAPH_RESET_ADDR: &str = "/rnbo/jack/control/midi_reset";
 
-const SPLASH_DATA: &'static [u8] = include_bytes!("../content/splash-sprites.bmp");
+const SPLASH_DATA: &'static [u8] = include_bytes!("../content/rnbo-letters-128x64-inverted.bmp");
 static SPLASH_BMP: Lazy<tinybmp::Bmp<BinaryColor>> = Lazy::new(|| {
     tinybmp::Bmp::<BinaryColor>::from_slice(SPLASH_DATA)
-        .expect("to create bitpmap from included bitmap data")
+        .expect("to create bitmap from included bitmap data")
 });
+
+const SPLASH_FRAMES: usize = 2000 / DISPLAY_FRAME_PERIOD_MS as usize; //2 seconds
 
 pub const INST_UNLOAD_ADDR: &str = "/rnbo/inst/control/unload";
 pub const INST_LOAD_ADDR: &str = "/rnbo/inst/control/load";
@@ -3553,12 +3555,9 @@ impl StateController {
                     });
 
                     if self.has_all_capabilities {
-                        //XXX hard-coded font size
-                        splash_x = frame.count() * frame.area().width as usize * 8;
-                        if splash_x >= SPLASH_BMP.size().width as usize {
+                        splash = true;
+                        if frame.count() > SPLASH_FRAMES {
                             self.handle_event(Events::SplashComplete);
-                        } else {
-                            splash = true;
                         }
                     } else {
                         let content = vec![
@@ -3704,22 +3703,8 @@ impl StateController {
             .expect("to render frame");
 
         if splash {
-            if let Some(bmp) = Lazy::get(&SPLASH_BMP) {
-                use embedded_graphics::image::GetPixel;
-                let display = terminal.backend_mut().display_mut();
-                for row in 0..display.size().height as i32 {
-                    for col in 0..display.size().width as i32 {
-                        if let Some(color) = bmp.pixel(Point {
-                            x: col + splash_x as i32,
-                            y: row as _,
-                        }) {
-                            Pixel(Point::new(col as _, row as _), color)
-                                .draw(display)
-                                .expect("to render splash");
-                        }
-                    }
-                }
-            }
+            let display = terminal.backend_mut().display_mut();
+            SPLASH_BMP.draw(display).expect("should draw");
         } else if let Some(index) = userview {
             if let Some(userview) = self.userviews.get_mut(&index) {
                 userview.render(terminal.backend_mut().display_mut());
