@@ -120,8 +120,8 @@ impl jack::ProcessHandler for Driver {
                     },
                     //CC
                     0xBF => match i.bytes[1] {
-                        //wheel press/turn, back, menu (session/note), volume
-                        3 | 14 | 51 | 50 | 79 => true,
+                        //wheel press/turn, back, volume
+                        3 | 14 | 51 | 79 => true,
                         //encoders
                         71..=78 => filter_encoders,
                         _ => false,
