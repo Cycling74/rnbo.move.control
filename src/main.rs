@@ -699,7 +699,7 @@ async fn with_client(
     let set_view_regex =
         Regex::new(r"^/rnbo/inst/control/sets/views/list/\d+$").expect("to create set view regex");
     let patchers_path_regex =
-        Regex::new(r"^/rnbo/patchers/\w+$").expect("to create patchers regex");
+        Regex::new(r"^/rnbo/patchers/[^\\]+$").expect("to create patchers regex");
 
     //http://c74rpi.local:5678
 
@@ -782,7 +782,7 @@ async fn with_client(
                 OSCQueryContents<HashMap<String, OSCQueryContents<PatcherListItem>>>,
                 _,
             > = serde_json::from_value(json.clone());
-            let contents = parsed.map_err(|_| ())?.contents.ok_or(())?;
+            let contents = parsed.map_err(|_| ())?.contents.unwrap_or_default();
             Ok(contents.into_keys().collect())
         } else {
             Err(())
@@ -962,6 +962,8 @@ async fn with_client(
                                     Message::Text(text) => {
                                         let cmd: serde_json::Result<serde_json::Value> =
                                             serde_json::from_str(text.as_str());
+                                        //println!("cmd {:?}", cmd);
+
                                         if let Ok(cmd) = cmd
                                             && let (Some(name), Some(data)) = (
                                                 cmd.get("COMMAND").unwrap().as_str(),
