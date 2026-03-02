@@ -281,6 +281,17 @@ fn render_param_page(
         frame.render_stateful_widget(sb, layout[3], &mut scrollbar_state);
     }
 }
+
+fn render_empty(frame: &mut ratatui::Frame, title: &str) {
+    let title = format_title(title);
+    let content = vec![Line::default(), Line::from("Empty").centered()];
+    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
+
+    let layout = titled_layout(frame.area());
+    frame.render_widget(title, layout[0]);
+    frame.render_widget(paragraph, layout[1]);
+}
+
 fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> bool>(
     frame: &mut ratatui::Frame,
     title: Option<&str>,
@@ -290,58 +301,52 @@ fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> 
     selected: usize,
     indicated: Option<usize>,
 ) {
-    let label_width = frame.area().width - 2;
-    let frame_index = frame.count();
-    let builder = ListBuilder::new(|context| {
-        use crate::widget::menu::MenuItem;
-        let indicated = Some(context.index) == indicated;
-        let s: &str = items[context.index].as_ref();
-        let mut item = if context.is_selected {
-            let selector = selector(context.index);
-            let s = animate_text(s, label_width, frame_index);
-            MenuItem::new_selected(s, indicated, selector)
-        } else {
-            MenuItem::new(s, indicated)
-        };
+    if items.len() == 0 {
+        render_empty(frame, title.unwrap_or("Empty"));
+    } else {
+        let label_width = frame.area().width - 2;
+        let frame_index = frame.count();
+        let builder = ListBuilder::new(|context| {
+            use crate::widget::menu::MenuItem;
+            let indicated = Some(context.index) == indicated;
+            let s: &str = items[context.index].as_ref();
+            let mut item = if context.is_selected {
+                let selector = selector(context.index);
+                let s = animate_text(s, label_width, frame_index);
+                MenuItem::new_selected(s, indicated, selector)
+            } else {
+                MenuItem::new(s, indicated)
+            };
 
-        // Style the selected element
-        if context.is_selected {
-            item.style = item.style.add_modifier(ratatui::style::Modifier::BOLD);
+            // Style the selected element
+            if context.is_selected {
+                item.style = item.style.add_modifier(ratatui::style::Modifier::BOLD);
+            }
+
+            if !enabled(context.index) {
+                item.style = item
+                    .style
+                    .add_modifier(ratatui::style::Modifier::CROSSED_OUT);
+            }
+
+            (item, 1)
+        });
+
+        let list = ListView::new(builder, items.len()).scroll_padding(1);
+        let mut state = ListState::default();
+        if selected < items.len() {
+            state.select(Some(selected));
         }
 
-        if !enabled(context.index) {
-            item.style = item
-                .style
-                .add_modifier(ratatui::style::Modifier::CROSSED_OUT);
+        let mut listrect = frame.area();
+        if let Some(title) = title {
+            let layout = titled_layout(frame.area());
+            let title = format_title(title);
+            frame.render_widget(title, layout[0]);
+            listrect = layout[1];
         }
-
-        (item, 1)
-    });
-
-    let list = ListView::new(builder, items.len()).scroll_padding(1);
-    let mut state = ListState::default();
-    if selected < items.len() {
-        state.select(Some(selected));
+        frame.render_stateful_widget(list, listrect, &mut state);
     }
-
-    let mut listrect = frame.area();
-    if let Some(title) = title {
-        let layout = titled_layout(frame.area());
-        let title = format_title(title);
-        frame.render_widget(title, layout[0]);
-        listrect = layout[1];
-    }
-    frame.render_stateful_widget(list, listrect, &mut state);
-}
-
-fn render_empty(frame: &mut ratatui::Frame) {
-    let title = format_title("Empty");
-    let content = vec![Line::default(), Line::from("Empty").centered()];
-    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
-
-    let layout = titled_layout(frame.area());
-    frame.render_widget(title, layout[0]);
-    frame.render_widget(paragraph, layout[1]);
 }
 
 fn center_vertical(area: Rect, height: u16) -> Rect {
@@ -974,12 +979,26 @@ enum Cmd {
     ClearVolume,
 }
 
+fn jog_left(cur: usize, max: usize) -> usize {
+    if cur == 0 {
+        cur
+    } else if max == 0 {
+        0
+    } else {
+        (cur - 1).min(max - 1)
+    }
+}
+
+fn jog_right(cur: usize, max: usize) -> usize {
+    if max == 0 { 0 } else { (cur + 1).min(max - 1) }
+}
+
 pub mod top {
     use super::{
         Button, Cmd, Context, Events, JOG_WHEEL_ENCODER, JOG_WHEEL_TOUCH, POWER_MENU,
         POWER_MENU_CLEAR_GRAPH_INDEX, POWER_MENU_LAUNCH_MOVE_INDEX, POWER_MENU_MIDI_RESET_INDEX,
         POWER_MENU_POWER_DOWN_INDEX, POWER_MENU_RELOAD_GRAPH_INDEX, Page, PowerCommand,
-        VOLUME_WHEEL_ENCODER, VOLUME_WHEEL_TOUCH,
+        VOLUME_WHEEL_ENCODER, VOLUME_WHEEL_TOUCH, jog_left, jog_right,
     };
 
     #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -1015,8 +1034,8 @@ pub mod top {
             PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_RELOAD_GRAPH_INDEX] / ctx.emit(Cmd::ReloadGraph); = Main,
             PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_MIDI_RESET_INDEX] / ctx.emit(Cmd::MIDIReset); = Main,
 
-            PowerMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < POWER_MENU.len()] = PowerMenu(*state + 1),
-            PowerMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PowerMenu(*state - 1),
+            PowerMenu(usize) + EncRight(JOG_WHEEL_ENCODER) = PowerMenu(jog_right(*state, POWER_MENU.len())),
+            PowerMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) = PowerMenu(jog_left(*state, POWER_MENU.len())),
             PowerMenu(usize) + BtnDown(Button::Back) [ctx.can_exit_powermenu()] = Main,
 
             _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PowerMenu(0),
@@ -1055,8 +1074,8 @@ smlang::statemachine! {
         *Init + BtnDown(Button::Back) = Init, //dummy
 
         //nav
-        Menu(usize) + EncRight(JOG_WHEEL_ENCODER) [*state + 1 < MENU_ITEMS.len()] = Menu(*state + 1),
-        Menu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = Menu(*state - 1),
+        Menu(usize) + EncRight(JOG_WHEEL_ENCODER) = Menu(jog_right(*state, MENU_ITEMS.len())),
+        Menu(usize) + EncLeft(JOG_WHEEL_ENCODER) = Menu(jog_left(*state, MENU_ITEMS.len())),
 
         //select
         Menu(usize) + BtnDown(Button::JogWheel) [*state == GRAPHS_INDEX && ctx.sets_count() > 0] = LoadGraph(0),
@@ -1080,15 +1099,15 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == STATUS_INDEX] = Status,
 
         LoadGraph(usize) + BtnDown(Button::Back) = Menu(GRAPHS_INDEX),
-        LoadGraph(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.sets_count() > *state + 1] = LoadGraph(*state + 1),
-        LoadGraph(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = LoadGraph(*state - 1),
+        LoadGraph(usize) + EncRight(JOG_WHEEL_ENCODER) = LoadGraph(jog_right(*state, ctx.sets_count())),
+        LoadGraph(usize) + EncLeft(JOG_WHEEL_ENCODER) = LoadGraph(jog_left(*state, ctx.sets_count())),
         LoadGraph(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::LoadGraph(*state)); = LoadGraph(*state),
-        LoadGraph(usize) + SetNamesChanged = Menu(GRAPHS_INDEX), //backout, TODO be smarter
-        LoadGraph(usize) + SetCurrentChanged = LoadGraph(*state), //redraw
+        //LoadGraph(usize) + SetNamesChanged = Menu(GRAPHS_INDEX), //backout, TODO be smarter
+        //LoadGraph(usize) + SetCurrentChanged = LoadGraph(*state), //redraw
 
         GraphPresetMenu(usize) + BtnDown(Button::Back) = Menu(GRAPH_PRESETS_INDEX),
-        GraphPresetMenu(usize) + EncRight(JOG_WHEEL_ENCODER) [PRESET_MENU_ITEMS.len() > *state + 1] = GraphPresetMenu(*state + 1),
-        GraphPresetMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = GraphPresetMenu(*state - 1),
+        GraphPresetMenu(usize) + EncRight(JOG_WHEEL_ENCODER) = GraphPresetMenu(jog_right(*state, PRESET_MENU_ITEMS.len())),
+        GraphPresetMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) = GraphPresetMenu(jog_left(*state, PRESET_MENU_ITEMS.len())),
         GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_LOAD_INDEX && ctx.set_presets_count() > 0] = GraphPresetsList(PresetListState::new(PresetListOp::Load)),
         GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_DELETE_INDEX && ctx.set_presets_count() > 0] = GraphPresetsList(PresetListState::new(PresetListOp::Delete)),
         GraphPresetMenu(usize) + BtnDown(Button::JogWheel) [*state == PRESET_MENU_OVERWRITE_INDEX && ctx.set_presets_count() > 0] = GraphPresetsList(PresetListState::new(PresetListOp::Overwrite)),
@@ -1106,11 +1125,11 @@ smlang::statemachine! {
         GraphPresetsList(PresetListState) + BtnDown(Button::JogWheel) [state.op() == PresetListOp::SetInitial] / ctx.emit(Cmd::SetInitialGraphPreset(state.selected()));,
         GraphPresetsList(PresetListState) + BtnDown(Button::JogWheel) [state.op() == PresetListOp::Delete] / ctx.emit(Cmd::DeleteGraphPreset(state.selected())); = GraphPresetMenu(PRESET_MENU_DELETE_INDEX),
 
-        GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::Load] = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
-        GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::Delete] = GraphPresetMenu(PRESET_MENU_DELETE_INDEX),
-        GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::Overwrite] = GraphPresetMenu(PRESET_MENU_OVERWRITE_INDEX),
-        GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::SetInitial] = GraphPresetMenu(PRESET_MENU_SET_INTIAL_INDEX),
-        GraphPresetsList(PresetListState) + SetPresetLoadedChanged = GraphPresetsList(*state), //redraw
+        //GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::Load] = GraphPresetMenu(PRESET_MENU_LOAD_INDEX),
+        //GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::Delete] = GraphPresetMenu(PRESET_MENU_DELETE_INDEX),
+        //GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::Overwrite] = GraphPresetMenu(PRESET_MENU_OVERWRITE_INDEX),
+        //GraphPresetsList(PresetListState) + SetPresetNamesChanged [state.op() == PresetListOp::SetInitial] = GraphPresetMenu(PRESET_MENU_SET_INTIAL_INDEX),
+        //GraphPresetsList(PresetListState) + SetPresetLoadedChanged = GraphPresetsList(*state), //redraw
 
         PatcherInstances(InstSel) + BtnDown(Button::Back) [state.typ() == InstSelType::Params] = Menu(DEVICE_PARAMS_INDEX),
         PatcherInstances(InstSel) + BtnDown(Button::Back) [state.typ() == InstSelType::Datarefs] = Menu(DEVICE_DATA_INDEX),
@@ -1120,9 +1139,8 @@ smlang::statemachine! {
             = PatcherParams(ParamPage { index: state.selected(), page: 0, focused: None }),
         PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Datarefs] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(state.selected(), ctx.dataref_count(state.selected()))),
 
-
-        PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) == 0] = Menu(if state.typ == InstSelType::Params { DEVICE_PARAMS_INDEX } else { DEVICE_DATA_INDEX }),
-        PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) > 0] = PatcherInstances(state.restart()),
+        //PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) == 0] = Menu(if state.typ == InstSelType::Params { DEVICE_PARAMS_INDEX } else { DEVICE_DATA_INDEX }),
+        //PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) > 0] = PatcherInstances(state.restart()),
 
         //skip patcher instances menu if there is only 1 instance
         PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Params) > 1] = PatcherInstances(InstSel::new(InstSelType::Params, state.index, ctx.instances_count(InstSelType::Params))),
@@ -1138,12 +1156,12 @@ smlang::statemachine! {
         PatcherParams(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1}); = PatcherParams(state.with_focus(*event)),
         PatcherParams(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetParam { instance: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1}); = PatcherParams(state.with_focus(*event)),
 
-        PatcherParams(ParamPage) + InstancesChanged(_) [ctx.instances_count(InstSelType::Params) == 0] = Menu(DEVICE_PARAMS_INDEX),
-        PatcherParams(ParamPage) + InstancesChanged(_) [ctx.instances_count(InstSelType::Params) > 0] = PatcherInstances(InstSel::enter(InstSelType::Params, ctx.instances_count(InstSelType::Params))),
-        PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(DEVICE_DATA_INDEX),
-        PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
-        PatcherDatarefLoad(DataLoad) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(DEVICE_DATA_INDEX),
-        PatcherDatarefLoad(DataLoad) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
+        //PatcherParams(ParamPage) + InstancesChanged(_) [ctx.instances_count(InstSelType::Params) == 0] = Menu(DEVICE_PARAMS_INDEX),
+        //PatcherParams(ParamPage) + InstancesChanged(_) [ctx.instances_count(InstSelType::Params) > 0] = PatcherInstances(InstSel::enter(InstSelType::Params, ctx.instances_count(InstSelType::Params))),
+        //PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(DEVICE_DATA_INDEX),
+        //PatcherDatarefs(DataSel) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
+        //PatcherDatarefLoad(DataLoad) + InstancesChanged(_) [ctx.dataref_count(0) == 0] = Menu(DEVICE_DATA_INDEX),
+        //PatcherDatarefLoad(DataLoad) + InstancesChanged(_) [ctx.dataref_count(0) > 0] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
 
         PatcherDatarefs(DataSel) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefs(state.next()),
         PatcherDatarefs(DataSel) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefs(state.prev()),
@@ -1155,34 +1173,34 @@ smlang::statemachine! {
 
         PatcherDatarefLoad(DataLoad) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefLoad(state.next()),
         PatcherDatarefLoad(DataLoad) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefLoad(state.prev()),
-        PatcherDatarefLoad(DataLoad) + DatarefMappingChanged = PatcherDatarefLoad(state.clone()), //redraw, TODO filter to only redraw if it is a dataref we care about?
+        //PatcherDatarefLoad(DataLoad) + DatarefMappingChanged = PatcherDatarefLoad(state.clone()), //redraw, TODO filter to only redraw if it is a dataref we care about?
 
         //TODO can we be less drastic?
-        PatcherDatarefs(DataSel) + DatarefVisibleChanged = Menu(DEVICE_DATA_INDEX),
-        PatcherDatarefLoad(DataLoad) + DatarefVisibleChanged = Menu(DEVICE_DATA_INDEX),
-        PatcherInstances(InstSel) + DatarefVisibleChanged [state.typ() == InstSelType::Datarefs] = Menu(DEVICE_DATA_INDEX),
+        //PatcherDatarefs(DataSel) + DatarefVisibleChanged = Menu(DEVICE_DATA_INDEX),
+        //PatcherDatarefLoad(DataLoad) + DatarefVisibleChanged = Menu(DEVICE_DATA_INDEX),
+        //PatcherInstances(InstSel) + DatarefVisibleChanged [state.typ() == InstSelType::Datarefs] = Menu(DEVICE_DATA_INDEX),
 
-        PatcherInstances(InstSel) + SetCurrentChanged = Menu(DEVICE_PARAMS_INDEX),
-        PatcherParams(ParamPage) + SetCurrentChanged  = Menu(DEVICE_PARAMS_INDEX),
-        PatcherDatarefs(DataSel) + SetCurrentChanged  = Menu(DEVICE_DATA_INDEX),
-        PatcherDatarefLoad(DataLoad) + SetCurrentChanged  = Menu(DEVICE_DATA_INDEX),
-        PatcherParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = PatcherParams(state.clone()), //redraw
+        //PatcherInstances(InstSel) + SetCurrentChanged = Menu(DEVICE_PARAMS_INDEX),
+        //PatcherParams(ParamPage) + SetCurrentChanged  = Menu(DEVICE_PARAMS_INDEX),
+        //PatcherDatarefs(DataSel) + SetCurrentChanged  = Menu(DEVICE_DATA_INDEX),
+        //PatcherDatarefLoad(DataLoad) + SetCurrentChanged  = Menu(DEVICE_DATA_INDEX),
+        //PatcherParams(ParamPage) + VisibleParamUpdated(_) [Some(*event) == state.focused] = PatcherParams(state.clone()), //redraw
                                                                                                                           //
         PatchersList(usize) + BtnDown(Button::Back) = Menu(PATCHERS_INDEX),
-        PatchersList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.patchers_count() > *state + 1] = PatchersList(*state + 1),
-        PatchersList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = PatchersList(*state - 1),
+        PatchersList(usize) + EncRight(JOG_WHEEL_ENCODER) = PatchersList(jog_right(*state, ctx.patchers_count())),
+        PatchersList(usize) + EncLeft(JOG_WHEEL_ENCODER) = PatchersList(jog_left(*state, ctx.patchers_count())),
         PatchersList(usize) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::LoadPatcher(*state)); = PatchersList(*state),
-        PatchersList(usize) + PatcherNamesChanged = Menu(PATCHERS_INDEX), //backout, TODO be smarter
+        //PatchersList(usize) + PatcherNamesChanged = Menu(PATCHERS_INDEX), //backout, TODO be smarter
 
         UserViewList(usize) + BtnDown(Button::Back) = Menu(USER_VIEWS_INDEX),
-        UserViewList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.userviews_count() > *state + 1] = UserViewList(*state + 1),
-        UserViewList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = UserViewList(*state - 1),
+        UserViewList(usize) + EncRight(JOG_WHEEL_ENCODER) = UserViewList(jog_right(*state, ctx.userviews_count())),
+        UserViewList(usize) + EncLeft(JOG_WHEEL_ENCODER) = UserViewList(jog_left(*state, ctx.userviews_count())),
         UserViewList(usize) + BtnDown(Button::JogWheel) = UserView(*state),
-        UserViewList(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
+        //UserViewList(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
 
         UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() > 1] = UserViewList(*state),
         UserView(usize) + BtnDown(Button::Back) [ctx.userviews_count() <= 1] = Menu(USER_VIEWS_INDEX),
-        UserView(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
+        //UserView(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
 
         UserView(usize) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: *state, paramindex: *event, offset: -1});,
         UserView(usize) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: *state, paramindex: *event, offset: 1});,
@@ -1190,13 +1208,12 @@ smlang::statemachine! {
         UserView(usize) + EncLeft(_) [*event == JOG_WHEEL_ENCODER && *state > 0] = UserView(*state - 1),
         UserView(usize) + EncRight(_) [*event == JOG_WHEEL_ENCODER && ctx.userviews_count() > *state + 1] = UserView(*state + 1),
 
-
         ParamViewList(usize) + BtnDown(Button::Back) = Menu(PARAM_VIEWS_INDEX),
         ParamViewList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.param_view_count() > *state + 1] = ParamViewList(*state + 1),
         ParamViewList(usize) + EncLeft(JOG_WHEEL_ENCODER) [*state > 0] = ParamViewList(*state - 1),
         ParamViewList(usize) + BtnDown(Button::JogWheel) = ParamView(ParamPage { index: *state, page: 0, focused: None }),
-        ParamViewList(usize) + SetViewListChanged [ctx.param_view_count() == 0] = Menu(PARAM_VIEWS_INDEX),
-        ParamViewList(usize) + SetViewListChanged [ctx.param_view_count() > 0] = ParamViewList(0),
+        //ParamViewList(usize) + SetViewListChanged [ctx.param_view_count() == 0] = Menu(PARAM_VIEWS_INDEX),
+        //ParamViewList(usize) + SetViewListChanged [ctx.param_view_count() > 0] = ParamViewList(0),
 
         ParamView(ParamPage) + BtnDown(Button::Back) [ctx.param_view_count() > 1] = ParamViewList(state.index),
         ParamView(ParamPage) + BtnDown(Button::Back) [ctx.param_view_count() <= 1] = Menu(PARAM_VIEWS_INDEX),
@@ -1205,8 +1222,8 @@ smlang::statemachine! {
         ParamView(ParamPage) + EncTouch(_) [*event < 8] = ParamView(state.with_focus(*event)),
         ParamView(ParamPage) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: -1}); = ParamView(state.with_focus(*event)),
         ParamView(ParamPage) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetViewParam { view: state.index, index: state.page * PARAM_PAGE_SIZE + *event, offset: 1}); = ParamView(state.with_focus(*event)),
-        ParamView(ParamPage) + SetViewListChanged [ctx.param_view_count() == 0] = Menu(PARAM_VIEWS_INDEX),
-        ParamView(ParamPage) + SetViewListChanged [ctx.param_view_count() > 0] = ParamViewList(0),
+        //ParamView(ParamPage) + SetViewListChanged [ctx.param_view_count() == 0] = Menu(PARAM_VIEWS_INDEX),
+        //ParamView(ParamPage) + SetViewListChanged [ctx.param_view_count() > 0] = ParamViewList(0),
         ParamView(ParamPage) + SetViewPageSelected(_) [state.page != *event] = ParamView(ParamPage { index: state.index, page: (*event).min(ctx.view_param_pages(state.index) - 1), focused: state.focused }),
 
         TransportEditor(usize) + BtnDown(Button::Back) = Menu(TRANSPORT_INDEX),
@@ -3267,7 +3284,7 @@ impl StateController {
                     let title = format!("{} Params", name);
                     render_param_page(frame, &title, focus, page, pages);
                 } else {
-                    render_empty(frame);
+                    render_empty(frame, "Device Params");
                 }
             }
             States::PatcherDatarefs(entry) => {
@@ -3294,10 +3311,10 @@ impl StateController {
                             None,
                         );
                     } else {
-                        render_empty(frame);
+                        render_empty(frame, "Device Data");
                     }
                 } else {
-                    render_empty(frame);
+                    render_empty(frame, "Device Data");
                 }
             }
             States::PatcherDatarefLoad(entry) => {
@@ -3340,7 +3357,7 @@ impl StateController {
                         indicated,
                     );
                 } else {
-                    render_empty(frame);
+                    render_empty(frame, "Data Load");
                 }
             }
             States::PatchersList(selected) => {
@@ -3407,20 +3424,14 @@ impl StateController {
                         }
                     }
                 } else {
-                    render_empty(frame);
+                    render_empty(frame, "User View");
                 }
             }
             States::ParamViewList(selected) => {
                 setup_common(line!(), self);
                 let title = "Param Views";
                 if self.param_view_names.len() == 0 {
-                    let title = format_title(title);
-                    let content = vec![Line::default(), Line::from("None to List").centered()];
-                    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
-
-                    let layout = titled_layout(frame.area());
-                    frame.render_widget(title, layout[0]);
-                    frame.render_widget(paragraph, layout[1]);
+                    render_empty(frame, title);
                 } else {
                     report = Some(Page::ParamViewMenu);
                     render_menu(
@@ -3494,13 +3505,7 @@ impl StateController {
                     }
                     render_param_page(frame, &title, focus, page, pages);
                 } else {
-                    let title = format_title("Error");
-                    let content = vec![Line::default(), Line::from("Empty View").centered()];
-                    let paragraph = Paragraph::new(content).alignment(Alignment::Center);
-
-                    let layout = titled_layout(frame.area());
-                    frame.render_widget(title, layout[0]);
-                    frame.render_widget(paragraph, layout[1]);
+                    render_empty(frame, "Param View");
                 }
             }
 
@@ -4191,7 +4196,7 @@ impl StateController {
                         args: vec![OscType::Int(-1)],
                     };
                     self.send_osc(msg).await;
-                    self.reset_statemachines();
+                    //self.reset_statemachines();
                     self.request_popup("Clear Graph", "cleared");
                 }
                 Cmd::ReloadGraph => {
@@ -4201,7 +4206,7 @@ impl StateController {
                             args: vec![OscType::String(name.to_string())],
                         };
                         self.send_osc(msg).await;
-                        self.reset_statemachines();
+                        //self.reset_statemachines();
                         self.request_popup("Reload Graph", name);
                     }
                 }
