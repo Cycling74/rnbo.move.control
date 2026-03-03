@@ -3388,34 +3388,34 @@ impl StateController {
                 if let Some(_view) = self.userviews.keys().nth(selected) {
                     userview = Some(selected);
                     report = Some(Page::UserView { view: selected });
-                }
 
-                if let Some(userview) = self.userviews.values().nth(selected)
-                    && let Some(param_view_name) = userview.param_view_name()
-                {
-                    let page = 0; //XXX how to select page??
-                    let index = self
-                        .param_view_names
-                        .iter()
-                        .position(|n| n == param_view_name)
-                        .unwrap_or(0);
-
-                    if let Some((_name, params)) = self
-                        .param_view_names
-                        .iter()
-                        .zip(self.param_view_params.iter())
-                        .nth(index)
+                    if let Some(userview) = self.userviews.values().nth(selected)
+                        && let Some(param_view_name) = userview.param_view_name()
                     {
-                        let offset = page * PARAM_PAGE_SIZE;
-
-                        for (pindex, o) in params
+                        let page = 0; //XXX how to select page??
+                        let index = self
+                            .param_view_names
                             .iter()
-                            .skip(offset)
-                            .take(PARAM_PAGE_SIZE)
-                            .zip(self.param_values.iter_mut())
+                            .position(|n| n == param_view_name)
+                            .unwrap_or(0);
+
+                        if let Some((_name, params)) = self
+                            .param_view_names
+                            .iter()
+                            .zip(self.param_view_params.iter())
+                            .nth(index)
                         {
-                            if let Some(param) = self.params.get(*pindex) {
-                                *o = param.color();
+                            let offset = page * PARAM_PAGE_SIZE;
+
+                            for (pindex, o) in params
+                                .iter()
+                                .skip(offset)
+                                .take(PARAM_PAGE_SIZE)
+                                .zip(self.param_values.iter_mut())
+                            {
+                                if let Some(param) = self.params.get(*pindex) {
+                                    *o = param.color();
+                                }
                             }
                         }
                     }
