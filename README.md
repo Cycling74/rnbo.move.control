@@ -1,8 +1,23 @@
-# rnbo-move-control
+# RNBO Move Control
 
-## Bugs
+RNBO Move Control is an application that orchestrates the startup of the
+various services that makeup `RNBO Move Takeover`, adds some utilities like
+volume control, and also provides a basic user interface for controlling the
+runner and your graphs on the Move device.
 
-* `Patchers` list not updating when sending new patchers
+The services are:
+
+* The [RNBO Runner](https://github.com/Cycling74/rnbo.oscquery.runner)
+  - the primary software for interacting with and managing RNBO exports
+* The [RNBO Web Interface](https://github.com/Cycling74/rnbo-runner-panel)
+  - a web based UI for interacting with the Runner
+* A custom fork of [Jack 2](https://github.com/jackaudio/jack2)
+  - a low latency software audio/midi patch bay, code available by request
+* [Jack Transport Link](https://github.com/x37v/jack_transport_link)
+  - a service that bridges [Ableton Link](https://github.com/Ableton/link) and
+  [Jack Transport](https://jackaudio.org/api/transport-design.html), allowing
+  Runner devices to sync with external devices via link.
+
 
 ## Attribution
 
