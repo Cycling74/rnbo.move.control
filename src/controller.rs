@@ -8,11 +8,7 @@ use {
         view::ParamView,
     },
     atomic_float::AtomicF32,
-    embedded_graphics::{
-        image::{Image, ImageRaw},
-        pixelcolor::BinaryColor,
-        prelude::*,
-    },
+    embedded_graphics::{pixelcolor::BinaryColor, prelude::*},
     futures_util::{SinkExt, stream::SplitSink},
     once_cell::sync::Lazy,
     palette::Srgb,
@@ -24,16 +20,11 @@ use {
     },
     regex::Regex,
     reqwest_websocket::{Message, WebSocket},
-    rnbo_embedded_graphics::{
-        display::DisplayExt,
-        userview::{UserView, ViewData},
-    },
+    rnbo_embedded_graphics::userview::{UserView, ViewData},
     rosc::{OscMessage, OscPacket, OscType},
     std::{
         cmp::PartialEq,
         collections::{BTreeMap, HashMap},
-        fs::File,
-        io::BufReader,
         path::PathBuf,
         rc::Rc,
         sync::{
@@ -48,7 +39,7 @@ use {
 
 const POPUP_PERIOD: Duration = Duration::from_secs(2);
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+//const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const DATFILE_DIR: &str = "/data/UserData/Documents/rnbo/datafiles";
 
@@ -59,8 +50,6 @@ const ANIMATION_FRAME_DIV: usize = 10;
 
 const MOVE_CTL_MIDI_CHAN: u8 = 15;
 
-const PARAM_Y_OFFSET: i32 = -6;
-
 const TRANSPORT_SYNC_ADDR: &str = "/rnbo/jack/transport/sync";
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
@@ -68,7 +57,7 @@ const TRANSPORT_POS_ADDR: &str = "/rnbo/jack/transport/position";
 const GRAPH_RESET_ADDR: &str = "/rnbo/jack/control/midi_reset";
 const GRAPH_LOAD_INITAL_ADDR: &str = "/rnbo/inst/control/sets/load/initial";
 
-const SPLASH_DATA: &'static [u8] = include_bytes!("../content/rnbo-letters-128x64-inverted.bmp");
+const SPLASH_DATA: &[u8] = include_bytes!("../content/rnbo-letters-128x64-inverted.bmp");
 static SPLASH_BMP: Lazy<tinybmp::Bmp<BinaryColor>> = Lazy::new(|| {
     tinybmp::Bmp::<BinaryColor>::from_slice(SPLASH_DATA)
         .expect("to create bitmap from included bitmap data")
@@ -633,12 +622,6 @@ enum Button {
     PowerShort,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-struct ParamUpdate {
-    instance: usize, //local index
-    index: usize,
-}
-
 #[derive(Clone, Debug)]
 struct Popup {
     title: String,
@@ -701,8 +684,6 @@ enum Events {
     EncLeft(usize),
     EncRight(usize),
     EncTouch(usize),
-
-    VisibleParamUpdated(usize),
 
     InstancesChanged(usize),
     DatarefMappingChanged,
@@ -956,11 +937,6 @@ enum Cmd {
     TransportSyncToggle,
     TransportSeek,
 
-    LightButton {
-        btn: u8,
-        val: u8,
-    },
-
     UpdateDataFileList,
     //local index, dataref index, file index
     LoadDataref((usize, usize, usize)),
@@ -1004,8 +980,7 @@ pub mod top {
         Button, Cmd, Context, Events, JOG_WHEEL_ENCODER, JOG_WHEEL_TOUCH, POWER_MENU,
         POWER_MENU_CLEAR_GRAPH_INDEX, POWER_MENU_LAUNCH_MOVE_INDEX, POWER_MENU_MIDI_RESET_INDEX,
         POWER_MENU_POWER_DOWN_INDEX, POWER_MENU_RELOAD_GRAPH_INDEX, Page, PowerCommand,
-        STARTUP_MENU, STARTUP_MENU_LOAD_INITIAL, STARTUP_MENU_NOLOAD_INITIAL, VOLUME_WHEEL_ENCODER,
-        VOLUME_WHEEL_TOUCH, jog_left, jog_right,
+        STARTUP_MENU, VOLUME_WHEEL_ENCODER, VOLUME_WHEEL_TOUCH, jog_left, jog_right,
     };
 
     #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -1073,12 +1048,6 @@ pub mod top {
             _ + PageRequested(Page::VolumeEditor) = VolumeEditor(LastView::Main),
             _ + PageRequested(Page::PowerMenu) / ctx.emit(Cmd::ClearVolume); = PowerMenu(0),
             _ + PageRequested(_) / ctx.emit(Cmd::ClearVolume); = Main,
-        }
-    }
-
-    impl StateMachine {
-        pub fn reset(&mut self) {
-            self.state = States::Main;
         }
     }
 }
@@ -1287,12 +1256,6 @@ smlang::statemachine! {
     }
 }
 
-impl StateMachine {
-    pub fn reset(&mut self) {
-        self.state = States::Menu(0);
-    }
-}
-
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub struct Caps {
     pub memlock: bool,
@@ -1302,18 +1265,6 @@ pub struct Caps {
 impl Caps {
     pub fn all(&self) -> bool {
         self.memlock && self.rtprio
-    }
-}
-
-struct UserDisplayLayer {
-    buffer: [u8; crate::display::DISPLAY_BYTES],
-}
-
-impl Default for UserDisplayLayer {
-    fn default() -> Self {
-        Self {
-            buffer: [0; crate::display::DISPLAY_BYTES],
-        }
     }
 }
 
@@ -2355,6 +2306,7 @@ impl StateController {
                             addr: PARAM_DELTA_ADDR.to_owned(),
                             args,
                         };
+                        self.send_osc(msg).await;
                     } else if msg.args.len() == 1
                         && let Some(v) = as_float64(&msg.args[0])
                     {
@@ -2389,7 +2341,7 @@ impl StateController {
                         }
                         let ctx = self.sm.context();
 
-                        let (local, pages) = if let Some(local) = local {
+                        let (local, _pages) = if let Some(local) = local {
                             (local, ctx.instance_param_pages(local))
                         } else {
                             eprintln!("no instance with visible params and index {}", index);
@@ -2597,7 +2549,7 @@ impl StateController {
                         if let Some(param) = self.params.get_mut(*index)
                             && msg.args.len() == 1
                         {
-                            let v = match &msg.args[0] {
+                            let _v = match &msg.args[0] {
                                 OscType::Double(v) => {
                                     param.set_norm_pending(*v);
                                     Some((param.instance_index(), param.index()))
@@ -3568,7 +3520,6 @@ impl StateController {
         let mut userview: Option<usize> = None;
         let mut report: Option<Page> = None;
         let mut splash: bool = false;
-        let mut splash_x: usize = 0;
         let mut doload = false;
         terminal
             .draw(|frame| match state {
@@ -4070,8 +4021,6 @@ impl StateController {
                     self.send_osc(msg).await;
                 }
 
-                Cmd::LightButton { btn, val } => self.light_button(btn, val),
-
                 Cmd::LoadGraph(index) => {
                     if index == 0 {
                         let msg = OscMessage {
@@ -4250,7 +4199,6 @@ impl StateController {
                         args: vec![OscType::Int(-1)],
                     };
                     self.send_osc(msg).await;
-                    //self.reset_statemachines();
                     self.request_popup("Clear Graph", "cleared");
                 }
                 Cmd::ReloadGraph => {
@@ -4260,7 +4208,6 @@ impl StateController {
                             args: vec![OscType::String(name.to_string())],
                         };
                         self.send_osc(msg).await;
-                        //self.reset_statemachines();
                         self.request_popup("Reload Graph", name);
                     }
                 }
@@ -4291,11 +4238,6 @@ impl StateController {
 
     fn context(&self) -> &Context {
         self.sm.context()
-    }
-
-    fn reset_statemachines(&mut self) {
-        self.sm.reset();
-        self.topsm.reset();
     }
 }
 
