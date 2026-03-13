@@ -66,6 +66,7 @@ const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 const TRANSPORT_POS_ADDR: &str = "/rnbo/jack/transport/position";
 const GRAPH_RESET_ADDR: &str = "/rnbo/jack/control/midi_reset";
+const GRAPH_LOAD_INITAL_ADDR: &str = "/rnbo/inst/control/sets/load/initial";
 
 const SPLASH_DATA: &'static [u8] = include_bytes!("../content/rnbo-letters-128x64-inverted.bmp");
 static SPLASH_BMP: Lazy<tinybmp::Bmp<BinaryColor>> = Lazy::new(|| {
@@ -902,6 +903,10 @@ const PRESET_MENU_OVERWRITE_INDEX: usize = 2;
 const PRESET_MENU_SET_INTIAL_INDEX: usize = 3;
 const PRESET_MENU_DELETE_INDEX: usize = 4;
 
+const STARTUP_MENU: [&str; 2] = ["Load Startup", "Skip Startup"];
+const STARTUP_MENU_LOAD_INITIAL: usize = 0;
+const STARTUP_MENU_NOLOAD_INITIAL: usize = 1;
+
 const POWER_MENU: [&str; 5] = [
     "Launch Move",
     "Power Down",
@@ -926,6 +931,7 @@ const TRANSPORT_EDITOR_ENTRIES: usize = 5;
 #[derive(Clone, Debug, PartialEq)]
 enum Cmd {
     Power(PowerCommand),
+    ExitStartup,
 
     OffsetParam {
         instance: usize,
@@ -998,7 +1004,8 @@ pub mod top {
         Button, Cmd, Context, Events, JOG_WHEEL_ENCODER, JOG_WHEEL_TOUCH, POWER_MENU,
         POWER_MENU_CLEAR_GRAPH_INDEX, POWER_MENU_LAUNCH_MOVE_INDEX, POWER_MENU_MIDI_RESET_INDEX,
         POWER_MENU_POWER_DOWN_INDEX, POWER_MENU_RELOAD_GRAPH_INDEX, Page, PowerCommand,
-        VOLUME_WHEEL_ENCODER, VOLUME_WHEEL_TOUCH, jog_left, jog_right,
+        STARTUP_MENU, STARTUP_MENU_LOAD_INITIAL, STARTUP_MENU_NOLOAD_INITIAL, VOLUME_WHEEL_ENCODER,
+        VOLUME_WHEEL_TOUCH, jog_left, jog_right,
     };
 
     #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -1019,6 +1026,13 @@ pub mod top {
             Init + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::Main),
             Init + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::Main),
 
+            Init + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = StartupMenu(0),
+
+            StartupMenu(usize) + EncRight(JOG_WHEEL_ENCODER) = StartupMenu(jog_right(*state, STARTUP_MENU.len())),
+            StartupMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) = StartupMenu(jog_left(*state, STARTUP_MENU.len())),
+            StartupMenu(usize) + BtnDown(Button::JogWheel) = Main,
+            StartupMenu(usize) + BtnDown(Button::Back) / ctx.emit(Cmd::ExitStartup); = Main, //undo any setting for load_initial that may have been made
+
             Main + EncTouch(VOLUME_WHEEL_TOUCH) = VolumeEditor(LastView::Main),
             Main + EncRight(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(1)); = VolumeEditor(LastView::Main),
             Main + EncLeft(VOLUME_WHEEL_ENCODER) / ctx.emit(Cmd::OffsetVolume(-1)); = VolumeEditor(LastView::Main),
@@ -1037,6 +1051,7 @@ pub mod top {
             PowerMenu(usize) + EncRight(JOG_WHEEL_ENCODER) = PowerMenu(jog_right(*state, POWER_MENU.len())),
             PowerMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) = PowerMenu(jog_left(*state, POWER_MENU.len())),
             PowerMenu(usize) + BtnDown(Button::Back) [ctx.can_exit_powermenu()] = Main,
+
 
             _ + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PowerMenu(0),
             _ + BtnDown(Button::PowerLong) / ctx.emit(Cmd::Power(PowerCommand::ClearLongPress)); = PowerOff,
@@ -1303,6 +1318,9 @@ impl Default for UserDisplayLayer {
 }
 
 pub struct StateController {
+    load_initial: bool,
+    initial_loaded: bool,
+
     line_token: u32, //used for "once" actions (lighting leds from render methods)
     tracked_buttons: HashMap<u8, MoveColor>,
 
@@ -1573,6 +1591,9 @@ impl StateController {
         let tracked_buttons = HashMap::from([(BACK_MIDI, MoveColor::Black)]);
 
         let mut s = Self {
+            load_initial: true,
+            initial_loaded: false,
+
             line_token: 0,
             tracked_buttons,
 
@@ -3548,6 +3569,7 @@ impl StateController {
         let mut report: Option<Page> = None;
         let mut splash: bool = false;
         let mut splash_x: usize = 0;
+        let mut doload = false;
         terminal
             .draw(|frame| match state {
                 States::Init => {
@@ -3569,6 +3591,26 @@ impl StateController {
                         ];
                         frame.render_widget(Paragraph::new(content).centered(), frame.area());
                     }
+                }
+                States::StartupMenu(selected) => {
+                    match selected {
+                        STARTUP_MENU_LOAD_INITIAL => {
+                            self.load_initial = true;
+                        }
+                        STARTUP_MENU_NOLOAD_INITIAL => {
+                            self.load_initial = false;
+                        }
+                        _ => (),
+                    };
+                    render_menu(
+                        frame,
+                        Some("Startup"),
+                        &STARTUP_MENU,
+                        default_indicator,
+                        all_enabled,
+                        selected,
+                        None,
+                    );
                 }
                 States::LaunchMove => {
                     self.do_once(line!(), |s| {
@@ -3699,9 +3741,21 @@ impl StateController {
                     let paragraph = Paragraph::new(content).alignment(Alignment::Center);
                     frame.render_widget(paragraph, layout[1]);
                 }
-                States::Main => (userview, report) = self.render_main(frame),
+                States::Main => {
+                    doload = self.load_initial && !self.initial_loaded;
+                    (userview, report) = self.render_main(frame)
+                }
             })
             .expect("to render frame");
+
+        if doload {
+            self.initial_loaded = true;
+            let msg = OscMessage {
+                addr: GRAPH_LOAD_INITAL_ADDR.to_string(),
+                args: Vec::new(),
+            };
+            self.send_osc(msg).await;
+        }
 
         if splash {
             let display = terminal.backend_mut().display_mut();
@@ -3923,6 +3977,10 @@ impl StateController {
         while let Ok(cmd) = self.cmd_queue.try_recv() {
             match cmd {
                 Cmd::Power(cmd) => self.send_power_cmd(cmd),
+
+                Cmd::ExitStartup => {
+                    self.load_initial = true;
+                }
 
                 Cmd::OffsetParam {
                     instance,
