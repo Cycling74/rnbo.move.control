@@ -903,7 +903,7 @@ const PRESET_MENU_OVERWRITE_INDEX: usize = 2;
 const PRESET_MENU_SET_INTIAL_INDEX: usize = 3;
 const PRESET_MENU_DELETE_INDEX: usize = 4;
 
-const STARTUP_MENU: [&str; 2] = ["Load Startup", "Skip Startup"];
+const STARTUP_MENU: [&str; 2] = ["Load Initial", "Load Empty"];
 const STARTUP_MENU_LOAD_INITIAL: usize = 0;
 const STARTUP_MENU_NOLOAD_INITIAL: usize = 1;
 
