@@ -6,7 +6,7 @@
   "apps": [
     {
       "cmd": "/data/UserData/rnbo/bin/rnbooscquery",
-      "args": ["--wait-for-audio"]
+      "args": ["--wait-for-audio", "--delay-start"]
     },
     {
       "cmd": "/data/UserData/rnbo/bin/jack_transport_link"
