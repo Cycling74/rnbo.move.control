@@ -12,7 +12,7 @@ The services are:
 * The [RNBO Web Interface](https://github.com/Cycling74/rnbo-runner-panel)
   - a web based UI for interacting with the Runner
 * A custom fork of [Jack 2](https://github.com/jackaudio/jack2)
-  - a low latency software audio/midi patch bay, code available by request
+  - a low latency software audio/midi patch bay, [code available by request](mailto:licensing@cycling74.com?subject=Jack%20Source%20Request)
 * [Jack Transport Link](https://github.com/x37v/jack_transport_link)
   - a service that bridges [Ableton Link](https://github.com/Ableton/link) and
   [Jack Transport](https://jackaudio.org/api/transport-design.html), allowing
