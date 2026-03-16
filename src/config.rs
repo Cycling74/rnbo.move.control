@@ -50,7 +50,7 @@ impl Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            volume: 127,
+            volume: 178, // ~ 70%
             oscport: Some(DEFAULT_OSC_PORT),
             param_step_detents: Some(1),
         }
