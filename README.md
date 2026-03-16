@@ -1,7 +1,7 @@
 # RNBO Move Control
 
 RNBO Move Control is an application that orchestrates the startup of the
-various services that makeup `RNBO Move Takeover`, adds some utilities like
+various services that makeup [RNBO Move Takeover](https://cycling74.com/products/rnbo/move), adds some utilities like
 volume control, and also provides a basic user interface for controlling the
 runner and your graphs on the Move device.
 
@@ -11,7 +11,7 @@ The services are:
   - the primary software for interacting with and managing RNBO exports
 * The [RNBO Web Interface](https://github.com/Cycling74/rnbo-runner-panel)
   - a web based UI for interacting with the Runner
-* A custom fork of [Jack 2](https://github.com/jackaudio/jack2)
+* A custom fork of [JACK2](https://github.com/jackaudio/jack2)
   - a low latency software audio/midi patch bay, [code available by request](mailto:licensing@cycling74.com?subject=Jack%20Source%20Request)
 * [Jack Transport Link](https://github.com/x37v/jack_transport_link)
   - a service that bridges [Ableton Link](https://github.com/Ableton/link) and
@@ -24,72 +24,18 @@ The services are:
 * fonts:
     * [spleen](https://github.com/fcambus/spleen)
 
-## Setting up dev on osx
 
-```
-brew tap messense/macos-cross-toolchains
-brew install aarch64-unknown-linux-gnu
-rustup target add aarch64-unknown-linux-gnu
-```
+## GPL Covered Component
 
-Mount the AOS SDK, in this case: `SDK-toolchain-abletonos-aarch64-rpi4-v3.12`
+RNBO Move Takeover includes a modified fork of [JACK2](https://github.com/jackaudio/jack2) with custom Move hardware drivers.
+That JACK2 fork is licensed under the GNU General Public License, version 2 (GPLv2), and is not covered by this repository’s MIT license.
 
-## Creating Font Files
+For recipients of RNBO Move Takeover binaries, corresponding source code for the GPLv2-covered JACK2 fork used in the distributed binaries
+is available pursuant to GPLv2 section 3. Source may be obtained by contacting: [licensing@cycling74.com](mailto:licensing@cycling74.com?subject=Jack%20Source%20Request).
 
-check out:
+This offer is valid for at least three years from the date of distribution of the relevant binary version and applies to any third party, for a charge no more than the cost of physically performing source distribution.
+GPLv2 license text: [https://www.gnu.org/licenses/old-licenses/gpl-2.0.html](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)
 
-* https://github.com/farsil/ibmfonts.git
-* https://github.com/embedded-graphics/bdf.git
-  * `cd location/of/bdf/eg-font-converter`
-  * `cargo build --release`
-* in the root of this current project, assuming these are both checked out in `~/local/src/`
-
-```
-mkdir -p src/font/
-~/local/src/bdf/target/release/eg-font-converter --data src/font/cga_8x16.data --rust src/font/cga8x16.rs ~/local/src/ibmfonts/bdf/ic8x16u.bdf CGA_8X16
-~/local/src/bdf/target/release/eg-font-converter --data src/font/cga_light_8x16.data --rust src/font/cgalight8x16.rs ~/local/src/ibmfonts/bdf/icl8x16u.bdf CGA_LIGHT_8X16
-~/local/src/bdf/target/release/eg-font-converter --data src/font/spleen_8x16.data --rust src/font/spleen8x16.rs ~/local/src/spleen/spleen-8x16.bdf SPLEEN_8X16
-```
-
-
-## Build
-
-debug:
-
-```
-PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.12/sysroot/ cargo build --target=aarch64-unknown-linux-gnu
-```
-
-release:
-
-```
-PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.12/sysroot/ cargo build --target=aarch64-unknown-linux-gnu --release
-```
-
-release and send
-```
-PKG_CONFIG_SYSROOT_DIR=/Volumes/SDK-toolchain-abletonos-aarch64-rpi4-v3.12/sysroot/ cargo build --target=aarch64-unknown-linux-gnu --release && scp ./target/aarch64-unknown-linux-gnu/release/rnbomovecontrol move-usb:rnbo/bin
-```
-
-
-## Building in docker image
-
-
-copy lib contents from jack2.move destdir into /usr/local/oecore-x86_64/sysroots/cortexa72-oe-linux/lib/
-
-install rustup and
-
-```
-rustup target add aarch64-unknown-linux-gnu
-```
-
-```
-PKG_CONFIG_SYSROOT_DIR=/usr/local/oecore-x86_64/sysroots/cortexa72-oe-linux/ PKG_CONFIG_PATH=/usr/local/oecore-x86_64/sysroots/cortexa72-oe-linux/lib/pkgconfig/ cargo build --target=aarch64-unknown-linux-gnu --release
-```
-
-```
-conan create .  -s os=Linux -s arch=armv8 -s compiler=gcc -s compiler.version=11.4 -s compiler.libcxx=libstdc++11
-```
 
 ## OSC
 
@@ -254,20 +200,20 @@ The buffer is interpreted as a 32 byte header followed by pixel data.
 
 **TODO**
 
+## Creating Font Files
 
-## Notes
+check out:
 
-Could this be made more generic and do display/control for various other displays on the rpi?
-Could take OSC messages that could be driven by RNBO patches.
-
-```
-/rnbo/control/display/sets
-/rnbo/control/display/params
-/rnbo/control/display/inst
-
-/rnbo/control/nav/next
-/rnbo/control/nav/prev
-/rnbo/control/load
-/rnbo/control/unload
+* https://github.com/farsil/ibmfonts.git
+* https://github.com/embedded-graphics/bdf.git
+  * `cd location/of/bdf/eg-font-converter`
+  * `cargo build --release`
+* in the root of this current project, assuming these are both checked out in `~/local/src/`
 
 ```
+mkdir -p src/font/
+~/local/src/bdf/target/release/eg-font-converter --data src/font/cga_8x16.data --rust src/font/cga8x16.rs ~/local/src/ibmfonts/bdf/ic8x16u.bdf CGA_8X16
+~/local/src/bdf/target/release/eg-font-converter --data src/font/cga_light_8x16.data --rust src/font/cgalight8x16.rs ~/local/src/ibmfonts/bdf/icl8x16u.bdf CGA_LIGHT_8X16
+~/local/src/bdf/target/release/eg-font-converter --data src/font/spleen_8x16.data --rust src/font/spleen8x16.rs ~/local/src/spleen/spleen-8x16.bdf SPLEEN_8X16
+```
+
