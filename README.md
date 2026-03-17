@@ -221,7 +221,7 @@ mkdir -p src/font/
 ## Building
 
 ```
-docker build . --platform=linux/amd64 --tag foobar
-docker run -it -v $(pwd):/build --platform linux/amd64 foobar bash
-PKG_CONFIG_SYSROOT_DIR=/usr/lib/aarch64-linux-gnu/ PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig/ cargo build --target=aarch64-unknown-linux-gnu
+docker build . --platform=linux/amd64 --tag rnbo.move.takeover:0.3
+docker run -it -v $(pwd):/build --platform linux/amd64 rnbo.move.takeover:0.3 bash
+PKG_CONFIG_SYSROOT_DIR=/usr/lib/aarch64-linux-gnu/ PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig/ cargo build --target=aarch64-unknown-linux-gnu --config=.cargo/config-docker.toml --release
 ```
