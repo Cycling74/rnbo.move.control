@@ -217,3 +217,11 @@ mkdir -p src/font/
 ~/local/src/bdf/target/release/eg-font-converter --data src/font/spleen_8x16.data --rust src/font/spleen8x16.rs ~/local/src/spleen/spleen-8x16.bdf SPLEEN_8X16
 ```
 
+
+## Building
+
+```
+docker build . --platform=linux/amd64 --tag foobar
+docker run -it -v $(pwd):/build --platform linux/amd64 foobar bash
+PKG_CONFIG_SYSROOT_DIR=/usr/lib/aarch64-linux-gnu/ PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig/ cargo build --target=aarch64-unknown-linux-gnu
+```
