@@ -1,3 +1,6 @@
+#adapted from the move-everything docker file
+#https://github.com/charlesvestal/move-everything/blob/main/Dockerfile
+
 FROM debian:bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -7,14 +10,13 @@ RUN dpkg --add-architecture arm64
 
 RUN apt-get update && apt-get install -y \
     curl \
+    wget \
     gcc-aarch64-linux-gnu \
     g++-aarch64-linux-gnu \
     binutils-aarch64-linux-gnu \
-    make \
+    build-essential \
     cmake \
-    file \
     python3 \
-    python3-pillow \
     libdbus-1-dev:arm64 \
     libsystemd-dev:arm64 \
     libjack-jackd2-dev:arm64 \
