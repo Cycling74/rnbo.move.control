@@ -51,6 +51,8 @@ const ANIMATION_FRAME_DIV: usize = 10;
 const MOVE_CTL_MIDI_CHAN: u8 = 15;
 
 const TRANSPORT_SYNC_ADDR: &str = "/rnbo/jack/transport/sync";
+const TRANSPORT_LINKSYNC_ADDR: &str = "/rnbo/jack/transport/linksync";
+const TRANSPORT_LINKPEERS_ADDR: &str = "/rnbo/jack/transport/linkpeers";
 const TRANSPORT_ROLLING_ADDR: &str = "/rnbo/jack/transport/rolling";
 const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 const TRANSPORT_POS_ADDR: &str = "/rnbo/jack/transport/position";
@@ -905,9 +907,11 @@ const TRANSPORT_EDITOR_TEMPO_INDEX: usize = 0;
 const TRANSPORT_EDITOR_STATE_INDEX: usize = 1;
 const TRANSPORT_EDITOR_LOCATION_INDEX: usize = 2;
 const TRANSPORT_EDITOR_TIMESIG_INDEX: usize = 3;
-const TRANSPORT_EDITOR_SYNC_INDEX: usize = 4;
+const TRANSPORT_EDITOR_LINKSYNC_INDEX: usize = 4;
+const TRANSPORT_EDITOR_LINKPEERS_INDEX: usize = 5;
+const TRANSPORT_EDITOR_SYNC_INDEX: usize = 6;
 
-const TRANSPORT_EDITOR_ENTRIES: usize = 5;
+const TRANSPORT_EDITOR_ENTRIES: usize = 7;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Cmd {
@@ -935,6 +939,7 @@ enum Cmd {
 
     TransportToggle,
     TransportSyncToggle,
+    TransportLinkSyncToggle,
     TransportSeek,
 
     UpdateDataFileList,
@@ -1217,6 +1222,7 @@ smlang::statemachine! {
         TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_STATE_INDEX] / ctx.emit(Cmd::TransportToggle);,
         TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_LOCATION_INDEX] / ctx.emit(Cmd::TransportSeek);,
         TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_TIMESIG_INDEX],
+        TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_LINKSYNC_INDEX] / ctx.emit(Cmd::TransportLinkSyncToggle);,
         TransportEditor(usize) + BtnDown(Button::JogWheel) [*state == TRANSPORT_EDITOR_SYNC_INDEX] / ctx.emit(Cmd::TransportSyncToggle);,
 
         TempoEditor + BtnDown(Button::Back) = TransportEditor(TRANSPORT_EDITOR_TEMPO_INDEX),
@@ -1304,6 +1310,8 @@ pub struct StateController {
     cpu: f64,
 
     transport_sync: bool,
+    transport_linksync: bool,
+    transport_linkpeers: Option<usize>,
     transport_rolling: bool,
     transport_position: (usize, usize, f64),
     transport_timesig: [f32; 2],
@@ -1566,6 +1574,8 @@ impl StateController {
             cpu: 100.0,
 
             transport_sync: true,
+            transport_linksync: true,
+            transport_linkpeers: None,
             transport_rolling: false,
             transport_position: (1, 1, 1f64),
             transport_timesig: [4f32, 4f32],
@@ -1646,7 +1656,8 @@ impl StateController {
     pub async fn set_ws(&mut self, mut ws: SplitSink<WebSocket, Message>) {
         //query values
         for addr in [
-            TRANSPORT_SYNC_ADDR,
+            TRANSPORT_LINKSYNC_ADDR,
+            TRANSPORT_LINKPEERS_ADDR,
             TRANSPORT_ROLLING_ADDR,
             TRANSPORT_BPM_ADDR,
             SET_CURRENT_ADDR,
@@ -2124,7 +2135,22 @@ impl StateController {
                     if msg.args.len() == 1
                         && let OscType::Bool(v) = msg.args[0]
                     {
-                        self.transport_sync = v
+                        self.transport_sync = v;
+                    }
+                }
+                TRANSPORT_LINKSYNC_ADDR => {
+                    if msg.args.len() == 1
+                        && let OscType::Bool(v) = msg.args[0]
+                    {
+                        self.transport_linksync = v;
+                    }
+                }
+                TRANSPORT_LINKPEERS_ADDR => {
+                    if msg.args.len() == 1
+                        && let OscType::Int(v) = msg.args[0]
+                        && v >= 0
+                    {
+                        self.transport_linkpeers = Some(v as usize);
                     }
                 }
                 TRANSPORT_ROLLING_ADDR => {
@@ -3004,14 +3030,25 @@ impl StateController {
                     "TimeSig: {}/{}",
                     self.transport_timesig[0], self.transport_timesig[1]
                 );
-
+                let linksync = format!(
+                    "Sync Link: {}",
+                    if self.transport_linksync { "On" } else { "Off" }
+                );
+                let linkpeers = format!(
+                    "Peers: {}",
+                    self.transport_linkpeers
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "?".to_string())
+                );
                 let sync = format!("Sync: {}", if self.transport_sync { "On" } else { "Off" });
-                let items = vec![tempo, state, loc, timesig, sync];
+                let items = vec![tempo, state, loc, timesig, linksync, linkpeers, sync];
 
                 let indicator = |index: usize| -> &'static char {
                     match index {
                         TRANSPORT_EDITOR_TEMPO_INDEX => SUB_MENU_INDICATOR, //tempo editor
-                        TRANSPORT_EDITOR_TIMESIG_INDEX => UNEDITABLE_ITEM_INDICATOR,
+                        TRANSPORT_EDITOR_TIMESIG_INDEX | TRANSPORT_EDITOR_LINKPEERS_INDEX => {
+                            UNEDITABLE_ITEM_INDICATOR
+                        }
                         _ => ITEM_INDICATOR,
                     }
                 };
@@ -4010,6 +4047,13 @@ impl StateController {
                     let msg = OscMessage {
                         addr: TRANSPORT_SYNC_ADDR.to_string(),
                         args: vec![OscType::Bool(!self.transport_sync)],
+                    };
+                    self.send_osc(msg).await;
+                }
+                Cmd::TransportLinkSyncToggle => {
+                    let msg = OscMessage {
+                        addr: TRANSPORT_LINKSYNC_ADDR.to_string(),
+                        args: vec![OscType::Bool(!self.transport_linksync)],
                     };
                     self.send_osc(msg).await;
                 }
