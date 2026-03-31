@@ -1,33 +1,65 @@
 #adapted from the move-everything docker file
 #https://github.com/charlesvestal/move-everything/blob/main/Dockerfile
 
-FROM debian:bookworm
+#cross-compiling for aarch64 targeting Ableton Move
+FROM ubuntu:jammy
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Enable arm64 architecture for cross-compilation libraries
-RUN dpkg --add-architecture arm64
+RUN dpkg --add-architecture arm64 && \
+    echo "deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main universe\n\
+deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main universe\n\
+deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-security main universe\n\
+deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main universe\n\
+deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main universe\n\
+deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main universe" > /etc/apt/sources.list
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && \
+    apt-get install -y \
     curl \
+    file \
     wget \
-    gcc-aarch64-linux-gnu \
-    g++-aarch64-linux-gnu \
+    gcc-11-aarch64-linux-gnu \
+    g++-11-aarch64-linux-gnu \
     binutils-aarch64-linux-gnu \
     build-essential \
     cmake \
     python3 \
+    python3-pip python3-setuptools \
+    git vim \
     libdbus-1-dev:arm64 \
     libsystemd-dev:arm64 \
+    libsndfile1-dev:arm64 \
+    libatomic1:arm64 \
+    libavahi-compat-libdnssd-dev:arm64 \
+    libssl-dev:arm64 \
+    libxml2-dev:arm64 \
     libjack-jackd2-dev:arm64 \
+    libsdbus-c++-dev:arm64 \
+    libgmock-dev:arm64 \
+    google-mock:arm64 \
+    libstdc++-11-dev:arm64 \
+    libgcc-11-dev-arm64-cross \
     && rm -rf /var/lib/apt/lists/*
 
-#install rust and the target we need
+### Setup user and system
+RUN useradd -ms /bin/bash build
+RUN mkdir -p /home/build
+RUN chown -R build:build /home/build
+
+USER build
+
+# Install rust with aarch64 target
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --target aarch64-unknown-linux-gnu
 
-WORKDIR /build
+#install conan
+RUN pip3 install conan==1.62.0
+
+WORKDIR /home/build
 
 # Set cross-compilation environment
 ENV CROSS_PREFIX=aarch64-linux-gnu-
-ENV CC=aarch64-linux-gnu-gcc
-ENV CXX=aarch64-linux-gnu-g++
+ENV CC=aarch64-linux-gnu-gcc-11
+ENV CXX=aarch64-linux-gnu-g++-11
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc-11
+ENV PATH="${PATH}:/home/build/.local/bin:/home/build/.cargo/bin"
