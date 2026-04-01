@@ -217,3 +217,35 @@ mkdir -p src/font/
 ~/local/src/bdf/target/release/eg-font-converter --data src/font/spleen_8x16.data --rust src/font/spleen8x16.rs ~/local/src/spleen/spleen-8x16.bdf SPLEEN_8X16
 ```
 
+
+## Building in Docker
+
+If you haven't pulled or built locally
+
+```shell
+docker pull xnor/rnbo-runner-xpile:0.1
+```
+
+*Note* this runs as root so it can access a shared cargo registry
+
+```shell
+docker run \
+    --user root \
+    -it \
+    --platform linux/amd64 \
+    -v $(pwd):/build \
+    -v cargo-registry:/usr/local/cargo/registry \
+    -v cargo-git:/usr/local/cargo/git \
+    xnor/rnbo-runner-xpile:0.1 bash
+```
+
+```shell
+cd /build/
+PKG_CONFIG_SYSROOT_DIR=/usr/lib/aarch64-linux-gnu/ PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig/ cargo build --target=aarch64-unknown-linux-gnu --config=./.cargo/config-docker.toml --release
+```
+
+## Build via conan
+
+```shell
+conan create . c74/move -s os=Linux -s arch=armv8
+```
