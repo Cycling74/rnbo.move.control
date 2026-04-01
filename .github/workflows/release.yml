@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: xnor/rnbo-runner-xpile:0.1
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/cargo/registry
+            /usr/local/cargo/git
+          key: cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-
+
+      - name: Build
+        run: |
+          PKG_CONFIG_SYSROOT_DIR=/usr/lib/aarch64-linux-gnu/ \
+          PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig/ \
+          cargo build --target=aarch64-unknown-linux-gnu --config=./.cargo/config-docker.toml --release
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            target/aarch64-unknown-linux-gnu/release/rnbomovecontrol
+            config/control-startup.json
