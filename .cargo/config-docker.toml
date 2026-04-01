@@ -3,5 +3,5 @@ linker = "/usr/bin/aarch64-linux-gnu-gcc"
 rustflags = [
 	"-C", "link-arg=-Wl,-rpath,/data/UserData/rnbo/lib/",
 	"-C", "link-arg=-L/usr/lib/aarch64-linux-gnu",
-	"-C", "link-arg=--sysroot=/usr/lib/aarch64-linux-gnu/"
+	"-C", "link-arg=--sysroot=/"
 ]

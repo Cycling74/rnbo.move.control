@@ -218,10 +218,22 @@ mkdir -p src/font/
 ```
 
 
-## Building
+## Building in Docker
 
+If you haven't pulled or built locally
+
+```shell
+docker pull xnor/rnbo-runner-xpile:0.1
 ```
-docker build . --platform=linux/amd64 --tag rnbo.move.takeover:0.3
-docker run -it -v $(pwd):/build --platform linux/amd64 rnbo.move.takeover:0.3 bash
-PKG_CONFIG_SYSROOT_DIR=/usr/lib/aarch64-linux-gnu/ PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig/ cargo build --target=aarch64-unknown-linux-gnu --config=.cargo/config-docker.toml --release
+
+```shell
+docker run -it \
+    --platform linux/amd64 \
+    -v $(pwd):/build \
+    xnor/rnbo-runner-xpile:0.1 bash
+```
+
+```shell
+cd /build/
+PKG_CONFIG_SYSROOT_DIR=/usr/lib/aarch64-linux-gnu/ PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig/ cargo build --target=aarch64-unknown-linux-gnu --config=./.cargo/config-docker.toml --release
 ```
