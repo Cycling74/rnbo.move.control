@@ -243,3 +243,9 @@ docker run \
 cd /build/
 PKG_CONFIG_SYSROOT_DIR=/usr/lib/aarch64-linux-gnu/ PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig/ cargo build --target=aarch64-unknown-linux-gnu --config=./.cargo/config-docker.toml --release
 ```
+
+## Build via conan
+
+```shell
+conan create . c74/move -s os=Linux -s arch=armv8
+```
