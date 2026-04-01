@@ -226,10 +226,16 @@ If you haven't pulled or built locally
 docker pull xnor/rnbo-runner-xpile:0.1
 ```
 
+*Note* this runs as root so it can access a shared cargo registry
+
 ```shell
-docker run -it \
+docker run \
+    --user root \
+    -it \
     --platform linux/amd64 \
     -v $(pwd):/build \
+    -v cargo-registry:/usr/local/cargo/registry \
+    -v cargo-git:/usr/local/cargo/git \
     xnor/rnbo-runner-xpile:0.1 bash
 ```
 
