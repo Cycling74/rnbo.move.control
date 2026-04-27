@@ -1281,6 +1281,71 @@ async fn start_jack(
     })
 }
 
+fn dotasks(homedir: &Path) -> anyhow::Result<()> {
+    use anyhow::Context;
+    let taskdir = homedir.join(".state/rnbomovecontrol/completed");
+    let runnerconfig = homedir.join(".config/rnbo/runner.json");
+    if !taskdir.is_dir() {
+        std::fs::create_dir_all(&taskdir).with_context(|| "creating task dir")?;
+    }
+    {
+        //setup symlinks && rewrite config
+        let taskfile = taskdir.join("datafile-dirs");
+        if !taskfile.is_file() {
+            use std::os::unix::fs::symlink;
+            let datafiles = homedir
+                .join("Documents/rnbo/datafiles")
+                .canonicalize()
+                .with_context(|| "canonicalize datafiles dir")?;
+            symlink(
+                homedir.join("UserLibrary/Recordings"),
+                datafiles.join("MoveRecordings"),
+            )
+            .with_context(|| "creating MoveRecordings simlink")?;
+            symlink(
+                homedir.join("UserLibrary/Samples"),
+                datafiles.join("MoveSamples"),
+            )
+            .with_context(|| "creating MoveSamples simlink")?;
+            if runnerconfig.is_file() {
+                if let Ok(conf) = std::fs::read_to_string(&runnerconfig) {
+                    let conf: Result<serde_json::Value, _> = serde_json::from_str(&conf);
+                    if let Ok(mut conf) = conf
+                        && conf.is_object()
+                    {
+                        if let Some(conf) = conf.as_object_mut() {
+                            use std::io::Write;
+                            conf.insert(
+                                "recording_dir".to_string(),
+                                serde_json::Value::String(
+                                    datafiles
+                                        .join("MoveRecordings")
+                                        .to_str()
+                                        .expect("to create path for /MoveRecordings")
+                                        .to_string(),
+                                ),
+                            );
+
+                            let mut file = std::fs::File::create(runnerconfig)?;
+                            serde_json::to_writer(&file, conf)
+                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                            file.flush()?;
+                            file.sync_all()?;
+                        }
+                    }
+                }
+            }
+
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(taskfile)
+                .with_context(|| "creating datafile-dirs task file")?;
+        }
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let run = Arc::new(AtomicBool::new(true));
@@ -1307,6 +1372,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         PathBuf::from(config_path)
     };
+
+    // maintenance tasks
+    if let Err(e) = dotasks(&homedir) {
+        eprintln!("error running tasks {:#}", e);
+    }
 
     //request changes to resource limits
     let memlock = setrlimit(
