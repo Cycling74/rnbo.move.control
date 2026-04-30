@@ -249,6 +249,7 @@ async fn with_client(
     startup: &Vec<StartupProcess>,
     config_path: &Path,
     caps: Caps,
+    datafile_dir: PathBuf,
 ) -> Result<(), Box<dyn Error>> {
     let (draw_tx, draw_rx) = sync_mpsc::sync_channel(1);
     let (midi_out_tx, midi_out_rx) = sync_mpsc::sync_channel(1024);
@@ -568,6 +569,7 @@ async fn with_client(
 
     let state: std::sync::Arc<tokio::sync::Mutex<StateController>> =
         std::sync::Arc::new(tokio::sync::Mutex::new(StateController::new(
+            datafile_dir,
             midi_out_tx,
             volume,
             package_version,
@@ -1281,10 +1283,9 @@ async fn start_jack(
     })
 }
 
-fn dotasks(homedir: &Path) -> anyhow::Result<()> {
+fn dotasks(homedir: &Path, runnerconfig: &Path) -> anyhow::Result<()> {
     use anyhow::Context;
     let taskdir = homedir.join(".state/rnbomovecontrol/completed");
-    let runnerconfig = homedir.join(".config/rnbo/runner.json");
     if !taskdir.is_dir() {
         std::fs::create_dir_all(&taskdir).with_context(|| "creating task dir")?;
     }
@@ -1373,9 +1374,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         PathBuf::from(config_path)
     };
 
+    let mut datafile_dir: PathBuf = PathBuf::from(homedir.join("Documents/rnbo/datafiles"));
+    let runnerconfig = homedir.join(".config/rnbo/runner.json");
+
     // maintenance tasks
-    if let Err(e) = dotasks(&homedir) {
+    if let Err(e) = dotasks(&homedir, &runnerconfig) {
         eprintln!("error running tasks {:#}", e);
+    }
+
+    if runnerconfig.is_file() {
+        if let Ok(conf) = std::fs::read_to_string(&runnerconfig) {
+            let conf: Result<serde_json::Value, _> = serde_json::from_str(&conf);
+            if let Ok(conf) = conf
+                && conf.is_object()
+                && let Some(conf) = conf.as_object()
+            {
+                let key = "datafile_dir";
+                if let Some(serde_json::Value::String(p)) = conf.get(key) {
+                    datafile_dir = PathBuf::from(p);
+                }
+            }
+        }
     }
 
     //request changes to resource limits
@@ -1439,8 +1458,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             break;
         }
         if let Ok((c, _status)) = Client::new(name, ClientOptions::NO_START_SERVER) {
-            if let Err(e) =
-                with_client(c, run.clone(), &mut logger, &tostartup, &config_path, caps).await
+            if let Err(e) = with_client(
+                c,
+                run.clone(),
+                &mut logger,
+                &tostartup,
+                &config_path,
+                caps,
+                datafile_dir,
+            )
+            .await
             {
                 let _ = logger.err(e);
             }

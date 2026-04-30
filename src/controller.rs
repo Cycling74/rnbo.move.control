@@ -41,8 +41,6 @@ const POPUP_PERIOD: Duration = Duration::from_secs(2);
 
 //const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const DATFILE_DIR: &str = "/data/UserData/Documents/rnbo/datafiles";
-
 const BACK_MIDI: u8 = 0x33;
 
 const ANIMATION_FRAME_FREEZE: usize = 4;
@@ -715,6 +713,7 @@ enum Events {
 
     SetViewPageSelected(usize),
     PageRequested(Page),
+    Reset,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -789,63 +788,6 @@ impl DataSel {
     }
 
     pub fn next(&self) -> DataSel {
-        let mut v = self.clone();
-        if self.can_go_next() {
-            v.selected += 1;
-        }
-        v
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct DataLoad {
-    dataref: DataSel,
-    selected: usize,
-    filecount: usize,
-}
-
-impl DataLoad {
-    pub fn new(dataref: DataSel, filecount: usize) -> Self {
-        Self {
-            dataref,
-            selected: 0,
-            filecount,
-        }
-    }
-
-    pub fn dataload_cmd(&self) -> Cmd {
-        Cmd::LoadDataref((
-            self.dataref.instance(),
-            self.dataref.selected(),
-            self.selected,
-        ))
-    }
-
-    pub fn dataref(&self) -> DataSel {
-        self.dataref.clone()
-    }
-
-    pub fn selected(&self) -> usize {
-        self.selected
-    }
-
-    pub fn can_go_prev(&self) -> bool {
-        self.selected > 0
-    }
-
-    pub fn can_go_next(&self) -> bool {
-        self.selected + 1 < self.filecount
-    }
-
-    pub fn prev(&self) -> Self {
-        let mut v = self.clone();
-        if self.can_go_prev() {
-            v.selected -= 1;
-        }
-        v
-    }
-
-    pub fn next(&self) -> Self {
         let mut v = self.clone();
         if self.can_go_next() {
             v.selected += 1;
@@ -942,10 +884,6 @@ enum Cmd {
     TransportLinkSyncToggle,
     TransportSeek,
 
-    UpdateDataFileList,
-    //local index, dataref index, file index
-    LoadDataref((usize, usize, usize)),
-
     LoadGraph(usize),
     SaveGraphPreset,
     LoadGraphPreset(usize),
@@ -964,6 +902,12 @@ enum Cmd {
     MIDIReset,
 
     ClearVolume,
+
+    FileBrowser(Events),
+    FileBrowserEnter {
+        instance: usize,
+        dataref: usize,
+    },
 }
 
 fn jog_left(cur: usize, max: usize) -> usize {
@@ -978,6 +922,308 @@ fn jog_left(cur: usize, max: usize) -> usize {
 
 fn jog_right(cur: usize, max: usize) -> usize {
     if max == 0 { 0 } else { (cur + 1).min(max - 1) }
+}
+
+pub mod filebrowser {
+    use {
+        super::{Button, Events, JOG_WHEEL_ENCODER},
+        std::{cmp::Ordering, path::PathBuf},
+    };
+
+    #[derive(Clone, Debug)]
+    pub enum FileListItem {
+        Dir {
+            name: String,
+            indicated: bool,
+            empty: bool,
+        },
+        File {
+            name: String,
+            indicated: bool,
+        },
+        Empty {
+            indicated: bool,
+        },
+    }
+
+    impl FileListItem {
+        pub fn name(&self) -> Option<&String> {
+            match self {
+                Self::Empty { .. } => None,
+                Self::Dir { name, .. } => Some(name),
+                Self::File { name, .. } => Some(name),
+            }
+        }
+    }
+
+    impl PartialOrd for FileListItem {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Ord for FileListItem {
+        fn cmp(&self, other: &Self) -> Ordering {
+            let (a, b) = (
+                self.name().map(|n| n.to_lowercase()),
+                other.name().map(|n| n.to_lowercase()),
+            );
+            if a.is_none() {
+                Ordering::Less
+            } else if b.is_none() {
+                Ordering::Greater
+            } else if a.eq(&b) {
+                self.name().unwrap().cmp(other.name().unwrap())
+            } else {
+                a.cmp(&b)
+            }
+        }
+    }
+
+    impl PartialEq for FileListItem {
+        fn eq(&self, other: &Self) -> bool {
+            self.name() == other.name()
+        }
+    }
+
+    impl Eq for FileListItem {}
+
+    pub struct Context {
+        root: PathBuf,
+        dir: PathBuf,
+        items: Vec<FileListItem>,
+        names: Vec<String>,
+        indicators: Vec<&'static char>,
+        enabled: Vec<bool>,
+        indicated: Option<PathBuf>,
+        selected: Option<PathBuf>,
+        indicated_index: Option<usize>,
+    }
+
+    impl Context {
+        pub fn new(root: PathBuf) -> Self {
+            let mut s = Self {
+                dir: PathBuf::default(),
+                root,
+                items: Vec::new(),
+                names: Vec::new(),
+                indicators: Vec::new(),
+                enabled: Vec::new(),
+                indicated: None,
+                selected: None,
+                indicated_index: None,
+            };
+
+            s.update_items();
+            s
+        }
+
+        pub fn next(&self, cur: usize) -> usize {
+            if self.items.len() == 0 {
+                0
+            } else {
+                (cur + 1).min(self.items.len() - 1)
+            }
+        }
+
+        pub fn prev(&self, cur: usize) -> usize {
+            if self.items.len() == 0 || cur == 0 {
+                0
+            } else {
+                (cur - 1).min(self.items.len() - 1)
+            }
+        }
+
+        pub fn back(&mut self) -> usize {
+            let prev = self.dir.clone();
+            let filename = prev.file_name();
+            if self.dir.pop() {
+                self.update_items();
+                if let Some(Some(filename)) = filename.map(|f| f.to_str()) {
+                    self.names.iter().position(|i| i == filename).unwrap_or(0)
+                } else {
+                    0
+                }
+            } else {
+                0
+            }
+        }
+
+        pub fn can_enter(&self, cur: usize) -> bool {
+            if let Some(FileListItem::Dir { empty, .. }) = self.items.iter().nth(cur) {
+                !empty
+            } else {
+                false
+            }
+        }
+
+        pub fn can_select(&self, cur: usize) -> bool {
+            if let Some(FileListItem::Dir { empty, .. }) = self.items.iter().nth(cur) {
+                false
+            } else {
+                true
+            }
+        }
+
+        pub fn enter(&mut self, cur: usize) -> usize {
+            if let Some(FileListItem::Dir { name, .. }) = self.items.iter().nth(cur) {
+                self.dir.push(name);
+                self.update_items();
+            } else {
+                self.reset(None); //shouldn't happen
+            }
+            0
+        }
+
+        pub fn at_root(&self) -> bool {
+            self.dir.as_os_str().is_empty()
+        }
+
+        pub fn reset(&mut self, indicated: Option<PathBuf>) {
+            self.dir.clear();
+            self.selected = None;
+            self.indicated = indicated;
+            self.update_items();
+        }
+
+        fn update_items(&mut self) {
+            self.items.clear();
+            self.names.clear();
+            self.indicators.clear();
+            self.enabled.clear();
+            self.indicated_index = None;
+
+            if self.at_root() {
+                self.items.push(FileListItem::Empty {
+                    indicated: self.indicated.is_none(),
+                });
+            }
+
+            let dir = self.root.join(&self.dir);
+            if dir.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&dir) {
+                    for e in entries.flatten() {
+                        if let Some(f) = e.path().file_name() {
+                            let name = f.to_string_lossy().to_string();
+                            let indicated = if let Some(p) = &self.indicated {
+                                if let Ok(e) = e.path().strip_prefix(&self.root) {
+                                    p.starts_with(e)
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+                            if e.path().is_dir() {
+                                let empty = std::fs::read_dir(e.path())
+                                    .map(|mut i| i.next().is_none())
+                                    .unwrap_or(false);
+                                self.items.push(FileListItem::Dir {
+                                    name,
+                                    indicated,
+                                    empty,
+                                })
+                            } else if e.path().is_file() {
+                                self.items.push(FileListItem::File { name, indicated })
+                            }
+                        }
+                    }
+                }
+                self.items.sort();
+            }
+
+            for (i, entry) in self.items.iter().enumerate() {
+                match entry {
+                    FileListItem::Dir {
+                        name,
+                        empty,
+                        indicated,
+                    } => {
+                        if *indicated {
+                            self.indicated_index = Some(i);
+                        }
+                        self.names.push(name.clone());
+                        self.indicators.push(if *empty {
+                            super::UNEDITABLE_ITEM_INDICATOR
+                        } else {
+                            super::SUB_MENU_INDICATOR
+                        });
+                        self.enabled.push(!*empty);
+                    }
+                    FileListItem::File { name, indicated } => {
+                        if *indicated {
+                            self.indicated_index = Some(i);
+                        }
+                        self.names.push(name.clone());
+                        self.indicators.push(super::ITEM_INDICATOR);
+                        self.enabled.push(true); //TODO some sort of type filtering?
+                    }
+                    FileListItem::Empty { indicated } => {
+                        if *indicated {
+                            self.indicated_index = Some(i);
+                        }
+                        self.names.push("(empty)".to_string());
+                        self.indicators.push(super::ITEM_INDICATOR);
+                        self.enabled.push(true);
+                    }
+                }
+            }
+        }
+
+        pub fn select(&mut self, cur: usize) {
+            if let Some(item) = self.items.iter().nth(cur) {
+                match item {
+                    FileListItem::File { name, .. } => self.selected = Some(self.dir.join(name)),
+                    FileListItem::Empty { .. } => self.selected = Some(PathBuf::default()),
+                    _ => (),
+                }
+            } else {
+                self.reset(None); //shouldn't happen
+            }
+        }
+
+        pub fn take_selection(&mut self) -> Option<PathBuf> {
+            self.selected.take()
+        }
+
+        pub fn indicate(&mut self, indicated: Option<PathBuf>) {
+            self.indicated = indicated;
+            self.update_items();
+        }
+
+        pub fn items(&self) -> &Vec<FileListItem> {
+            &self.items
+        }
+
+        pub fn names(&self) -> &Vec<String> {
+            &self.names
+        }
+
+        pub fn indicators(&self) -> &Vec<&'static char> {
+            &self.indicators
+        }
+
+        pub fn enabled(&self) -> &Vec<bool> {
+            &self.enabled
+        }
+
+        pub fn indicated(&self) -> Option<usize> {
+            self.indicated_index
+        }
+    }
+
+    smlang::statemachine! {
+        states_attr: #[derive(Clone, Debug)],
+        transitions: {
+            *Init + EncRight(JOG_WHEEL_ENCODER) = Selected(ctx.next(0)), //dummy
+            Selected(usize) + EncLeft(JOG_WHEEL_ENCODER) = Selected(ctx.prev(*state)),
+            Selected(usize) + EncRight(JOG_WHEEL_ENCODER) = Selected(ctx.next(*state)),
+            Selected(usize) + BtnDown(Button::Back) = Selected(ctx.back()),
+            Selected(usize) + BtnDown(Button::JogWheel) [ctx.can_enter(*state)] = Selected(ctx.enter(*state)),
+            Selected(usize) + BtnDown(Button::JogWheel) [ctx.can_select(*state)] / ctx.select(*state); = Selected(*state),
+            Selected(usize) + Reset = Selected(0),
+        }
+    }
 }
 
 pub mod top {
@@ -1074,7 +1320,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_PARAMS_INDEX && ctx.instances_count(InstSelType::Params) == 1] = PatcherParams(ParamPage { index: 0, page: 0, focused: None }),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) > 1] = PatcherInstances(InstSel::enter(InstSelType::Datarefs, ctx.instances_count(InstSelType::Datarefs))),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() > 1] = UserViewList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() == 1] = UserView(0),
@@ -1126,7 +1372,7 @@ smlang::statemachine! {
         PatcherInstances(InstSel) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherInstances(state.prev()),
         PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Params]
             = PatcherParams(ParamPage { index: state.selected(), page: 0, focused: None }),
-        PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Datarefs] / ctx.emit(Cmd::UpdateDataFileList); = PatcherDatarefs(DataSel::new(state.selected(), ctx.dataref_count(state.selected()))),
+        PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Datarefs] = PatcherDatarefs(DataSel::new(state.selected(), ctx.dataref_count(state.selected()))),
 
         //PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) == 0] = Menu(if state.typ == InstSelType::Params { DEVICE_PARAMS_INDEX } else { DEVICE_DATA_INDEX }),
         //PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) > 0] = PatcherInstances(state.restart()),
@@ -1155,14 +1401,16 @@ smlang::statemachine! {
         PatcherDatarefs(DataSel) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefs(state.next()),
         PatcherDatarefs(DataSel) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefs(state.prev()),
 
-        PatcherDatarefs(DataSel) + BtnDown(Button::JogWheel) = PatcherDatarefLoad(DataLoad::new(state.clone(), ctx.datafile_count())),
+        PatcherDatarefs(DataSel) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::FileBrowserEnter { instance: state.instance(), dataref: state.selected() });
+        = PatcherDatarefLoad(state.clone()),
 
-        PatcherDatarefLoad(DataLoad) + BtnDown(Button::JogWheel) / ctx.emit(state.dataload_cmd()); = PatcherDatarefLoad(state.clone()),
-        PatcherDatarefLoad(DataLoad) + BtnDown(Button::Back) = PatcherDatarefs(state.dataref()),
+        PatcherDatarefLoad(DataSel) + BtnDown(Button::Back) [ctx.file_browser_at_top()] = PatcherDatarefs(state.clone()),
 
-        PatcherDatarefLoad(DataLoad) + EncRight(JOG_WHEEL_ENCODER) [state.can_go_next()] = PatcherDatarefLoad(state.next()),
-        PatcherDatarefLoad(DataLoad) + EncLeft(JOG_WHEEL_ENCODER) [state.can_go_prev()] = PatcherDatarefLoad(state.prev()),
-        //PatcherDatarefLoad(DataLoad) + DatarefMappingChanged = PatcherDatarefLoad(state.clone()), //redraw, TODO filter to only redraw if it is a dataref we care about?
+        //simply forward events otherwise
+        PatcherDatarefLoad(DataSel) + BtnDown(Button::Back) [!ctx.file_browser_at_top()] / ctx.emit(Cmd::FileBrowser(e));,
+        PatcherDatarefLoad(DataSel) + BtnDown(Button::JogWheel) / ctx.emit(Cmd::FileBrowser(e));,
+        PatcherDatarefLoad(DataSel) + EncRight(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::FileBrowser(e));,
+        PatcherDatarefLoad(DataSel) + EncLeft(JOG_WHEEL_ENCODER) / ctx.emit(Cmd::FileBrowser(e));,
 
         //TODO can we be less drastic?
         //PatcherDatarefs(DataSel) + DatarefVisibleChanged = Menu(DEVICE_DATA_INDEX),
@@ -1249,7 +1497,7 @@ smlang::statemachine! {
         _ + PageRequested(Page::DeviceLoadMenu) = PatchersList(0),
         _ + PageRequested(Page::DeviceParam { .. }) = PatcherParams(ParamPage { index: event.device(), page: event.page(), focused: None }),
         _ + PageRequested(Page::DeviceData { .. }) = PatcherDatarefs(DataSel::new(event.device(), ctx.dataref_count(event.device()))),
-        _ + PageRequested(Page::DeviceDataLoad { .. }) = PatcherDatarefLoad(DataLoad::new(DataSel::new_selected(event.device(), event.index(), ctx.dataref_count(event.device())), ctx.datafile_count())),
+        _ + PageRequested(Page::DeviceDataLoad { .. }) / ctx.emit(Cmd::FileBrowserEnter { instance: event.device(), dataref: event.index() }); = PatcherDatarefLoad(DataSel::new_selected(event.device(), event.index(), ctx.dataref_count(event.device()))),
         _ + PageRequested(Page::ParamViewMenu) = ParamViewList(0),
         _ + PageRequested(Page::ParamView { .. }) = ParamView(ParamPage { index: event.view(), page: event.page(), focused: None }),
         _ + PageRequested(Page::UserViewMenu) = UserViewList(0),
@@ -1275,6 +1523,8 @@ impl Caps {
 }
 
 pub struct StateController {
+    datafile_dir: PathBuf,
+
     load_initial: bool,
     initial_loaded: bool,
 
@@ -1293,6 +1543,8 @@ pub struct StateController {
 
     sm: StateMachine,
     topsm: top::StateMachine,
+    filesm: filebrowser::StateMachine,
+    loadingdatarref: Option<(usize, usize)>, //local instance index, dataref index
 
     has_all_capabilities: bool,
 
@@ -1362,9 +1614,6 @@ pub struct StateController {
 
     package_version: Option<String>,
 
-    datafile_list: Vec<String>,
-    datafile_menu: Vec<String>,
-
     popup: Popup,
 
     userviews: BTreeMap<usize, UserView<BinaryColor>>,
@@ -1390,7 +1639,6 @@ struct CommonContext {
 
     //sorted list of instances that have datarefs, and the count of datarefs
     pub(crate) dataref_count: Vec<usize>,
-    pub(crate) datafile_count: usize,
 
     pub(crate) can_exit_powermenu: bool,
 
@@ -1399,6 +1647,8 @@ struct CommonContext {
     pub(crate) battery_low: bool,
     pub(crate) battery_charge: u8,
     pub(crate) psu_connected: Option<bool>,
+
+    pub(crate) file_browser_at_top: bool,
 }
 
 impl Default for CommonContext {
@@ -1414,7 +1664,6 @@ impl Default for CommonContext {
             param_view_pages: Vec::new(),
 
             dataref_count: Vec::new(),
-            datafile_count: 0,
 
             can_exit_powermenu: true,
 
@@ -1423,6 +1672,8 @@ impl Default for CommonContext {
             battery_low: false,
             battery_charge: 100,
             psu_connected: None,
+
+            file_browser_at_top: true,
         }
     }
 }
@@ -1485,10 +1736,6 @@ impl Context {
         *self.common.dataref_count.get(index).unwrap_or(&0)
     }
 
-    fn datafile_count(&self) -> usize {
-        self.common.datafile_count
-    }
-
     fn can_exit_powermenu(&self) -> bool {
         self.common.can_exit_powermenu
     }
@@ -1520,10 +1767,19 @@ impl Context {
     fn set_psu_connected(&mut self, v: bool) {
         self.common.psu_connected = Some(v);
     }
+
+    fn set_file_browser_at_top(&mut self, v: bool) {
+        self.common.file_browser_at_top = v;
+    }
+
+    fn file_browser_at_top(&self) -> bool {
+        self.common.file_browser_at_top
+    }
 }
 
 impl StateController {
     pub fn new(
+        datafile_dir: PathBuf,
         midi_out_queue: sync_mpsc::SyncSender<Midi>,
         volume: Arc<AtomicU8>,
         package_version: Option<String>,
@@ -1539,6 +1795,10 @@ impl StateController {
         let sm = StateMachine::new_with_state(context.clone(), States::Menu(0));
         let topsm = top::StateMachine::new(context);
 
+        let context = filebrowser::Context::new(datafile_dir.clone());
+        let filesm =
+            filebrowser::StateMachine::new_with_state(context, filebrowser::States::Selected(0));
+
         let config = Config::read_or_default(&config_path);
 
         //init volume
@@ -1550,6 +1810,7 @@ impl StateController {
         let tracked_buttons = HashMap::from([(BACK_MIDI, MoveColor::Black)]);
 
         let mut s = Self {
+            datafile_dir,
             load_initial: true,
             initial_loaded: false,
 
@@ -1560,6 +1821,8 @@ impl StateController {
 
             sm,
             topsm,
+            filesm,
+            loadingdatarref: None,
 
             has_all_capabilities,
 
@@ -1633,9 +1896,6 @@ impl StateController {
 
             runner_rnbo_version: None,
             package_version,
-
-            datafile_list: Vec::new(),
-            datafile_menu: Vec::new(),
 
             popup: Default::default(),
             userviews: Default::default(),
@@ -2603,7 +2863,26 @@ impl StateController {
                             if let Some(inst) = self.instances.get_mut(*index)
                                 && let Some(d) = inst.dataref_mappings_mut().get_mut(name)
                             {
-                                *d.mapping_mut() = mapping;
+                                *d.mapping_mut() = mapping.clone();
+
+                                //update indication if this is in the file browser
+                                if let Some(loading) = self.loadingdatarref
+                                    && let Some(localindex) = self
+                                        .patchers_datarefs_instance_indexes
+                                        .iter()
+                                        .position(|(i, _)| i == index)
+                                {
+                                    if let Some(dindex) =
+                                        inst.visible_datarefs().iter().position(|n| n == name)
+                                    {
+                                        if (localindex, dindex) == loading {
+                                            self.filesm
+                                                .context_mut()
+                                                .indicate(mapping.map(PathBuf::from));
+                                        }
+                                    }
+                                }
+
                                 self.handle_event(Events::DatarefMappingChanged);
                             }
                         }
@@ -3325,43 +3604,36 @@ impl StateController {
             }
             States::PatcherDatarefLoad(entry) => {
                 setup_common(line!(), self);
+
                 if let Some(inst) = self
                     .patchers_datarefs_instance_indexes
-                    .get(entry.dataref().instance())
+                    .get(entry.instance())
                     && let Some(inst) = self.instances.get(inst.0)
                 {
-                    let indicated =
-                        inst.visible_datarefs()
-                            .get(entry.dataref().selected())
-                            .map(|key| {
-                                if let Some(dr) = inst.dataref_mappings().get(key) {
-                                    if let Some(filename) = dr.mapping() {
-                                        self.datafile_list
-                                            .iter()
-                                            .position(|item| item == filename)
-                                            .map(|index| index + 1) //+ 1 because of (unload) being first item
-                                            .unwrap_or(0)
-                                    } else {
-                                        0
-                                    }
-                                } else {
-                                    0
-                                }
-                            });
-
                     report = Some(Page::DeviceDataLoad {
                         device: inst.index(),
-                        index: entry.dataref().selected(),
+                        index: entry.selected(),
                     });
-                    render_menu(
-                        frame,
-                        Some("Load File"),
-                        self.datafile_menu.as_slice(),
-                        default_indicator,
-                        all_enabled,
-                        entry.selected(),
-                        indicated,
-                    );
+
+                    let filestate = self.filesm.state().clone();
+                    if let filebrowser::States::Selected(index) = filestate {
+                        let ctx = self.filesm.context();
+                        let names = ctx.names();
+                        let indicators = ctx.indicators();
+                        let enabled = ctx.enabled();
+                        let indicated = ctx.indicated();
+                        render_menu(
+                            frame,
+                            Some("Load File"),
+                            names.as_slice(),
+                            |i| indicators.get(i).unwrap_or(&UNEDITABLE_ITEM_INDICATOR),
+                            |i| *enabled.get(i).unwrap_or(&false),
+                            index,
+                            indicated,
+                        );
+                    } else {
+                        render_empty(frame, "Data Load");
+                    }
                 } else {
                     render_empty(frame, "Data Load");
                 }
@@ -4162,48 +4434,6 @@ impl StateController {
                         self.send_osc(msg).await;
                     }
                 }
-                Cmd::UpdateDataFileList => {
-                    self.datafile_list.clear();
-
-                    if let Ok(entries) = std::fs::read_dir(DATFILE_DIR) {
-                        for e in entries.flatten() {
-                            if let Some(f) = e.path().file_name() {
-                                let s = f.to_string_lossy().to_string();
-                                self.datafile_list.push(s);
-                            }
-                        }
-                    };
-                    self.datafile_list.sort();
-                    self.datafile_menu = vec!["(empty)".into()];
-                    self.datafile_menu.append(&mut self.datafile_list.to_vec());
-
-                    let mut common = self.sm.context().common();
-                    common.datafile_count = self.datafile_menu.len();
-                    self.update_common(common);
-                }
-                Cmd::LoadDataref((instance, datarefindex, fileindex)) => {
-                    //0 == unload
-                    let filename = if fileindex == 0 {
-                        ""
-                    } else if let Some(filename) = self.datafile_list.get(fileindex - 1) {
-                        filename.as_str()
-                    } else {
-                        return;
-                    };
-                    if let Some((instance, _sparse)) =
-                        self.patchers_datarefs_instance_indexes.get(instance)
-                        && let Some(instance) = self.instances.get(*instance)
-                        && let Some(name) = instance.visible_datarefs().get(datarefindex)
-                    {
-                        let addr = format!("/rnbo/inst/{}/data_refs/{}", instance.index(), name);
-                        let msg = OscMessage {
-                            addr,
-                            args: vec![OscType::String(filename.to_string())],
-                        };
-                        self.send_osc(msg).await;
-                    }
-                }
-
                 Cmd::BatteryLow(v) => {
                     let mut common = self.sm.context().common();
                     common.battery_low = v;
@@ -4266,6 +4496,49 @@ impl StateController {
                 Cmd::ClearVolume => {
                     self.output_max_smoothed[0] = 0f32;
                     self.output_max_smoothed[1] = 0f32;
+                }
+                Cmd::FileBrowser(e) => {
+                    let _ = self.filesm.process_event(e);
+                    self.sm
+                        .context_mut()
+                        .set_file_browser_at_top(self.filesm.context().at_root());
+                    if let Some(filename) = self.filesm.context_mut().take_selection() {
+                        if let Some((instance, datarefindex)) = self.loadingdatarref
+                            && let Some((instance, _sparse)) =
+                                self.patchers_datarefs_instance_indexes.get(instance)
+                            && let Some(instance) = self.instances.get(*instance)
+                            && let Some(name) = instance.visible_datarefs().get(datarefindex)
+                            && let Some(filename) = filename.to_str()
+                        {
+                            let addr =
+                                format!("/rnbo/inst/{}/data_refs/{}", instance.index(), name);
+                            let msg = OscMessage {
+                                addr,
+                                args: vec![OscType::String(filename.to_string())],
+                            };
+                            self.send_osc(msg).await;
+                        }
+                        self.filesm.context_mut().indicate(Some(filename));
+                    }
+                }
+
+                Cmd::FileBrowserEnter { instance, dataref } => {
+                    self.loadingdatarref = Some((instance, dataref));
+                    let mut indicated: Option<PathBuf> = None;
+
+                    if let Some(inst) = self.patchers_datarefs_instance_indexes.get(instance)
+                        && let Some(inst) = self.instances.get(inst.0)
+                    {
+                        if let Some(key) = inst.visible_datarefs().get(dataref) {
+                            if let Some(dr) = inst.dataref_mappings().get(key) {
+                                if let Some(dr) = dr.mapping() {
+                                    indicated = Some(PathBuf::from(dr));
+                                }
+                            }
+                        }
+                    }
+                    self.filesm.context_mut().reset(indicated);
+                    let _ = self.filesm.process_event(Events::Reset);
                 }
             }
         }
