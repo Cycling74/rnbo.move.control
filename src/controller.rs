@@ -164,17 +164,12 @@ where
     let line = line.into().into_owned();
     let width: usize = width.into();
     if line.len() > width {
-        let (animate_start, line) = match last.clone() {
-            None => (frame, line),
-            Some((f, l)) => {
-                if l == line {
-                    (f, l)
-                } else {
-                    (frame, line)
-                }
-            }
+        let animate_start = match last.as_ref() {
+            Some((f, l)) if *l == line => *f,
+            _ => frame,
         };
-        *last = Some((animate_start, line.clone()));
+        *last = Some((animate_start, line));
+        let line = &last.as_ref().unwrap().1;
 
         let index = {
             let movelen = line.len() - width;
