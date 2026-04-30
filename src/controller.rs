@@ -4539,6 +4539,9 @@ impl StateController {
                     }
                     self.filesm.context_mut().reset(indicated);
                     let _ = self.filesm.process_event(Events::Reset);
+                    self.sm
+                        .context_mut()
+                        .set_file_browser_at_top(self.filesm.context().at_root());
                 }
             }
         }
