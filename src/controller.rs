@@ -152,26 +152,40 @@ fn default_indicator(_: usize) -> &'static char {
     ITEM_INDICATOR
 }
 
-fn animate_text<'a, T>(content: T, width: u16, frame: usize) -> String
+fn animate_text<'a, T>(
+    line: T,
+    width: u16,
+    frame: usize,
+    last: &mut Option<(usize, String)>,
+) -> String
 where
     T: Into<std::borrow::Cow<'a, str>>,
 {
-    let line = content.into().into_owned();
+    let line = line.into().into_owned();
     let width: usize = width.into();
     if line.len() > width {
-        let movelen = line.len() - width;
-        let fmovelen = movelen as f64;
-        let animlen = 2 * (ANIMATION_FRAME_FREEZE + movelen);
-        let index = (frame / ANIMATION_FRAME_DIV) % animlen;
-        let index = if index < ANIMATION_FRAME_FREEZE + movelen {
-            (index.saturating_sub(ANIMATION_FRAME_FREEZE) as f64) / fmovelen
-        } else if index < ANIMATION_FRAME_FREEZE * 2 + movelen {
-            1.0
-        } else {
-            1.0 - (index - (ANIMATION_FRAME_FREEZE * 2 + movelen)) as f64 / fmovelen
-        } * fmovelen;
+        let (animate_start, line) = match last.clone() {
+            None => (frame, line),
+            Some((f, l)) => {
+                if l == line {
+                    (f, l)
+                } else {
+                    (frame, line)
+                }
+            }
+        };
+        *last = Some((animate_start, line.clone()));
 
-        let index = index as usize;
+        let index = {
+            let movelen = line.len() - width;
+            let index = (frame.saturating_sub(animate_start) / ANIMATION_FRAME_DIV)
+                .saturating_sub(ANIMATION_FRAME_FREEZE);
+            if index < (movelen + ANIMATION_FRAME_FREEZE) {
+                index.min(movelen)
+            } else {
+                0
+            }
+        };
 
         let line = line.split_at(index).1;
         if line.len() > width {
@@ -183,6 +197,30 @@ where
     } else {
         line
     }
+}
+
+fn animate_title<'a, T>(content: T, width: u16, frame: usize) -> String
+where
+    T: Into<std::borrow::Cow<'a, str>>,
+{
+    use std::sync::Mutex;
+    static LAST: Lazy<Mutex<Option<(usize, String)>>> = Lazy::new(|| Mutex::new(None));
+    let mut g = LAST.lock().expect("to get mutex");
+    let last: &mut Option<(usize, String)> = &mut *g;
+
+    animate_text(content, width, frame, last)
+}
+
+fn animate_content<'a, T>(content: T, width: u16, frame: usize) -> String
+where
+    T: Into<std::borrow::Cow<'a, str>>,
+{
+    use std::sync::Mutex;
+    static LAST: Lazy<Mutex<Option<(usize, String)>>> = Lazy::new(|| Mutex::new(None));
+    let mut g = LAST.lock().expect("to get mutex");
+    let last: &mut Option<(usize, String)> = &mut *g;
+
+    animate_text(content, width, frame, last)
 }
 
 fn format_title<'a, T>(content: T) -> ratatui::text::Line<'a>
@@ -237,11 +275,11 @@ fn render_param_page(
     let layout = param_layout(frame.area());
 
     let width = frame.area().width;
-    let title = format_title(animate_text(title, width, frame.count()));
+    let title = format_title(animate_title(title, width, frame.count()));
     frame.render_widget(title, layout[0]);
 
     if let Some(focus) = focus {
-        let name = Line::from(animate_text(focus.label, width, frame.count()));
+        let name = Line::from(animate_content(focus.label, width, frame.count()));
         frame.render_widget(name, layout[1]);
 
         let label = Span::raw(focus.value);
@@ -302,7 +340,7 @@ fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> 
             let s: &str = items[context.index].as_ref();
             let mut item = if context.is_selected {
                 let selector = selector(context.index);
-                let s = animate_text(s, label_width, frame_index);
+                let s = animate_content(s, label_width, frame_index);
                 MenuItem::new_selected(s, indicated, selector)
             } else {
                 MenuItem::new(s, indicated)
@@ -3725,6 +3763,7 @@ impl StateController {
             }
             States::ParamView(state) => {
                 setup_common(line!(), self);
+
                 let index = state.index;
                 let page = state.page;
                 let focused = state.focused;
@@ -3757,6 +3796,7 @@ impl StateController {
                     let mut focus: Option<ParamFocus> = None;
                     if let Some(focused) = focused {
                         let pindex = offset + focused;
+
                         if let Some(pindex) = params.get(pindex)
                             && let Some(param) = self.params.get(*pindex)
                         {
@@ -3993,10 +4033,10 @@ impl StateController {
                     let layout = titled_layout(frame.area());
 
                     let title =
-                        format_title(animate_text(self.popup.title(), width, frame.count()));
+                        format_title(animate_title(self.popup.title(), width, frame.count()));
                     frame.render_widget(title, layout[0]);
 
-                    let content = animate_text(self.popup.content(), width, frame.count());
+                    let content = animate_content(self.popup.content(), width, frame.count());
                     let content = vec![Line::from(""), Line::from(content), Line::from("")];
                     let paragraph = Paragraph::new(content).alignment(Alignment::Center);
                     frame.render_widget(paragraph, layout[1]);
