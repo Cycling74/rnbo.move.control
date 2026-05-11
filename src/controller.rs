@@ -433,12 +433,19 @@ pub enum Page {
     //optional paramview overlay, (index, page)
     UserView {
         view: usize,
-        paramview: Option<(usize, usize)>,
+        overlay: UserViewParamViewOverlay,
     },
     TransportEditor,
     TempoEditor,
     About,
     Status,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum UserViewParamViewOverlay {
+    Default,
+    Custom { paramview: usize, page: usize },
+    None,
 }
 
 //getter helpers for use in statemachine
@@ -471,10 +478,10 @@ impl Page {
             _ => 0,
         }
     }
-    pub fn userviewparam(&self) -> Option<(usize, usize)> {
+    pub fn userviewparam(&self) -> UserViewParamViewOverlay {
         match self {
-            Self::UserView { view, paramview } => *paramview,
-            _ => None,
+            Self::UserView { view, overlay } => *overlay,
+            _ => UserViewParamViewOverlay::Default,
         }
     }
 }
@@ -928,7 +935,7 @@ enum Cmd {
         userview: usize,
         paramindex: usize,
         offset: isize,
-        paramview: Option<(usize, usize)>, //use driven overlay
+        overlay: UserViewParamViewOverlay,
     },
     OffsetVolume(isize),
     OffsetTempo(isize),
@@ -1378,7 +1385,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() > 1] = UserViewList(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() == 1] = UserView((0, None)),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() == 1] = UserView((0, UserViewParamViewOverlay::Default)),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PARAM_VIEWS_INDEX && ctx.param_view_count() > 1] = ParamViewList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PARAM_VIEWS_INDEX && ctx.param_view_count() == 1] = ParamView(ParamPage { index: 0, page: 0, focused: None }),
@@ -1487,18 +1494,18 @@ smlang::statemachine! {
         UserViewList(usize) + BtnDown(Button::Back) = Menu(USER_VIEWS_INDEX),
         UserViewList(usize) + EncRight(JOG_WHEEL_ENCODER) = UserViewList(jog_right(*state, ctx.userviews_count())),
         UserViewList(usize) + EncLeft(JOG_WHEEL_ENCODER) = UserViewList(jog_left(*state, ctx.userviews_count())),
-        UserViewList(usize) + BtnDown(Button::JogWheel) = UserView((*state, None)),
+        UserViewList(usize) + BtnDown(Button::JogWheel) = UserView((*state, UserViewParamViewOverlay::Default)),
         //UserViewList(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
 
-        UserView((usize, Option<(usize, usize)>)) + BtnDown(Button::Back) [ctx.userviews_count() > 1] = UserViewList(state.0),
-        UserView((usize, Option<(usize, usize)>)) + BtnDown(Button::Back) [ctx.userviews_count() <= 1] = Menu(USER_VIEWS_INDEX),
+        UserView((usize, UserViewParamViewOverlay)) + BtnDown(Button::Back) [ctx.userviews_count() > 1] = UserViewList(state.0),
+        UserView((usize, UserViewParamViewOverlay)) + BtnDown(Button::Back) [ctx.userviews_count() <= 1] = Menu(USER_VIEWS_INDEX),
         //UserView(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
 
-        UserView((usize, Option<(usize, usize)>)) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: state.0, paramindex: *event, offset: -1, paramview: state.1});,
-        UserView((usize, Option<(usize, usize)>)) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: state.0, paramindex: *event, offset: 1, paramview: state.1});,
+        UserView((usize, UserViewParamViewOverlay)) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: state.0, paramindex: *event, offset: -1, overlay: state.1});,
+        UserView((usize, UserViewParamViewOverlay)) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: state.0, paramindex: *event, offset: 1, overlay: state.1});,
 
-        UserView((usize, Option<(usize, usize)>)) + EncLeft(_) [*event == JOG_WHEEL_ENCODER && state.0 > 0] = UserView((state.0 - 1, None)),
-        UserView((usize, Option<(usize, usize)>)) + EncRight(_) [*event == JOG_WHEEL_ENCODER && ctx.userviews_count() > state.0 + 1] = UserView((state.0 + 1, None)),
+        UserView((usize, UserViewParamViewOverlay)) + EncLeft(_) [*event == JOG_WHEEL_ENCODER && state.0 > 0] = UserView((state.0 - 1, UserViewParamViewOverlay::Default)),
+        UserView((usize, UserViewParamViewOverlay)) + EncRight(_) [*event == JOG_WHEEL_ENCODER && ctx.userviews_count() > state.0 + 1] = UserView((state.0 + 1, UserViewParamViewOverlay::Default)),
 
         ParamViewList(usize) + BtnDown(Button::Back) = Menu(PARAM_VIEWS_INDEX),
         ParamViewList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.param_view_count() > *state + 1] = ParamViewList(*state + 1),
@@ -2425,6 +2432,14 @@ impl StateController {
                     _ => None,
                 }
             };
+            let as_int = |arg: &OscType| -> Option<isize> {
+                match arg {
+                    OscType::Double(v) => Some(*v as isize),
+                    OscType::Float(v) => Some(*v as isize),
+                    OscType::Int(v) => Some(*v as isize),
+                    _ => None,
+                }
+            };
 
             let as_float64 = |arg: &OscType| -> Option<f64> {
                 match arg {
@@ -2576,7 +2591,7 @@ impl StateController {
                             if *key == viewindex {
                                 self.handle_event(Events::PageRequested(Page::UserView {
                                     view: index,
-                                    paramview: None,
+                                    overlay: UserViewParamViewOverlay::Default,
                                 }));
                                 break;
                             }
@@ -2777,15 +2792,26 @@ impl StateController {
                     if !msg.args.is_empty()
                         && let Some(view) = as_index(&msg.args[0])
                     {
-                        let paramview = match msg.args.len() {
+                        let overlay = if let Some((paramview, page)) = match msg.args.len() {
                             1 => None,
-                            2 => Some((as_index(&msg.args[1]).unwrap_or(0), 0)),
+                            2 => Some((as_int(&msg.args[1]).unwrap_or(0), 0)),
                             _ => Some((
-                                as_index(&msg.args[1]).unwrap_or(0),
-                                as_index(&msg.args[2]).unwrap_or(0),
+                                as_int(&msg.args[1]).unwrap_or(0),
+                                as_int(&msg.args[2]).unwrap_or(0),
                             )),
+                        } {
+                            if paramview < 0 || page < 0 {
+                                UserViewParamViewOverlay::None
+                            } else {
+                                UserViewParamViewOverlay::Custom {
+                                    paramview: paramview as usize,
+                                    page: page as usize,
+                                }
+                            }
+                        } else {
+                            UserViewParamViewOverlay::Default
                         };
-                        self.handle_event(Events::PageRequested(Page::UserView { view, paramview }))
+                        self.handle_event(Events::PageRequested(Page::UserView { view, overlay }))
                     }
                 }
                 SHOW_ADDR_PARM_VIEW => {
@@ -3307,24 +3333,28 @@ impl StateController {
         }
     }
 
-    fn userview_paramview(
+    fn userview_overlay(
         &self,
         viewindex: usize,
-        paramview: Option<(usize, usize)>,
+        overlay: UserViewParamViewOverlay,
     ) -> Option<(usize, usize)> {
         if let Some(userview) = self.userviews.values().nth(viewindex) {
-            if let Some(inner) = paramview {
-                Some(inner)
-            } else if let Some(param_view_name) = userview.param_view_name() {
-                Some((
-                    self.param_view_names
-                        .iter()
-                        .position(|n| n == param_view_name)
-                        .unwrap_or(0),
-                    0, //TODO should we have a way to select a page?
-                ))
-            } else {
-                None
+            match overlay {
+                UserViewParamViewOverlay::Default => {
+                    if let Some(param_view_name) = userview.param_view_name() {
+                        Some((
+                            self.param_view_names
+                                .iter()
+                                .position(|n| n == param_view_name)
+                                .unwrap_or(0),
+                            0, //TODO should we have a way to select a page?
+                        ))
+                    } else {
+                        None
+                    }
+                }
+                UserViewParamViewOverlay::Custom { paramview, page } => Some((paramview, page)),
+                UserViewParamViewOverlay::None => None,
             }
         } else {
             None
@@ -3752,7 +3782,7 @@ impl StateController {
                     None,
                 );
             }
-            States::UserView((selected, paramview)) => {
+            States::UserView((selected, overlay)) => {
                 setup_common(line!(), self);
 
                 //returns None if there is no userview with that index
@@ -3760,35 +3790,30 @@ impl StateController {
                 if let Some(_view) = self.userviews.keys().nth(selected) {
                     userview = Some(selected);
 
-                    let paramview =
-                        if let Some((index, page)) = self.userview_paramview(selected, paramview) {
-                            if let Some((_name, params)) = self
-                                .param_view_names
-                                .iter()
-                                .zip(self.param_view_params.iter())
-                                .nth(index)
-                            {
-                                let offset = page * PARAM_PAGE_SIZE;
+                    if let Some((index, page)) = self.userview_overlay(selected, overlay) {
+                        if let Some((_name, params)) = self
+                            .param_view_names
+                            .iter()
+                            .zip(self.param_view_params.iter())
+                            .nth(index)
+                        {
+                            let offset = page * PARAM_PAGE_SIZE;
 
-                                for (pindex, o) in params
-                                    .iter()
-                                    .skip(offset)
-                                    .take(PARAM_PAGE_SIZE)
-                                    .zip(self.param_values.iter_mut())
-                                {
-                                    if let Some(param) = self.params.get(*pindex) {
-                                        *o = param.color();
-                                    }
+                            for (pindex, o) in params
+                                .iter()
+                                .skip(offset)
+                                .take(PARAM_PAGE_SIZE)
+                                .zip(self.param_values.iter_mut())
+                            {
+                                if let Some(param) = self.params.get(*pindex) {
+                                    *o = param.color();
                                 }
                             }
-
-                            Some((index, page))
-                        } else {
-                            None
-                        };
+                        }
+                    }
                     report = Some(Page::UserView {
                         view: selected,
-                        paramview,
+                        overlay,
                     });
                 } else {
                     render_empty(frame, "User View");
@@ -4198,11 +4223,17 @@ impl StateController {
                     addr: SHOW_ADDR_USERVIEW.to_string(),
                     args: vec![],
                 },
-                Page::UserView { view, paramview } => {
+                Page::UserView { view, overlay } => {
                     let mut args = vec![OscType::Int(view as _)];
-                    if let Some((paramview, page)) = paramview {
-                        args.push(OscType::Int(paramview as _));
-                        args.push(OscType::Int(page as _));
+                    match overlay {
+                        UserViewParamViewOverlay::Custom { paramview, page } => {
+                            args.push(OscType::Int(paramview as _));
+                            args.push(OscType::Int(page as _));
+                        }
+                        UserViewParamViewOverlay::None => {
+                            args.push(OscType::Int(-1 as _));
+                        }
+                        _ => (),
                     }
                     OscMessage {
                         addr: SHOW_ADDR_USERVIEW_DISPLAY.to_string(),
@@ -4305,9 +4336,15 @@ impl StateController {
                     States::ParamView(_) => {
                         filter_encoders = true;
                     }
-                    States::UserView((index, _paramview)) => {
-                        if let Some(view) = self.userviews.get(index) {
-                            filter_encoders = view.param_view_name().is_some();
+                    States::UserView((index, overlay)) => {
+                        filter_encoders = match overlay {
+                            UserViewParamViewOverlay::Default => self
+                                .userviews
+                                .get(index)
+                                .map(|view| view.param_view_name().is_some())
+                                .unwrap_or(false),
+                            UserViewParamViewOverlay::Custom { .. } => true,
+                            UserViewParamViewOverlay::None => false,
                         }
                     }
                     _ => (),
@@ -4367,9 +4404,9 @@ impl StateController {
                     userview,
                     paramindex,
                     offset,
-                    paramview,
+                    overlay,
                 } => {
-                    if let Some((index, page)) = self.userview_paramview(userview, paramview) {
+                    if let Some((index, page)) = self.userview_overlay(userview, overlay) {
                         if let Some(params) = self.param_view_params.get(index)
                             && let Some(index) = params.get(paramindex + page * PARAM_PAGE_SIZE)
                         {
