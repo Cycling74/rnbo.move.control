@@ -97,9 +97,15 @@ GPLv2 license text: [https://www.gnu.org/licenses/old-licenses/gpl-2.0.html](htt
     * `/rnboctl/show/device/load` - display `Load Patchers` menu
 
     * `/rnboctl/show/userview` - display `User Views` menu
-    * `/rnboctl/show/userview/display <index> [<paramview>] [<paramviewpage>]`  - display user view at index
-        * if you supply a paramview index the view will be shown with that param view overlayed, you can also specify the page
-        * if you supply a negative value for either paramview or paramviewpage you will have no overlay and encoder values will pass thru to user patchers
+    * `/rnboctl/show/userview/display <index> [<paramview>] [<paramviewpage>] [<takeoverjog>] [<takeoverback>]`  - display user view at index
+        * if you supply a paramview index the view will be shown with that
+        param view overlayed, you can also specify the page
+        * if you supply a negative value for either paramview or paramviewpage
+        you will have no overlay and encoder values will pass thru to user
+        patchers
+        * if you supply a non zero (or boolean T) value for takeoverjog and/
+        takeoverback you can take over the jog wheel or back button and those
+        values will be sent to RNBO patchers and will not alter the UI directly
     * `/rnboctl/show/paramview` - display `Param Views` menu
     * `/rnboctl/show/paramview/display <view index> [<page>]` - display `Param View` with given index and optional page
 
