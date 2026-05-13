@@ -915,18 +915,20 @@ const STARTUP_MENU: [&str; 2] = ["Load Initial", "Load Empty"];
 const STARTUP_MENU_LOAD_INITIAL: usize = 0;
 const STARTUP_MENU_NOLOAD_INITIAL: usize = 1;
 
-const POWER_MENU: [&str; 5] = [
+const POWER_MENU: [&str; 6] = [
     "Launch Move",
     "Power Down",
     "Clear Graph",
     "Reload Graph",
+    "Go To Menu",
     "MIDI Reset",
 ];
 const POWER_MENU_LAUNCH_MOVE_INDEX: usize = 0;
 const POWER_MENU_POWER_DOWN_INDEX: usize = 1;
 const POWER_MENU_CLEAR_GRAPH_INDEX: usize = 2;
 const POWER_MENU_RELOAD_GRAPH_INDEX: usize = 3;
-const POWER_MENU_MIDI_RESET_INDEX: usize = 4;
+const POWER_MENU_GOTO_MENU_INDEX: usize = 4;
+const POWER_MENU_MIDI_RESET_INDEX: usize = 5;
 
 const TRANSPORT_EDITOR_TEMPO_INDEX: usize = 0;
 const TRANSPORT_EDITOR_STATE_INDEX: usize = 1;
@@ -984,6 +986,7 @@ enum Cmd {
     ReloadGraph,
     ClearGraph,
     MIDIReset,
+    GoToMenu, //used to exit jog wheel / back button takeover
 
     ClearVolume,
 
@@ -1313,9 +1316,10 @@ pub mod filebrowser {
 pub mod top {
     use super::{
         Button, Cmd, Context, Events, JOG_WHEEL_ENCODER, JOG_WHEEL_TOUCH, POWER_MENU,
-        POWER_MENU_CLEAR_GRAPH_INDEX, POWER_MENU_LAUNCH_MOVE_INDEX, POWER_MENU_MIDI_RESET_INDEX,
-        POWER_MENU_POWER_DOWN_INDEX, POWER_MENU_RELOAD_GRAPH_INDEX, Page, PowerCommand,
-        STARTUP_MENU, VOLUME_WHEEL_ENCODER, VOLUME_WHEEL_TOUCH, jog_left, jog_right,
+        POWER_MENU_CLEAR_GRAPH_INDEX, POWER_MENU_GOTO_MENU_INDEX, POWER_MENU_LAUNCH_MOVE_INDEX,
+        POWER_MENU_MIDI_RESET_INDEX, POWER_MENU_POWER_DOWN_INDEX, POWER_MENU_RELOAD_GRAPH_INDEX,
+        Page, PowerCommand, STARTUP_MENU, VOLUME_WHEEL_ENCODER, VOLUME_WHEEL_TOUCH, jog_left,
+        jog_right,
     };
 
     #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -1357,6 +1361,7 @@ pub mod top {
             PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_CLEAR_GRAPH_INDEX] / ctx.emit(Cmd::ClearGraph); = Main,
             PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_RELOAD_GRAPH_INDEX] / ctx.emit(Cmd::ReloadGraph); = Main,
             PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_MIDI_RESET_INDEX] / ctx.emit(Cmd::MIDIReset); = Main,
+            PowerMenu(usize) + BtnDown(Button::JogWheel) [*state == POWER_MENU_GOTO_MENU_INDEX] / ctx.emit(Cmd::GoToMenu); = Main,
 
             PowerMenu(usize) + EncRight(JOG_WHEEL_ENCODER) = PowerMenu(jog_right(*state, POWER_MENU.len())),
             PowerMenu(usize) + EncLeft(JOG_WHEEL_ENCODER) = PowerMenu(jog_left(*state, POWER_MENU.len())),
@@ -1375,7 +1380,7 @@ pub mod top {
             Popup(LastView) + EncTouch(JOG_WHEEL_TOUCH) [*state == LastView::Main] = Main,
 
             _ + ChildProcessError = DisplayChildProcessError,
-            DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PowerMenu(POWER_MENU_POWER_DOWN_INDEX),
+            DisplayChildProcessError + BtnDown(Button::PowerShort) / ctx.emit(Cmd::Power(PowerCommand::ClearShortPress)); = PowerMenu(0),
 
             //TODO we don't want to back out of DisplayChildProcessError
             VolumeEditor(LastView) + SetViewPageSelected(_) / ctx.emit(Cmd::ClearVolume); = Main,
@@ -4691,6 +4696,11 @@ impl StateController {
                     };
                     self.send_osc(msg).await;
                     self.request_popup("MIDI Reset", "sent");
+                }
+                Cmd::GoToMenu => {
+                    self.filter_jogwheel.store(true, AtomicOrdering::Release);
+                    self.filter_backbtn.store(true, AtomicOrdering::Release);
+                    self.handle_event(Events::PageRequested(Page::Main));
                 }
                 Cmd::ClearVolume => {
                     self.output_max_smoothed[0] = 0f32;
