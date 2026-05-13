@@ -106,6 +106,7 @@ GPLv2 license text: [https://www.gnu.org/licenses/old-licenses/gpl-2.0.html](htt
         * if you supply a non zero (or boolean T) value for takeoverjog and/
         takeoverback you can take over the jog wheel or back button and those
         values will be sent to RNBO patchers and will not alter the UI directly
+        * you can use the new power menu item `Go To Menu` to restore your control if your patcher doesn't give it back to you.
     * `/rnboctl/show/paramview` - display `Param Views` menu
     * `/rnboctl/show/paramview/display <view index> [<page>]` - display `Param View` with given index and optional page
 
