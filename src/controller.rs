@@ -3853,27 +3853,35 @@ impl StateController {
                 if let Some(_view) = self.userviews.keys().nth(selected) {
                     userview = Some(selected);
 
-                    if let Some((index, page)) = self.userview_overlay(selected, overlay) {
-                        if let Some((_name, params)) = self
-                            .param_view_names
-                            .iter()
-                            .zip(self.param_view_params.iter())
-                            .nth(index)
-                        {
-                            let offset = page * PARAM_PAGE_SIZE;
-
-                            for (pindex, o) in params
+                    let overlay =
+                        if let Some((index, page)) = self.userview_overlay(selected, overlay) {
+                            if let Some((_name, params)) = self
+                                .param_view_names
                                 .iter()
-                                .skip(offset)
-                                .take(PARAM_PAGE_SIZE)
-                                .zip(self.param_values.iter_mut())
+                                .zip(self.param_view_params.iter())
+                                .nth(index)
                             {
-                                if let Some(param) = self.params.get(*pindex) {
-                                    *o = param.color();
+                                let offset = page * PARAM_PAGE_SIZE;
+
+                                for (pindex, o) in params
+                                    .iter()
+                                    .skip(offset)
+                                    .take(PARAM_PAGE_SIZE)
+                                    .zip(self.param_values.iter_mut())
+                                {
+                                    if let Some(param) = self.params.get(*pindex) {
+                                        *o = param.color();
+                                    }
                                 }
                             }
-                        }
-                    }
+                            //not always custom but we can report this
+                            UserViewParamViewOverlay::Custom {
+                                paramview: index,
+                                page,
+                            }
+                        } else {
+                            UserViewParamViewOverlay::None
+                        };
                     report = Some(Page::UserView {
                         view: selected,
                         overlay,
@@ -4287,17 +4295,34 @@ impl StateController {
                     addr: SHOW_ADDR_USERVIEW.to_string(),
                     args: vec![],
                 },
-                Page::UserView { view, overlay, .. } => {
+                Page::UserView {
+                    view,
+                    overlay,
+                    overrides,
+                } => {
+                    //indicate overlay, only indicate overrides if there is an overlay
                     let mut args = vec![OscType::Int(view as _)];
-                    match overlay {
+                    if match overlay {
                         UserViewParamViewOverlay::Custom { paramview, page } => {
                             args.push(OscType::Int(paramview as _));
                             args.push(OscType::Int(page as _));
+                            true
                         }
                         UserViewParamViewOverlay::None => {
                             args.push(OscType::Int(-1 as _));
+                            args.push(OscType::Int(-1 as _));
+                            true
                         }
-                        _ => (),
+                        _ => false,
+                    } {
+                        let (j, b) = match overrides {
+                            UserViewOverride::None => (false, false),
+                            UserViewOverride::JogWheel => (true, false),
+                            UserViewOverride::JogWheelBackBtn => (true, true),
+                            UserViewOverride::BackBtn => (false, true),
+                        };
+                        args.push(OscType::Bool(j));
+                        args.push(OscType::Bool(b));
                     }
                     OscMessage {
                         addr: SHOW_ADDR_USERVIEW_DISPLAY.to_string(),
