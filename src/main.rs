@@ -87,6 +87,8 @@ struct Driver {
     midi_in_queue: async_mpsc::Sender<Midi>,
     midi_out_queue: sync_mpsc::Receiver<Midi>,
     filter_encoders: Arc<AtomicBool>,
+    filter_jogwheel: Arc<AtomicBool>,
+    filter_backbtn: Arc<AtomicBool>,
 }
 
 //display rate: 22.928ms
@@ -105,6 +107,8 @@ impl jack::ProcessHandler for Driver {
         let midi_in = self.midi_in.iter(ps);
         let mut midi_thru = self.midi_thru.writer(ps);
         let filter_encoders = self.filter_encoders.load(Ordering::Acquire);
+        let filter_jogwheel = self.filter_jogwheel.load(Ordering::Acquire);
+        let filter_backbtn = self.filter_backbtn.load(Ordering::Acquire);
         for i in midi_in {
             //println!("got midi: {:?}", i);
             //only filter out sysex, jog wheel, volume, back and menu
@@ -114,14 +118,20 @@ impl jack::ProcessHandler for Driver {
                     0x9F | 0x8F => match i.bytes[1] {
                         //encoders
                         0..=7 => filter_encoders,
-                        //volume, wheel
-                        8..=9 => true,
+                        //volume
+                        8 => true,
+                        //wheel
+                        9 => filter_jogwheel,
                         _ => false,
                     },
                     //CC
                     0xBF => match i.bytes[1] {
-                        //wheel press/turn, back, volume
-                        3 | 14 | 51 | 79 => true,
+                        //wheel (touch, press)
+                        3 | 14 => filter_jogwheel,
+                        //volume
+                        79 => true,
+                        //back
+                        51 => filter_backbtn,
                         //encoders
                         71..=78 => filter_encoders,
                         _ => false,
@@ -482,6 +492,8 @@ async fn with_client(
     }
 
     let filter_encoders = Arc::new(AtomicBool::new(false));
+    let filter_jogwheel = Arc::new(AtomicBool::new(true));
+    let filter_backbtn = Arc::new(AtomicBool::new(true));
 
     let driver = Driver {
         display: display_port,
@@ -493,6 +505,8 @@ async fn with_client(
         midi_in_queue: midi_in_tx,
         midi_out_queue: midi_out_rx,
         filter_encoders: filter_encoders.clone(),
+        filter_jogwheel: filter_jogwheel.clone(),
+        filter_backbtn: filter_backbtn.clone(),
     };
 
     let c = c
@@ -576,6 +590,8 @@ async fn with_client(
             config_path,
             has_all_capabilities,
             filter_encoders,
+            filter_jogwheel,
+            filter_backbtn,
             output_max,
         )));
 

@@ -434,6 +434,7 @@ pub enum Page {
     UserView {
         view: usize,
         overlay: UserViewParamViewOverlay,
+        overrides: UserViewOverride,
     },
     TransportEditor,
     TempoEditor,
@@ -446,6 +447,21 @@ pub enum UserViewParamViewOverlay {
     Default { page: Option<usize> },
     Custom { paramview: usize, page: usize },
     None,
+}
+
+impl Default for UserViewParamViewOverlay {
+    fn default() -> Self {
+        Self::Default { page: None }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum UserViewOverride {
+    #[default]
+    None,
+    JogWheel,
+    BackBtn,
+    JogWheelBackBtn,
 }
 
 //getter helpers for use in statemachine
@@ -480,8 +496,14 @@ impl Page {
     }
     pub fn userviewparam(&self) -> UserViewParamViewOverlay {
         match self {
-            Self::UserView { view, overlay } => *overlay,
+            Self::UserView { overlay, .. } => *overlay,
             _ => UserViewParamViewOverlay::Default { page: None },
+        }
+    }
+    pub fn userviewoverrides(&self) -> UserViewOverride {
+        match self {
+            Self::UserView { overrides, .. } => *overrides,
+            _ => UserViewOverride::None,
         }
     }
 }
@@ -1385,7 +1407,7 @@ smlang::statemachine! {
         Menu(usize) + BtnDown(Button::JogWheel) [*state == DEVICE_DATA_INDEX && ctx.instances_count(InstSelType::Datarefs) == 1] = PatcherDatarefs(DataSel::new(0, ctx.dataref_count(0))),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() > 1] = UserViewList(0),
-        Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() == 1] = UserView((0, UserViewParamViewOverlay::Default { page: None })),
+        Menu(usize) + BtnDown(Button::JogWheel) [*state == USER_VIEWS_INDEX && ctx.userviews_count() == 1] = UserView((0, Default::default(), Default::default())),
 
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PARAM_VIEWS_INDEX && ctx.param_view_count() > 1] = ParamViewList(0),
         Menu(usize) + BtnDown(Button::JogWheel) [*state == PARAM_VIEWS_INDEX && ctx.param_view_count() == 1] = ParamView(ParamPage { index: 0, page: 0, focused: None }),
@@ -1494,18 +1516,18 @@ smlang::statemachine! {
         UserViewList(usize) + BtnDown(Button::Back) = Menu(USER_VIEWS_INDEX),
         UserViewList(usize) + EncRight(JOG_WHEEL_ENCODER) = UserViewList(jog_right(*state, ctx.userviews_count())),
         UserViewList(usize) + EncLeft(JOG_WHEEL_ENCODER) = UserViewList(jog_left(*state, ctx.userviews_count())),
-        UserViewList(usize) + BtnDown(Button::JogWheel) = UserView((*state, UserViewParamViewOverlay::Default { page: None })),
+        UserViewList(usize) + BtnDown(Button::JogWheel) = UserView((*state, Default::default(), UserViewOverride::None)),
         //UserViewList(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
 
-        UserView((usize, UserViewParamViewOverlay)) + BtnDown(Button::Back) [ctx.userviews_count() > 1] = UserViewList(state.0),
-        UserView((usize, UserViewParamViewOverlay)) + BtnDown(Button::Back) [ctx.userviews_count() <= 1] = Menu(USER_VIEWS_INDEX),
+        UserView((usize, UserViewParamViewOverlay, UserViewOverride)) + BtnDown(Button::Back) [ctx.userviews_count() > 1] = UserViewList(state.0),
+        UserView((usize, UserViewParamViewOverlay, UserViewOverride)) + BtnDown(Button::Back) [ctx.userviews_count() <= 1] = Menu(USER_VIEWS_INDEX),
         //UserView(usize) + UserViewsChanged = Menu(USER_VIEWS_INDEX), //backout, TODO be smarter
 
-        UserView((usize, UserViewParamViewOverlay)) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: state.0, paramindex: *event, offset: -1, overlay: state.1});,
-        UserView((usize, UserViewParamViewOverlay)) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: state.0, paramindex: *event, offset: 1, overlay: state.1});,
+        UserView((usize, UserViewParamViewOverlay, UserViewOverride)) + EncLeft(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: state.0, paramindex: *event, offset: -1, overlay: state.1});,
+        UserView((usize, UserViewParamViewOverlay, UserViewOverride)) + EncRight(_) [*event < 8] / ctx.emit(Cmd::OffsetUserViewParam{userview: state.0, paramindex: *event, offset: 1, overlay: state.1});,
 
-        UserView((usize, UserViewParamViewOverlay)) + EncLeft(_) [*event == JOG_WHEEL_ENCODER && state.0 > 0] = UserView((state.0 - 1, UserViewParamViewOverlay::Default { page: None })),
-        UserView((usize, UserViewParamViewOverlay)) + EncRight(_) [*event == JOG_WHEEL_ENCODER && ctx.userviews_count() > state.0 + 1] = UserView((state.0 + 1, UserViewParamViewOverlay::Default { page: None })),
+        UserView((usize, UserViewParamViewOverlay, UserViewOverride)) + EncLeft(_) [*event == JOG_WHEEL_ENCODER && state.0 > 0] = UserView((state.0 - 1, UserViewParamViewOverlay::Default { page: None }, state.2)),
+        UserView((usize, UserViewParamViewOverlay, UserViewOverride)) + EncRight(_) [*event == JOG_WHEEL_ENCODER && ctx.userviews_count() > state.0 + 1] = UserView((state.0 + 1, UserViewParamViewOverlay::Default { page: None }, state.2)),
 
         ParamViewList(usize) + BtnDown(Button::Back) = Menu(PARAM_VIEWS_INDEX),
         ParamViewList(usize) + EncRight(JOG_WHEEL_ENCODER) [ctx.param_view_count() > *state + 1] = ParamViewList(*state + 1),
@@ -1563,7 +1585,7 @@ smlang::statemachine! {
         _ + PageRequested(Page::ParamViewMenu) = ParamViewList(0),
         _ + PageRequested(Page::ParamView { .. }) = ParamView(ParamPage { index: event.view(), page: event.page(), focused: None }),
         _ + PageRequested(Page::UserViewMenu) = UserViewList(0),
-        _ + PageRequested(Page::UserView { .. }) = UserView((event.view(), event.userviewparam())),
+        _ + PageRequested(Page::UserView { .. }) = UserView((event.view(), event.userviewparam(), event.userviewoverrides())),
 
         _ + PageRequested(Page::TransportEditor) = TransportEditor(0),
         _ + PageRequested(Page::TempoEditor) = TempoEditor,
@@ -1681,6 +1703,8 @@ pub struct StateController {
     userviews: BTreeMap<usize, UserView<BinaryColor>>,
 
     filter_encoders: Arc<AtomicBool>,
+    filter_jogwheel: Arc<AtomicBool>,
+    filter_backbtn: Arc<AtomicBool>,
 
     output_max: Arc<[AtomicF32; 2]>,
     output_max_smoothed: [f32; 2],
@@ -1848,6 +1872,8 @@ impl StateController {
         config_path: PathBuf,
         has_all_capabilities: bool,
         filter_encoders: Arc<AtomicBool>,
+        filter_jogwheel: Arc<AtomicBool>,
+        filter_backbtn: Arc<AtomicBool>,
         output_max: Arc<[AtomicF32; 2]>,
     ) -> Self {
         let (tx, rx) = sync_mpsc::channel();
@@ -1963,6 +1989,8 @@ impl StateController {
             userviews: Default::default(),
 
             filter_encoders,
+            filter_jogwheel,
+            filter_backbtn,
 
             output_max,
             output_max_smoothed: [0f32; 2],
@@ -2592,6 +2620,7 @@ impl StateController {
                                 self.handle_event(Events::PageRequested(Page::UserView {
                                     view: index,
                                     overlay: UserViewParamViewOverlay::Default { page: None },
+                                    overrides: UserViewOverride::None,
                                 }));
                                 break;
                             }
@@ -2816,7 +2845,31 @@ impl StateController {
                         } else {
                             UserViewParamViewOverlay::Default { page: None }
                         };
-                        self.handle_event(Events::PageRequested(Page::UserView { view, overlay }))
+
+                        let overrides = match msg.args.len() {
+                            0..=3 => UserViewOverride::None,
+                            4 => {
+                                if as_bool(&msg.args[3]).unwrap_or(false) {
+                                    UserViewOverride::JogWheel
+                                } else {
+                                    UserViewOverride::None
+                                }
+                            }
+                            5.. => match (
+                                as_bool(&msg.args[3]).unwrap_or(false),
+                                as_bool(&msg.args[4]).unwrap_or(false),
+                            ) {
+                                (true, true) => UserViewOverride::JogWheelBackBtn,
+                                (true, false) => UserViewOverride::JogWheel,
+                                (false, true) => UserViewOverride::BackBtn,
+                                _ => UserViewOverride::None,
+                            },
+                        };
+                        self.handle_event(Events::PageRequested(Page::UserView {
+                            view,
+                            overlay,
+                            overrides,
+                        }))
                     }
                 }
                 SHOW_ADDR_PARM_VIEW => {
@@ -3787,7 +3840,7 @@ impl StateController {
                     None,
                 );
             }
-            States::UserView((selected, overlay)) => {
+            States::UserView((selected, overlay, overrides)) => {
                 setup_common(line!(), self);
 
                 //returns None if there is no userview with that index
@@ -3819,6 +3872,7 @@ impl StateController {
                     report = Some(Page::UserView {
                         view: selected,
                         overlay,
+                        overrides,
                     });
                 } else {
                     render_empty(frame, "User View");
@@ -4228,7 +4282,7 @@ impl StateController {
                     addr: SHOW_ADDR_USERVIEW.to_string(),
                     args: vec![],
                 },
-                Page::UserView { view, overlay } => {
+                Page::UserView { view, overlay, .. } => {
                     let mut args = vec![OscType::Int(view as _)];
                     match overlay {
                         UserViewParamViewOverlay::Custom { paramview, page } => {
@@ -4329,6 +4383,8 @@ impl StateController {
         };
 
         let mut filter_encoders = false;
+        let mut filter_jogwheel = true;
+        let mut filter_backbtn = true;
         match top_cur {
             top::States::Main => {
                 if doprocess {
@@ -4341,7 +4397,7 @@ impl StateController {
                     States::ParamView(_) => {
                         filter_encoders = true;
                     }
-                    States::UserView((index, overlay)) => {
+                    States::UserView((index, overlay, overrides)) => {
                         filter_encoders = match overlay {
                             UserViewParamViewOverlay::Default { .. } => self
                                 .userviews
@@ -4350,7 +4406,13 @@ impl StateController {
                                 .unwrap_or(false),
                             UserViewParamViewOverlay::Custom { .. } => true,
                             UserViewParamViewOverlay::None => false,
-                        }
+                        };
+                        (filter_jogwheel, filter_backbtn) = match overrides {
+                            UserViewOverride::None => (true, true),
+                            UserViewOverride::JogWheelBackBtn => (false, false),
+                            UserViewOverride::JogWheel => (false, true),
+                            UserViewOverride::BackBtn => (true, false),
+                        };
                     }
                     _ => (),
                 };
@@ -4360,6 +4422,10 @@ impl StateController {
 
         self.filter_encoders
             .store(filter_encoders, AtomicOrdering::Release);
+        self.filter_jogwheel
+            .store(filter_jogwheel, AtomicOrdering::Release);
+        self.filter_backbtn
+            .store(filter_backbtn, AtomicOrdering::Release);
     }
 
     async fn offset_param(&mut self, index: usize, offset: isize) {
