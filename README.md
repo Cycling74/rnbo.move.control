@@ -102,6 +102,7 @@ GPLv2 license text: [https://www.gnu.org/licenses/old-licenses/gpl-2.0.html](htt
         * if you supply `-1` for paramview, you'll get the param view overlay indicated for the usesrview in its meta entry. paramviewpage will select the page in that param view
         * if you supply `-2` for paramview you will have no overlay and encoder values will pass thru to user patchers. paramviewpage is ignored
         * if you supply a non zero (or boolean T) value for takeoverjog and/or takeoverback you can take over the jog wheel or back button and those values will be sent to RNBO patchers and will not alter the UI directly
+        * you can use the new power menu item `Go To Menu` to restore your control if your patcher doesn't give it back to you.
     * `/rnboctl/show/paramview` - display `Param Views` menu
     * `/rnboctl/show/paramview/display <view index> [<page>]` - display `Param View` with given index and optional page
 
