@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "rnbomovecontrol"
-version = "0.1.0-beta-jog-back-takeover.32"
+version = "0.1.0-beta.33"
 dependencies = [
  "anyhow",
  "atomic_float",
