@@ -18,7 +18,7 @@ use {
     },
     patcher::PatcherInst,
     regex::Regex,
-    reqwest_websocket::{Message, RequestBuilderExt},
+    reqwest_websocket::{Message, Upgrade},
     rlimit::setrlimit,
     rosc::OscPacket,
     serde::{Deserialize, Serialize},
@@ -1051,11 +1051,13 @@ async fn with_client(
                                     }
                                     Message::Binary(vec) => {
                                         if let Ok((_, OscPacket::Message(m))) =
-                                            rosc::decoder::decode_udp(vec.as_slice())
+                                            rosc::decoder::decode_udp(&vec)
                                         {
                                             let mut g = state.lock().await;
                                             g.handle_osc(&m).await;
                                         }
+                                    }
+                                    Message::Ping(_) | Message::Pong(_) | Message::Close { .. } => {
                                     }
                                 }
                             }

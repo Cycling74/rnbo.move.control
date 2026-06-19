@@ -2023,7 +2023,7 @@ impl StateController {
             };
             let packet = OscPacket::Message(msg);
             if let Ok(msg) = rosc::encoder::encode(&packet) {
-                let _ = ws.send(Message::Binary(msg)).await;
+                let _ = ws.send(Message::Binary(msg.into())).await;
             }
         }
         self.ws_tx = Some(ws);
@@ -4785,7 +4785,7 @@ impl StateController {
         if let Some(ws) = self.ws_tx.as_mut() {
             let packet = OscPacket::Message(msg);
             if let Ok(msg) = rosc::encoder::encode(&packet) {
-                let _ = ws.send(Message::Binary(msg)).await;
+                let _ = ws.send(Message::Binary(msg.into())).await;
             }
         }
     }
