@@ -268,19 +268,19 @@ async fn with_client(
     let (connect_tx, mut connect_rx) = async_mpsc::channel(128);
 
     let display_port = c
-        .register_port("display", MidiOut)
+        .register_port("display", MidiOut::default())
         .expect("error creating display port");
     let midi_thru = c
-        .register_port("midi_out", MidiOut)
+        .register_port("midi_out", MidiOut::default())
         .expect("error creating midi_out");
     let midi_control_out = c
-        .register_port("midi_control_out", MidiOut)
+        .register_port("midi_control_out", MidiOut::default())
         .expect("error creating midi_control_out");
     let midi_in = c
-        .register_port("midi_in", MidiIn)
+        .register_port("midi_in", MidiIn::default())
         .expect("error creating midi_in");
     let reset_in = c
-        .register_port("reset_in", MidiIn)
+        .register_port("reset_in", MidiIn::default())
         .expect("error creating reset_in");
 
     let system_display_port = c
@@ -379,17 +379,17 @@ async fn with_client(
         let (volumeclient, _status) =
             jack::Client::new("move-volume", jack::ClientOptions::empty()).unwrap();
         let in1 = volumeclient
-            .register_port("in1", AudioIn)
+            .register_port("in1", AudioIn::default())
             .expect("error creating in1");
         let in2 = volumeclient
-            .register_port("in2", AudioIn)
+            .register_port("in2", AudioIn::default())
             .expect("error creating in2");
 
         let mut out1 = volumeclient
-            .register_port("out1", AudioOut)
+            .register_port("out1", AudioOut::default())
             .expect("error creating out1");
         let mut out2 = volumeclient
-            .register_port("out2", AudioOut)
+            .register_port("out2", AudioOut::default())
             .expect("error creating out2");
 
         port_set_group(&c, &in1, &graph_sink);
@@ -470,7 +470,7 @@ async fn with_client(
             output_max[1].store(max1, Ordering::Relaxed);
             jack::Control::Continue
         };
-        let process = jack::ClosureProcessHandler::new(process_callback);
+        let process = jack::contrib::ClosureProcessHandler::new(process_callback);
         let volumeclient = volumeclient.activate_async((), process).unwrap();
 
         volumeclient
