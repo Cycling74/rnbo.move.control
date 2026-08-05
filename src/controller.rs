@@ -4525,7 +4525,7 @@ impl StateController {
                     }
                 }
                 Cmd::OffsetTempo(offset) => {
-                    let v = (self.bpm + (offset as f32) * self.tempo_offset_mul).clamp(0.5, 500.0); //XXX range?
+                    let v = (self.bpm + (offset as f32) * self.tempo_offset_mul).clamp(0.5, 999.0); //matching link's range
                     if v != self.bpm {
                         let msg = OscMessage {
                             addr: TRANSPORT_BPM_ADDR.to_string(),
