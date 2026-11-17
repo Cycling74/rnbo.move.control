@@ -4558,6 +4558,7 @@ impl StateController {
                 }
 
                 Cmd::LoadGraph(index) => {
+                    self.load_initial = false;
                     if index == 0 {
                         let msg = OscMessage {
                             addr: INST_UNLOAD_ADDR.to_string(),
@@ -4640,6 +4641,7 @@ impl StateController {
                     }
                 }
                 Cmd::LoadPatcher(index) => {
+                    self.load_initial = false;
                     //unload all
                     let msg = OscMessage {
                         addr: INST_UNLOAD_ADDR.to_string(),
@@ -4688,6 +4690,7 @@ impl StateController {
                 }
 
                 Cmd::ClearGraph => {
+                    self.load_initial = false;
                     let msg = OscMessage {
                         addr: INST_UNLOAD_ADDR.to_string(),
                         args: vec![OscType::Int(-1)],
@@ -4696,6 +4699,7 @@ impl StateController {
                     self.request_popup("Clear Graph", "cleared");
                 }
                 Cmd::ReloadGraph => {
+                    self.load_initial = false;
                     if let Some(name) = &self.set_current_name.clone() {
                         let msg = OscMessage {
                             addr: SET_LOAD_ADDR.to_string(),
@@ -4799,10 +4803,9 @@ impl Drop for StateController {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn initial_load_stays_pending_when_runner_is_not_connected_after_splash() {
-        let (midi_tx, _midi_rx) = sync_mpsc::sync_channel(1024);
-        let mut state = StateController::new(
+    fn test_state() -> (StateController, sync_mpsc::Receiver<Midi>) {
+        let (midi_tx, midi_rx) = sync_mpsc::sync_channel(1024);
+        let state = StateController::new(
             std::env::temp_dir(),
             midi_tx,
             Arc::new(AtomicU8::new(0)),
@@ -4814,6 +4817,43 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             Arc::new([AtomicF32::new(0.0), AtomicF32::new(0.0)]),
         );
+        (state, midi_rx)
+    }
+
+    #[tokio::test]
+    async fn explicit_load_or_clear_cancels_pending_initial_load() {
+        for (cmd, cancels) in [
+            (Cmd::LoadGraph(0), true), // Empty graph selection.
+            (Cmd::LoadGraph(1), true),
+            (Cmd::LoadPatcher(0), true),
+            (Cmd::ClearGraph, true),
+            (Cmd::ReloadGraph, true),
+            (Cmd::GoToMenu, false),
+        ] {
+            let (mut state, _midi_rx) = test_state();
+            state.initial_load_started_at = Some(Instant::now());
+            state.set_names = vec!["Empty".to_string(), "Selected graph".to_string()];
+            state.patcher_names = vec!["Selected patcher".to_string()];
+            state.set_current_name = Some("Current graph".to_string());
+
+            // Explicit choices must cancel autoload even if the runner is not
+            // connected yet and sending the command fails.
+            state.sm.context_mut().emit(cmd.clone());
+            state.process_cmds().await;
+
+            assert_eq!(state.load_initial, !cancels, "{cmd:?}");
+            assert!(!state.initial_loaded, "{cmd:?}");
+            assert_eq!(
+                state.initial_load_status(Instant::now()).is_none(),
+                cancels,
+                "{cmd:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn initial_load_stays_pending_when_runner_is_not_connected_after_splash() {
+        let (mut state, _midi_rx) = test_state();
         let mut display = crate::display::MoveDisplay::new();
         let backend = mousefood::EmbeddedBackend::new(
             &mut display,
