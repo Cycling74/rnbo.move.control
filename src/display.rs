@@ -26,7 +26,6 @@ pub struct DrawCommand {
 
 pub struct MoveDisplay {
     framebuffer: [u8; BUFFER_LEN],
-    dirty: bool,
     mode: DrawMode,
 }
 
@@ -43,31 +42,13 @@ impl MoveDisplay {
 
         Self {
             framebuffer,
-            dirty: true,
             mode: DrawMode::Set,
-        }
-    }
-
-    pub fn draw_if<F: FnMut(&[u8; BUFFER_LEN])>(&mut self, mut f: F) {
-        if self.dirty {
-            f(&self.framebuffer);
-            self.dirty = false;
         }
     }
 
     pub fn framebuffer(&self) -> &[u8; BUFFER_LEN] {
         &self.framebuffer
     }
-
-    /*
-    pub fn dirty(&self) -> bool {
-        self.dirty
-    }
-
-    pub fn buffer(&self) -> [u8; BUFFER_LEN] {
-        self.framebuffer.clone()
-    }
-    */
 }
 impl OriginDimensions for MoveDisplay {
     fn size(&self) -> Size {
@@ -122,8 +103,6 @@ impl DrawTarget for MoveDisplay {
     where
         I: IntoIterator<Item = Pixel<Self::Color>>,
     {
-        self.dirty = true;
-
         let render: fn(BinaryColor, u8, u8) -> u8 = match self.mode {
             DrawMode::Set => render_set,
             DrawMode::Sum => render_sum,
@@ -142,7 +121,6 @@ impl DrawTarget for MoveDisplay {
     }
 
     fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
-        self.dirty = true;
         self.framebuffer[HEADER_LEN..].fill(match color {
             BinaryColor::On => 0xFF,
             BinaryColor::Off => 0x00,

@@ -10,7 +10,6 @@ use {
     },
     atomic_float::AtomicF32,
     clap::Parser,
-    embedded_graphics::prelude::*,
     futures_util::{StreamExt, TryStreamExt},
     jack::{
         AudioIn, AudioOut, Client, ClientOptions, Control, MidiIn, MidiOut, Port, PortId,
@@ -74,8 +73,6 @@ mod widget;
 
 const HTTP_QUERY_DELAY: Duration = Duration::from_millis(200);
 const HTTP_INITIAL_QUERY_DELAY: Duration = Duration::from_millis(500);
-
-const POLL_CHILD_STATUS_MS: u64 = 2000;
 
 struct Driver {
     display: Port<MidiOut>,
@@ -485,7 +482,6 @@ async fn with_client(
         volumeclient
     };
 
-    let size = display.size();
     let has_all_capabilities: bool = caps.all();
     if !has_all_capabilities {
         let _ = logger.warning("could not get requested capabilites");
@@ -786,7 +782,8 @@ async fn with_client(
 
         #[derive(Deserialize, Debug, Default)]
         struct PatcherListItem {
-            created_at: OSCQueryItem<String>,
+            #[serde(rename = "created_at")]
+            _created_at: OSCQueryItem<String>,
             //TODO plenty of others, but do we care?
         }
 

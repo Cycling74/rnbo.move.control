@@ -124,7 +124,6 @@ pub struct Param {
     detail: ParamDetail,
 
     display_name: Option<String>,
-    display_order: Option<isize>,
 
     norm: f64,
     norm_pending: Option<(f64, Instant)>,
@@ -171,10 +170,6 @@ impl Param {
         self.display_name.as_ref().unwrap_or(&self.name).as_str()
     }
 
-    pub fn display_order(&self) -> isize {
-        self.display_order.unwrap_or(0)
-    }
-
     pub fn color(&self) -> Srgb<u8> {
         self.color
     }
@@ -198,10 +193,6 @@ impl Param {
         }
     }
 
-    pub fn set_norm(&mut self, v: f64) {
-        self.norm = v;
-    }
-
     pub fn offset(&mut self, offset: isize) -> f64 {
         let offset_step = self
             .norm_offset_step
@@ -220,10 +211,6 @@ impl Param {
     pub fn set_norm_pending(&mut self, v: f64) {
         self.color = get_color(v);
         self.norm_pending = Some((v, Instant::now()));
-    }
-
-    pub fn detail(&self) -> &ParamDetail {
-        &self.detail
     }
 
     pub fn render_value(&self) -> String {
@@ -291,10 +278,6 @@ impl Param {
         }
     }
 
-    pub fn meta(&self) -> &Value {
-        &self.meta
-    }
-
     pub fn visible(&self) -> bool {
         !self.hidden()
     }
@@ -343,10 +326,6 @@ impl Param {
                 None
             };
 
-            let display_order = contents
-                .get("display_order")
-                .and_then(|n| n.get("VALUE")?.as_number()?.as_i64().map(|v| v as isize));
-
             match obj.get("TYPE")?.as_str()? {
                 "s" => {
                     let vals: Option<Vec<String>> = range
@@ -385,7 +364,6 @@ impl Param {
                         index,
                         instance_index,
                         display_name,
-                        display_order,
                         addr,
                         addr_norm,
                         name,
@@ -425,7 +403,6 @@ impl Param {
                         index,
                         instance_index,
                         display_name,
-                        display_order,
                         addr,
                         addr_norm,
                         name,

@@ -6,12 +6,10 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ctrlc = "3.4.2"
 embedded-graphics = "0.8.2"
 embedded-graphics-core = "0.4.1"
 futures-util = "0.3.30"
 jack = "0.13"
-profont = "0.7.0"
 regex = "1.10.3"
 reqwest = { version = "0.13", default-features = false, features = ["json"] } #disable default, we don't need TLS
 reqwest-websocket = "0.6"
@@ -20,7 +18,6 @@ serde_json = "1.0.114"
 tokio = { version = "1.36.0", features = ["full"] }
 smlang = { git = "https://github.com/x37v/smlang-rs", branch = "main" }
 serde = { version = "1.0.215", features = ["std", "derive"] }
-embedded-layout = "0.4.1"
 itertools = "0.15"
 palette = "0.7.6"
 clap = { version = "4.5.21", features = ["derive"] }
@@ -28,7 +25,6 @@ home = "0.5.9"
 libc = "0.2.168"
 rlimit = "0.10.2"
 syslog = "7.0.0"
-pad = "0.1"
 mousefood = "0.5.0"
 ratatui = { version = "0.30.2", default-features = false }
 tui-widget-list = "0.15.2"

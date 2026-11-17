@@ -10,28 +10,8 @@ pub struct PatcherInst {
     name: String,
     alias: Option<String>,
     params: Vec<Param>,
-    presets: Vec<String>,
     datarefs: BTreeMap<String, Dataref>,
     visible_datarefs: Vec<String>, //keys from datarefs
-}
-
-fn parse_presets(contents: &serde_json::Map<String, serde_json::Value>) -> Option<Vec<String>> {
-    let mut presets = Vec::new();
-    for e in contents
-        .get("presets")?
-        .as_object()?
-        .get("CONTENTS")?
-        .as_object()?
-        .get("entries")?
-        .as_object()?
-        .get("VALUE")?
-        .as_array()?
-        .iter()
-    {
-        presets.push(e.as_str()?.to_string());
-    }
-
-    Some(presets)
 }
 
 fn parse_shm_name(body: &serde_json::Value) -> Option<String> {
@@ -112,10 +92,6 @@ impl Dataref {
         hidden != self.hidden()
     }
 
-    pub fn meta(&self) -> &Value {
-        &self.meta
-    }
-
     pub fn hidden(&self) -> bool {
         if let Some(meta) = self.meta.as_object()
             && meta.contains_key("hidden")
@@ -164,12 +140,6 @@ impl PatcherInst {
     pub fn index(&self) -> usize {
         self.index
     }
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-    pub fn alias(&self) -> Option<&String> {
-        self.alias.as_ref()
-    }
     pub fn alias_or_index_name(&self) -> String {
         self.alias
             .clone()
@@ -183,16 +153,8 @@ impl PatcherInst {
         &self.params
     }
 
-    pub fn params_mut(&mut self) -> &mut Vec<Param> {
-        &mut self.params
-    }
-
     pub fn visible_datarefs(&self) -> &Vec<String> {
         &self.visible_datarefs
-    }
-
-    pub fn visibile_datarefs_mut(&mut self) -> &mut Vec<String> {
-        &mut self.visible_datarefs
     }
 
     pub fn dataref_mappings(&self) -> &BTreeMap<String, Dataref> {
@@ -212,34 +174,6 @@ impl PatcherInst {
             .collect();
     }
 
-    pub fn update_param_f64(&mut self, addr: &str, val: f64) -> Option<usize> {
-        if let Some((index, p)) = self
-            .params
-            .iter_mut()
-            .enumerate()
-            .find(|(_, p)| p.addr() == addr)
-        {
-            p.update_f64(val);
-            Some(index)
-        } else {
-            None
-        }
-    }
-
-    pub fn update_param_s(&mut self, addr: &str, val: &str) -> Option<usize> {
-        if let Some((index, p)) = self
-            .params
-            .iter_mut()
-            .enumerate()
-            .find(|(_, p)| p.addr() == addr)
-        {
-            p.update_s(val);
-            Some(index)
-        } else {
-            None
-        }
-    }
-
     pub fn parse(index: usize, json: &serde_json::Value) -> Option<Self> {
         let contents = json.get("CONTENTS")?.as_object()?;
         let name = contents
@@ -249,7 +183,6 @@ impl PatcherInst {
             .as_str()?
             .to_string();
         let params = Param::parse_all(index, contents.get("params")?).unwrap_or_default();
-        let presets = parse_presets(contents).unwrap_or_default();
         let datarefs = parse_datarefs(contents).unwrap_or_default();
 
         let get_alias = || -> Option<String> {
@@ -274,7 +207,6 @@ impl PatcherInst {
             name,
             alias: get_alias(),
             params,
-            presets,
             datarefs,
             visible_datarefs: Vec::new(),
         };

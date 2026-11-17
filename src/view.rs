@@ -33,10 +33,6 @@ impl ParamView {
         &self.name
     }
 
-    pub fn set_name(&mut self, name: String) {
-        self.name = name;
-    }
-
     pub fn params(&self) -> &Vec<(usize, String)> {
         &self.params
     }

@@ -13,7 +13,7 @@ use {
     once_cell::sync::Lazy,
     palette::Srgb,
     ratatui::{
-        layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
+        layout::{Alignment, Constraint, Direction, Layout},
         style::{Color, Modifier, Style},
         text::{Line, Span, Text},
         widgets::Paragraph,
@@ -374,27 +374,6 @@ fn render_menu<SI: AsRef<str>, FS: Fn(usize) -> &'static char, FE: Fn(usize) -> 
     }
 }
 
-fn center_vertical(area: Rect, height: u16) -> Rect {
-    let [area] = Layout::vertical([Constraint::Length(height)])
-        .flex(Flex::Center)
-        .areas(area);
-    area
-}
-
-fn center_horizontal(area: Rect, width: u16) -> Rect {
-    let [area] = Layout::horizontal([Constraint::Length(width)])
-        .flex(Flex::Center)
-        .areas(area);
-    area
-}
-fn center(area: Rect, horizontal: Constraint, vertical: Constraint) -> Rect {
-    let [area] = Layout::horizontal([horizontal])
-        .flex(Flex::Center)
-        .areas(area);
-    let [area] = Layout::vertical([vertical]).flex(Flex::Center).areas(area);
-    area
-}
-
 const SUB_MENU_INDICATOR: &char = &'>';
 const ITEM_INDICATOR: &char = &'-';
 const UNEDITABLE_ITEM_INDICATOR: &char = &'x';
@@ -616,12 +595,6 @@ impl InstSel {
         }
         v
     }
-
-    pub fn restart(&self) -> Self {
-        let mut v = *self;
-        v.selected = 0;
-        v
-    }
 }
 
 #[allow(dead_code)]
@@ -809,9 +782,6 @@ pub(crate) struct ParamPage {
 }
 
 impl ParamPage {
-    fn offset_page(&self, offset: isize) -> usize {
-        (self.page as isize + offset).max(0) as usize
-    }
     fn with_offset_page(&self, offset: isize) -> Self {
         let mut p = self.clone();
         p.page = (p.page as isize + offset).max(0) as usize;
@@ -1147,11 +1117,7 @@ pub mod filebrowser {
         }
 
         pub fn can_select(&self, cur: usize) -> bool {
-            if let Some(FileListItem::Dir { empty, .. }) = self.items.iter().nth(cur) {
-                false
-            } else {
-                true
-            }
+            !matches!(self.items.get(cur), Some(FileListItem::Dir { .. }))
         }
 
         pub fn enter(&mut self, cur: usize) -> usize {
@@ -1278,10 +1244,6 @@ pub mod filebrowser {
         pub fn indicate(&mut self, indicated: Option<PathBuf>) {
             self.indicated = indicated;
             self.update_items();
-        }
-
-        pub fn items(&self) -> &Vec<FileListItem> {
-            &self.items
         }
 
         pub fn names(&self) -> &Vec<String> {
@@ -1466,7 +1428,6 @@ smlang::statemachine! {
         PatcherInstances(InstSel) + BtnDown(Button::JogWheel) [state.typ() == InstSelType::Datarefs] = PatcherDatarefs(DataSel::new(state.selected(), ctx.dataref_count(state.selected()))),
 
         //PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) == 0] = Menu(if state.typ == InstSelType::Params { DEVICE_PARAMS_INDEX } else { DEVICE_DATA_INDEX }),
-        //PatcherInstances(InstSel) + InstancesChanged(_) [ctx.instances_count(state.typ()) > 0] = PatcherInstances(state.restart()),
 
         //skip patcher instances menu if there is only 1 instance
         PatcherParams(ParamPage) + BtnDown(Button::Back) [ctx.instances_count(InstSelType::Params) > 1] = PatcherInstances(InstSel::new(InstSelType::Params, state.index, ctx.instances_count(InstSelType::Params))),
@@ -1614,8 +1575,6 @@ impl Caps {
 }
 
 pub struct StateController {
-    datafile_dir: PathBuf,
-
     load_initial: bool,
     initial_loaded: bool,
     initial_load_retry_at: Option<Instant>,
@@ -1851,18 +1810,6 @@ impl Context {
         self.common.psu_connected
     }
 
-    fn set_battery_low(&mut self, v: bool) {
-        self.common.battery_low = v;
-    }
-
-    fn set_battery_charge(&mut self, v: u8) {
-        self.common.battery_charge = v;
-    }
-
-    fn set_psu_connected(&mut self, v: bool) {
-        self.common.psu_connected = Some(v);
-    }
-
     fn set_file_browser_at_top(&mut self, v: bool) {
         self.common.file_browser_at_top = v;
     }
@@ -1892,7 +1839,7 @@ impl StateController {
         let sm = StateMachine::new_with_state(context.clone(), States::Menu(0));
         let topsm = top::StateMachine::new(context);
 
-        let context = filebrowser::Context::new(datafile_dir.clone());
+        let context = filebrowser::Context::new(datafile_dir);
         let filesm =
             filebrowser::StateMachine::new_with_state(context, filebrowser::States::Selected(0));
 
@@ -1907,7 +1854,6 @@ impl StateController {
         let tracked_buttons = HashMap::from([(BACK_MIDI, MoveColor::Black)]);
 
         let mut s = Self {
-            datafile_dir,
             load_initial: true,
             initial_loaded: false,
             initial_load_retry_at: None,
@@ -3741,8 +3687,8 @@ impl StateController {
                     //TODO how to compute this only when states change?
                     let mut focus: Option<ParamFocus> = None;
                     if let Some(instance) = self.instance_params.get(index) {
-                        if let Some(first) = instance.get(0)
-                            && let Some(param) = self.params.get(*first)
+                        if let Some(first) = instance.first()
+                            && self.params.get(*first).is_some()
                         {
                             report = Some(Page::DeviceParam {
                                 device: index,
