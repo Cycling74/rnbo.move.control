@@ -57,6 +57,7 @@ const TRANSPORT_POS_ADDR: &str = "/rnbo/jack/transport/position";
 const GRAPH_RESET_ADDR: &str = "/rnbo/jack/control/midi_reset";
 const GRAPH_LOAD_INITAL_ADDR: &str = "/rnbo/inst/control/sets/load/initial";
 const INITIAL_LOAD_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+const INITIAL_LOAD_STILL_STARTING_AFTER: Duration = Duration::from_secs(30);
 
 const SPLASH_DATA: &[u8] = include_bytes!("../content/rnbo-letters-128x64-inverted.bmp");
 static SPLASH_BMP: Lazy<tinybmp::Bmp<BinaryColor>> = Lazy::new(|| {
@@ -1618,6 +1619,7 @@ pub struct StateController {
     load_initial: bool,
     initial_loaded: bool,
     initial_load_retry_at: Option<Instant>,
+    initial_load_started_at: Option<Instant>,
 
     line_token: u32, //used for "once" actions (lighting leds from render methods)
     tracked_buttons: HashMap<u8, MoveColor>,
@@ -1909,6 +1911,7 @@ impl StateController {
             load_initial: true,
             initial_loaded: false,
             initial_load_retry_at: None,
+            initial_load_started_at: None,
 
             line_token: 0,
             tracked_buttons,
@@ -3427,6 +3430,20 @@ impl StateController {
         }
     }
 
+    fn initial_load_status(&self, now: Instant) -> Option<&'static str> {
+        if !self.load_initial || self.initial_loaded {
+            return None;
+        }
+        let started = self.initial_load_started_at?;
+        Some(
+            if now.duration_since(started) >= INITIAL_LOAD_STILL_STARTING_AFTER {
+                "Runner still starting..."
+            } else {
+                "Runner starting..."
+            },
+        )
+    }
+
     fn render_main(&mut self, frame: &mut ratatui::Frame) -> (Option<usize>, Option<Page>) {
         let state = self.sm.state().clone();
         let mut report: Option<Page> = None;
@@ -3469,7 +3486,18 @@ impl StateController {
                     }
                 };
 
-                render_menu(frame, None, &MENU_ITEMS, indicator, enabled, selected, None);
+                let title = self
+                    .initial_load_status(Instant::now())
+                    .map(|status| animate_title(status, frame.area().width, frame.count()));
+                render_menu(
+                    frame,
+                    title.as_deref(),
+                    &MENU_ITEMS,
+                    indicator,
+                    enabled,
+                    selected,
+                    None,
+                );
             }
             States::TransportEditor(selected) => {
                 report = Some(Page::TransportEditor);
@@ -4013,6 +4041,11 @@ impl StateController {
         use top::States;
 
         let state = self.topsm.state().clone();
+        if matches!(state, States::Main) && self.load_initial && !self.initial_loaded {
+            // Start the wait timer when the splash is dismissed, including by Back.
+            self.initial_load_started_at
+                .get_or_insert_with(Instant::now);
+        }
         self.param_values = [Srgb::new(0, 0, 0); 8]; //clear out params, they may then get updated
 
         let _ = terminal.clear();
@@ -4845,6 +4878,7 @@ mod tests {
             },
         );
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        assert_eq!(state.initial_load_status(Instant::now()), None);
 
         // Let the splash finish and render several main-screen frames without a
         // runner connection, as happens during a slow first-run migration.
@@ -4856,6 +4890,22 @@ mod tests {
         assert!(state.load_initial);
         assert!(!state.initial_loaded);
         assert!(state.initial_load_retry_at.is_some());
+
+        let started = state.initial_load_started_at.unwrap();
+        assert_eq!(
+            state.initial_load_status(started),
+            Some("Runner starting...")
+        );
+        assert_eq!(
+            state.initial_load_status(started + Duration::from_millis(29_999)),
+            Some("Runner starting...")
+        );
+        assert_eq!(
+            state.initial_load_status(started + Duration::from_secs(30)),
+            Some("Runner still starting...")
+        );
+        // A long wait changes only the status, not whether loading is retried.
+        state.initial_load_started_at = Some(Instant::now() - Duration::from_secs(31));
 
         // Frames before the retry deadline must leave it alone. Use a distant
         // deadline so this check does not depend on the test machine's speed.
@@ -4872,6 +4922,18 @@ mod tests {
         assert!(next >= before + Duration::from_millis(250));
         assert!(next <= Instant::now() + Duration::from_millis(250));
         assert!(!state.initial_loaded);
+        assert_eq!(
+            state.initial_load_status(Instant::now()),
+            Some("Runner still starting...")
+        );
+
+        // The status leaves normal menu navigation and the Power menu available.
+        state.handle_event(Events::EncRight(JOG_WHEEL_ENCODER));
+        assert!(matches!(state.sm.state(), States::Menu(1)));
+        state.handle_event(Events::BtnDown(Button::PowerShort));
+        assert!(matches!(state.topsm.state(), top::States::PowerMenu(0)));
+        state.handle_event(Events::BtnDown(Button::Back));
+        assert!(matches!(state.topsm.state(), top::States::Main));
 
         // Skipping startup or completing the send must suppress further attempts,
         // even when the retry deadline has passed.
@@ -4879,10 +4941,12 @@ mod tests {
         state.load_initial = false;
         state.render(&mut terminal).await;
         assert_eq!(state.initial_load_retry_at, Some(before));
+        assert_eq!(state.initial_load_status(Instant::now()), None);
         state.load_initial = true;
         state.initial_loaded = true;
         state.render(&mut terminal).await;
         assert!(state.initial_loaded);
         assert_eq!(state.initial_load_retry_at, Some(before));
+        assert_eq!(state.initial_load_status(Instant::now()), None);
     }
 }
