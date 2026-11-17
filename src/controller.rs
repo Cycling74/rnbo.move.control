@@ -56,6 +56,7 @@ const TRANSPORT_BPM_ADDR: &str = "/rnbo/jack/transport/bpm";
 const TRANSPORT_POS_ADDR: &str = "/rnbo/jack/transport/position";
 const GRAPH_RESET_ADDR: &str = "/rnbo/jack/control/midi_reset";
 const GRAPH_LOAD_INITAL_ADDR: &str = "/rnbo/inst/control/sets/load/initial";
+const INITIAL_LOAD_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 
 const SPLASH_DATA: &[u8] = include_bytes!("../content/rnbo-letters-128x64-inverted.bmp");
 static SPLASH_BMP: Lazy<tinybmp::Bmp<BinaryColor>> = Lazy::new(|| {
@@ -1616,6 +1617,7 @@ pub struct StateController {
 
     load_initial: bool,
     initial_loaded: bool,
+    initial_load_retry_at: Option<Instant>,
 
     line_token: u32, //used for "once" actions (lighting leds from render methods)
     tracked_buttons: HashMap<u8, MoveColor>,
@@ -1906,6 +1908,7 @@ impl StateController {
             datafile_dir,
             load_initial: true,
             initial_loaded: false,
+            initial_load_retry_at: None,
 
             line_token: 0,
             tracked_buttons,
@@ -4196,13 +4199,22 @@ impl StateController {
             })
             .expect("to render frame");
 
-        if doload {
-            self.initial_loaded = true;
+        if doload
+            && self
+                .initial_load_retry_at
+                .is_none_or(|next| Instant::now() >= next)
+        {
             let msg = OscMessage {
                 addr: GRAPH_LOAD_INITAL_ADDR.to_string(),
                 args: Vec::new(),
             };
-            self.send_osc(msg).await;
+            // The runner may still be starting after the splash finishes (for example,
+            // while migrating its database). Retry at intervals until the request is
+            // sent, without blocking rendering between attempts.
+            self.initial_loaded = self.send_osc(msg).await;
+            if !self.initial_loaded {
+                self.initial_load_retry_at = Some(Instant::now() + INITIAL_LOAD_RETRY_INTERVAL);
+            }
         }
 
         if splash {
@@ -4781,13 +4793,14 @@ impl StateController {
         }
     }
 
-    async fn send_osc(&mut self, msg: OscMessage) {
+    async fn send_osc(&mut self, msg: OscMessage) -> bool {
         if let Some(ws) = self.ws_tx.as_mut() {
             let packet = OscPacket::Message(msg);
             if let Ok(msg) = rosc::encoder::encode(&packet) {
-                let _ = ws.send(Message::Binary(msg.into())).await;
+                return ws.send(Message::Binary(msg.into())).await.is_ok();
             }
         }
+        false
     }
 
     fn context(&self) -> &Context {
@@ -4800,5 +4813,76 @@ impl Drop for StateController {
         if let Ok(file) = std::fs::File::create(&self.config_path) {
             let _ = serde_json::to_writer_pretty(file, &self.config);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn initial_load_stays_pending_when_runner_is_not_connected_after_splash() {
+        let (midi_tx, _midi_rx) = sync_mpsc::sync_channel(1024);
+        let mut state = StateController::new(
+            std::env::temp_dir(),
+            midi_tx,
+            Arc::new(AtomicU8::new(0)),
+            None,
+            PathBuf::new(), // No configuration file to read or persist.
+            true,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new([AtomicF32::new(0.0), AtomicF32::new(0.0)]),
+        );
+        let mut display = crate::display::MoveDisplay::new();
+        let backend = mousefood::EmbeddedBackend::new(
+            &mut display,
+            mousefood::EmbeddedBackendConfig {
+                font_regular: crate::font::SPLEEN_8X16,
+                font_bold: None,
+                ..Default::default()
+            },
+        );
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+
+        // Let the splash finish and render several main-screen frames without a
+        // runner connection, as happens during a slow first-run migration.
+        for _ in 0..SPLASH_FRAMES + 5 {
+            state.render(&mut terminal).await;
+        }
+
+        assert!(matches!(state.topsm.state(), top::States::Main));
+        assert!(state.load_initial);
+        assert!(!state.initial_loaded);
+        assert!(state.initial_load_retry_at.is_some());
+
+        // Frames before the retry deadline must leave it alone. Use a distant
+        // deadline so this check does not depend on the test machine's speed.
+        let future = Instant::now() + Duration::from_secs(60);
+        state.initial_load_retry_at = Some(future);
+        state.render(&mut terminal).await;
+        assert_eq!(state.initial_load_retry_at, Some(future));
+
+        // Once due, a failed attempt schedules another at least 250 ms later.
+        let before = Instant::now();
+        state.initial_load_retry_at = Some(before);
+        state.render(&mut terminal).await;
+        let next = state.initial_load_retry_at.unwrap();
+        assert!(next >= before + Duration::from_millis(250));
+        assert!(next <= Instant::now() + Duration::from_millis(250));
+        assert!(!state.initial_loaded);
+
+        // Skipping startup or completing the send must suppress further attempts,
+        // even when the retry deadline has passed.
+        state.initial_load_retry_at = Some(before);
+        state.load_initial = false;
+        state.render(&mut terminal).await;
+        assert_eq!(state.initial_load_retry_at, Some(before));
+        state.load_initial = true;
+        state.initial_loaded = true;
+        state.render(&mut terminal).await;
+        assert!(state.initial_loaded);
+        assert_eq!(state.initial_load_retry_at, Some(before));
     }
 }
